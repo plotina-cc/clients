@@ -71,6 +71,15 @@ hop, so the native side needs no resampling.
 app can register, and replacing the ADM means forking webrtc-sdk — the thing we
 are trying to avoid. (a) is a no-op here.
 
+A ready-made alternative to building the crate exists:
+[`io.github.kaleyravideo:android-deepfilternet`](https://github.com/KaleyraVideo/AndroidDeepFilterNet)
+(Apache-2.0, Maven Central, 0.0.8) — a JNI wrapper over libDF, 48 kHz mono
+**PCM16**, model in `res/raw` (7.98 MB), `libdf.so` 13.5 MB for arm64, 8 MB for
+armeabi-v7a. It is a single-vendor project on a different sample format, so we
+keep our own crate (model pin identical to the web clients, float32 in place, our
+own ABI set). If the Rust toolchain in CI ever becomes a burden, swapping to that
+AAR only touches the Kotlin glue.
+
 ## What is in this directory
 
 ```
@@ -122,10 +131,12 @@ file of FluffyChat is modified**.
 
 - Model: 7,983,136 bytes, shipped once as a Flutter asset (identical file and
   SHA-256 to the web clients — `c94d91f7…`, see `scripts/fetch-model.sh`).
-- `libplotina_dfn.so` per ABI: expect 3–6 MB (tract runtime + DFN3 graph, no
-  onnxruntime). Upstream's `flutter_webrtc` AAR carries ~46 MiB of `.so` across
-  four ABIs, so the APK is already large before we add anything.
-- Net APK growth for the arm64+armv7 APK: roughly +15–20 MB.
+- `libplotina_dfn.so` per ABI: expect 5–10 MB (tract runtime + DFN3 graph, no
+  onnxruntime). For scale, the prebuilt Kaleyra AAR above ships 13.5 MB for
+  arm64. Upstream's `flutter_webrtc` AAR already carries ~46 MiB of `.so` across
+  four ABIs.
+- Net APK growth for the arm64+armv7 APK: roughly +20–30 MB (model 8 MB, arm64
+  lib ~8 MB, armv7 lib ~6 MB).
 - CPU: DFN3 is comfortably real time on a laptop core; on phones expect a few
   percent to low tens of percent of one core, and much worse on old armv7
   devices. Measure before believing this.
