@@ -17,7 +17,8 @@ import java.nio.ByteOrder
  * Data contract, verified in webrtc-sdk m150
  * (`sdk/android/src/jni/pc/external_audio_processor.cc`):
  *   - mono, deinterleaved: only `audio->channels()[0]` is passed;
- *   - `float32` samples, direct ByteBuffer, `buffer_size * sizeof(float)` bytes;
+ *   - `float32` samples, direct ByteBuffer, `buffer_size * sizeof(float)` bytes
+ *     where `buffer_size = kNsFrameSize * num_bands` = 160 * 3 = 480;
  *   - 10 ms per call: 480 samples at 48 kHz (`rate = num_frames * 100`).
  */
 class DfnProcessor : AudioProcessingAdapter.ExternalAudioFrameProcessing {
@@ -47,7 +48,7 @@ class DfnProcessor : AudioProcessingAdapter.ExternalAudioFrameProcessing {
     }
 
     override fun process(numBands: Int, numFrames: Int, buffer: ByteBuffer?) {
-        if (bypass) return
+        if (bypass || !DfnNative.available) return
         val nativeHandle = handle
         if (nativeHandle == 0L || buffer == null) return
         if (!buffer.isDirect || buffer.isReadOnly) return
@@ -64,6 +65,9 @@ class DfnProcessor : AudioProcessingAdapter.ExternalAudioFrameProcessing {
         val floats = buffer.order(ByteOrder.nativeOrder()).asFloatBuffer()
         floats.get(pcm, 0, frames)
         if (!DfnNative.process(nativeHandle, pcm, frames)) return
+        // get() moved the position to `frames`; put() writes at the position,
+        // so rewind first or the denoised samples land after the original ones.
+        floats.position(0)
         floats.put(pcm, 0, frames)
     }
 

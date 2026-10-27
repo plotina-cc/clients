@@ -33,12 +33,18 @@ class PlotinaDfnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
 
     @Volatile
     private var attached = false
-    private var attempts = 0
+
+    /** Set while the engine goes away, so an in-flight model load cleans up. */
+    @Volatile
+    private var released = false
+
+    @Volatile
     private var initError: String? = null
+    private var attempts = 0
 
     private val registerTask = object : Runnable {
         override fun run() {
-            if (attached) return
+            if (attached || released) return
             if (tryAttach()) {
                 attached = true
                 Log.i(TAG, "denoiser attached to flutter_webrtc capture post-processing")
@@ -56,21 +62,28 @@ class PlotinaDfnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         appContext = binding.applicationContext
         flutterAssets = binding.flutterAssets
+        released = false
+        attached = false
+        attempts = 0
+        initError = null
         channel = MethodChannel(binding.binaryMessenger, CHANNEL).also {
             it.setMethodCallHandler(this)
         }
         mainHandler.post(registerTask)
-        worker = Executors.newSingleThreadExecutor().also { it.execute(::loadModel) }
+        worker = Executors.newSingleThreadExecutor().also { executor ->
+            executor.execute { loadModel() }
+        }
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        released = true
         mainHandler.removeCallbacks(registerTask)
         channel?.setMethodCallHandler(null)
         channel = null
         detach()
         val handle = processor.handle
         processor.handle = 0L
-        if (handle != 0L) DfnNative.destroy(handle)
+        DfnNative.destroy(handle)
         worker?.shutdown()
         worker = null
         appContext = null
@@ -126,7 +139,9 @@ class PlotinaDfnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
 
     /**
      * Copies the model out of the APK once and loads it. Asset files are not
-     * real files, and libDF wants a path, hence the copy.
+     * real files, and libDF wants a path, hence the copy. Writes through a
+     * temp file so a process killed mid-copy cannot leave a truncated model
+     * that would fail to load forever after.
      */
     private fun loadModel() {
         val context = appContext ?: return
@@ -138,10 +153,28 @@ class PlotinaDfnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         try {
             val dir = File(context.filesDir, "plotina_dfn").apply { mkdirs() }
             val model = File(dir, MODEL_NAME)
-            if (!model.exists() || model.length() == 0L) {
+            if (!model.exists() || model.length() != MODEL_BYTES) {
                 val key = assets.getAssetFilePathByName(MODEL_ASSET, PACKAGE)
+                val tmp = File(dir, "$MODEL_NAME.tmp")
                 context.assets.open(key).use { input ->
-                    model.outputStream().use { output -> input.copyTo(output) }
+                    tmp.outputStream().use { output -> input.copyTo(output) }
+                }
+                val copied = tmp.length()
+                if (copied != MODEL_BYTES) {
+                    tmp.delete()
+                    initError = "model asset is $copied bytes, expected $MODEL_BYTES"
+                    Log.e(TAG, initError!!)
+                    return
+                }
+                if (released) {
+                    tmp.delete()
+                    return
+                }
+                if (!tmp.renameTo(model)) {
+                    tmp.delete()
+                    initError = "could not move the model into place"
+                    Log.e(TAG, initError!!)
+                    return
                 }
                 Log.i(TAG, "model extracted to ${model.absolutePath} (${model.length()} bytes)")
             }
@@ -149,6 +182,10 @@ class PlotinaDfnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
             if (handle == 0L) {
                 initError = "DeepFilterNet3 model failed to load"
                 Log.e(TAG, initError!!)
+                return
+            }
+            if (released) {
+                DfnNative.destroy(handle)
                 return
             }
             processor.handle = handle
@@ -165,6 +202,9 @@ class PlotinaDfnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         const val PACKAGE = "plotina_dfn"
         const val MODEL_ASSET = "assets/DeepFilterNet3_onnx.tar.gz"
         const val MODEL_NAME = "DeepFilterNet3_onnx.tar.gz"
+
+        /** Size of the pinned tarball; see scripts/fetch-model.sh. */
+        const val MODEL_BYTES = 7_983_136L
 
         /** Maximum attenuation in dB; 60 matches the web default, 100 = unlimited. */
         const val ATTEN_LIM_DB = 60f
