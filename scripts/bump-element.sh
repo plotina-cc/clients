@@ -16,7 +16,7 @@ fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$HERE")"
-DOCKERFILE="$ROOT/config/element/Dockerfile"
+DOCKERFILE="$ROOT/element-web/Dockerfile"
 IMAGE_REPO="vectorim/element-web"
 NEW_IMAGE="${IMAGE_REPO}:v${TAG}"
 
@@ -42,19 +42,19 @@ sed -i -E "s#^FROM .*#FROM ${NEW_IMAGE}@${DIGEST}#" "$DOCKERFILE"
 grep -q "^FROM ${NEW_IMAGE}@${DIGEST}\$" "$DOCKERFILE" || { restore; exit 1; }
 
 echo "==> building plotina/element-web:${TAG}-noise1"
-if ! docker build -q -t "plotina/element-web:${TAG}-noise1" "$ROOT/config/element"; then
+if ! docker build -q -f "$DOCKERFILE" -t "plotina/element-web:${TAG}-noise1" "$ROOT"; then
   restore
   exit 1
 fi
 
 echo "==> unit tests"
-if ! IMAGE="plotina/element-web:${TAG}-noise1" "$ROOT/config/element/tests/run.sh"; then
+if ! IMAGE="plotina/element-web:${TAG}-noise1" "$ROOT/element-web/tests/run.sh"; then
   restore
   exit 1
 fi
 
 echo "==> integration tests"
-if ! IMAGE="plotina/element-web:${TAG}-noise1" "$ROOT/config/element/tests/integration.sh"; then
+if ! IMAGE="plotina/element-web:${TAG}-noise1" "$ROOT/element-web/tests/integration.sh"; then
   restore
   exit 1
 fi

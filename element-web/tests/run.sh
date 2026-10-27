@@ -5,7 +5,8 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ROOT="$(dirname "$HERE")"
+ROOT="$(dirname "$(dirname "$HERE")")"
+REL="${HERE#"$ROOT"/}"
 PORT="${PORT:-8097}"
 CHROME="${CHROME:-chromium}"
 
@@ -17,7 +18,7 @@ sleep 1
 status=0
 for page in unit.html cinny-ui.test.html; do
   DOM="$("$CHROME" --headless=new --no-sandbox --disable-gpu --virtual-time-budget=5000 \
-    --dump-dom "http://127.0.0.1:${PORT}/tests/${page}" 2>/dev/null)"
+    --dump-dom "http://127.0.0.1:${PORT}/${REL}/${page}" 2>/dev/null)"
 
   # The inline <script> source contains the marker strings, so read the title only.
   TITLE="$(echo "$DOM" | grep -o '<title>[^<]*</title>' | head -1 | sed 's#</\?title>##g')"

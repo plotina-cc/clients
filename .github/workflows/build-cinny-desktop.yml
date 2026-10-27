@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     tags: ["v*-plotina.*"]
-    paths: ["cinny-desktop/**", ".github/workflows/build-cinny-desktop.yml"]
+    paths: ["cinny/desktop/**", ".github/workflows/build-cinny-desktop.yml"]
 
 permissions:
   contents: write
@@ -47,7 +47,7 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
       - name: Pin upstream
-        working-directory: cinny-desktop
+        working-directory: cinny/desktop
         shell: bash
         run: |
           TAG="$(cat UPSTREAM_TAG)"
@@ -56,22 +56,23 @@ jobs:
             "$UPSTREAM_REPO" upstream
 
       - name: Assemble the noise bundle
-        working-directory: cinny-desktop
+        working-directory: cinny/desktop
+        shell: bash
         run: |
           mkdir -p noise/vendor
-          cp ../element-web/noise/logic.js ../element-web/noise/boot.js \
-             ../element-web/noise/cinny-ui.js noise/
-          cp -a ../element-web/noise/vendor/. noise/vendor/
+          cp ../noise/logic.js ../noise/boot.js ../noise/cinny-ui.js noise/
+          cp -a ../noise/vendor/. noise/vendor/
           python scripts/fetch-noise.py
 
       - name: Build Cinny web
-        working-directory: cinny-desktop/upstream/cinny
+        working-directory: cinny/desktop/upstream/cinny
         run: |
           npm ci
           npm run build
 
       - name: Apply noise patch
-        working-directory: cinny-desktop
+        working-directory: cinny/desktop
+        shell: bash
         run: |
           cp config.json upstream/config.json
           cp config.json upstream/cinny/config.json
@@ -79,11 +80,11 @@ jobs:
           python apply-noise.py --dist upstream/cinny/dist --noise noise
 
       - name: Install Tauri CLI
-        working-directory: cinny-desktop/upstream
+        working-directory: cinny/desktop/upstream
         run: npm ci
 
       - name: Build installers
-        working-directory: cinny-desktop/upstream
+        working-directory: cinny/desktop/upstream
         run: npm run tauri -- build --config "${{ github.workspace }}/cinny-desktop/tauri.plotina.json"
 
       - uses: actions/upload-artifact@v4
@@ -91,11 +92,11 @@ jobs:
           name: plotina-cinny-${{ matrix.name }}
           if-no-files-found: warn
           path: |
-            cinny-desktop/upstream/src-tauri/target/release/bundle/appimage/*.AppImage
-            cinny-desktop/upstream/src-tauri/target/release/bundle/deb/*.deb
-            cinny-desktop/upstream/src-tauri/target/release/bundle/msi/*.msi
-            cinny-desktop/upstream/src-tauri/target/release/bundle/nsis/*.exe
-            cinny-desktop/upstream/src-tauri/target/release/bundle/dmg/*.dmg
+            cinny/desktop/upstream/src-tauri/target/release/bundle/appimage/*.AppImage
+            cinny/desktop/upstream/src-tauri/target/release/bundle/deb/*.deb
+            cinny/desktop/upstream/src-tauri/target/release/bundle/msi/*.msi
+            cinny/desktop/upstream/src-tauri/target/release/bundle/nsis/*.exe
+            cinny/desktop/upstream/src-tauri/target/release/bundle/dmg/*.dmg
 
   release:
     if: startsWith(github.ref, 'refs/tags/')

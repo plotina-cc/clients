@@ -12,13 +12,19 @@ upstream tag plus the files in this repository.
 
 ## What is here
 
+- `noise/` — the shared web layer: `logic.js` (which `getUserMedia` calls count
+  as call audio, level clamping, UI strings), `boot.js` (the wrapper on
+  `navigator.mediaDevices.getUserMedia`), `cinny-ui.js` (settings block for Cinny
+  Web) and the vendored DeepFilterNet3 bundle in `noise/vendor/`. Element Web,
+  Cinny Web and Cinny Desktop all ship this same code.
 - `element-web/` — overlay for Element Web: a `Dockerfile` that starts from the
-  pinned upstream image and adds the noise wrapper. Runtime code lives in
-  `element-web/noise/` (call-vs-voice-message discriminator, DeepFilterNet3
-  vendor bundle, settings slider), tests in `element-web/tests/`.
-- `cinny-desktop/` — wrapper around Cinny Desktop: patches the built web dist
+  pinned upstream image and drops `noise/` into `/app/noise` plus one `<script>`
+  tag. Tests in `element-web/tests/`.
+- `cinny/web/` — how the same `noise/` is served next to the Cinny Web static
+  bundle on `cinny.plotina.cc`.
+- `cinny/desktop/` — wrapper around Cinny Desktop: patches the built web dist
   before packaging (`apply-noise.py`), Tauri overlay config, and a hand-written
-  NSIS installer for Windows in `cinny-desktop/windows/`.
+  NSIS installer for Windows in `cinny/desktop/windows/`.
 - `scripts/bump-element.sh` — re-resolves the upstream Element Web digest,
   rebuilds, runs both test suites and restores the Dockerfile if anything fails.
 - `scripts/publish-clients.sh` — copies built files to the edge host under stable
@@ -27,14 +33,14 @@ upstream tag plus the files in this repository.
   that page.
 
 The Cinny Web counterpart (settings block for `cinny.plotina.cc`) is
-`element-web/noise/cinny-ui.js`, deployed together with the rest of `noise/`.
+`noise/cinny-ui.js`, deployed together with the rest of `noise/`.
 
 ## Upstream pins
 
 - Element Web: the `FROM` line in `element-web/Dockerfile`, pinned by tag **and**
   digest.
-- Cinny Desktop: `cinny-desktop/UPSTREAM_TAG`.
-- Denoiser assets: `cinny-desktop/noise.lock.json` and the SHA-256 pins in
+- Cinny Desktop: `cinny/desktop/UPSTREAM_TAG`.
+- Denoiser assets: `cinny/desktop/noise.lock.json` and the SHA-256 pins in
   `element-web/Dockerfile` (wasm and model are vendored, never fetched at
   runtime).
 
@@ -51,13 +57,13 @@ element-web/tests/integration.sh  # end-to-end with a fake microphone
 Cinny Desktop (Linux):
 
 ```
-cd cinny-desktop
+cd cinny/desktop
 npm ci && npm run build           # inside the upstream checkout
 python3 apply-noise.py --dist <upstream>/cinny/dist --noise noise
 ```
 
 The full sequence, including the Windows cross-build and the NSIS step, is in
-`cinny-desktop/README.md`. CI does the same thing on GitHub runners: see
+`cinny/desktop/README.md`. CI does the same thing on GitHub runners: see
 `.github/workflows/build-cinny-desktop.yml`, which triggers on a `v*-plotina.*`
 tag and attaches the installers to the release.
 
@@ -74,4 +80,4 @@ end-to-end encrypted.
 
 AGPL-3.0 (see `LICENSE`), matching the upstream projects we derive from: Element
 Web, Cinny and Cinny Desktop. Vendored third-party licences are kept next to the
-code in `element-web/noise/vendor/`.
+code in `noise/vendor/`.
