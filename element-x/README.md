@@ -64,10 +64,11 @@ alongside an existing Element X rather than over it — and a later release-sign
 key) has to be installed **from scratch**, after uninstalling. It is fine for testing the call path;
 it is not a build to hand to a community and then update in place.
 
-It is also **468 MB**: a debug build is not R8'd and carries all four ABIs, and matrix-rust-sdk's
-native libraries are most of it. The signed release build shrinks the app and strips three ABIs, so
-expect a fraction of that once the key exists. Until then, if a smaller install is needed, build with
-ABI splits (`-PplotinaSingleApk` off) and hand out the `arm64-v8a` APK only.
+It is also **468 MB**: a debug build is neither R8'd nor stripped, and it carries all four ABIs —
+matrix-rust-sdk's native libraries are most of it. A release build is R8'd and its native libraries
+are stripped of debug symbols, so expect a fraction of that once the key exists; to drop the other
+ABIs as well, build with ABI splits (`-PplotinaSingleApk` off) and hand out the `arm64-v8a` APK
+only.
 
 Signing is one set of repository secrets away, no code change:
 
