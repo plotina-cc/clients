@@ -110,8 +110,15 @@ jobs:
         shell: bash
         run: |
           pnpm run asar-webapp
-          pnpm exec asar list webapp.asar | grep -q '^/noise/dfn/v3/pkg/df_bg.wasm$'
-          pnpm exec asar list webapp.asar | grep -q '^/config.json$'
+          # asar lists entries with path.sep, so normalize before matching.
+          LIST="$(pnpm exec asar list webapp.asar | tr '\\' '/')"
+          for f in /noise/dfn/v3/pkg/df_bg.wasm /config.json; do
+            if ! printf '%s\n' "$LIST" | grep -qx "$f"; then
+              echo "missing $f in webapp.asar" >&2
+              printf '%s\n' "$LIST" | head -30
+              exit 1
+            fi
+          done
           echo "webapp.asar carries the noise overlay"
 
       - name: Build installers
