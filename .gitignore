@@ -4,3 +4,7 @@ dist/
 cinny/noise/
 upstream/
 *.log
+__pycache__/
+element-desktop/.build/
+element-desktop/noise/
+element-desktop/dist-stable/

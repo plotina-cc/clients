@@ -31,8 +31,17 @@
     return;
   }
 
-  var ASSET_BASE = "/noise/dfn";
-  var MODULE_URL = "/noise/vendor/dfn.esm.js";
+  /* Where this file is served from. Browsers always mount us at the domain
+     root, but Element Desktop serves the webapp as vector://vector/webapp/, so
+     an absolute "/noise/..." would miss the archive. document.currentScript is
+     only set while a classic script runs, which is the one moment we need it. */
+  var NOISE_BASE = (function () {
+    var src = document.currentScript && document.currentScript.src;
+    if (!src) return "/noise";
+    return src.replace(/[^/]*$/, "").replace(/\/$/, "");
+  })();
+  var ASSET_BASE = NOISE_BASE + "/dfn";
+  var MODULE_URL = NOISE_BASE + "/vendor/dfn.esm.js";
 
   function log() {
     var args = Array.prototype.slice.call(arguments);
