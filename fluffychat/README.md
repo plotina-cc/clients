@@ -138,8 +138,9 @@ file of FluffyChat is modified**.
   onnxruntime). For scale, the prebuilt Kaleyra AAR above ships 13.5 MB for
   arm64. Upstream's `flutter_webrtc` AAR already carries ~46 MiB of `.so` across
   four ABIs.
-- Net APK growth for the arm64+armv7 APK: roughly +20–30 MB (model 8 MB, arm64
-  lib ~8 MB, armv7 lib ~6 MB).
+- Net APK growth for the universal APK (arm64-v8a + armeabi-v7a + x86_64):
+  roughly +30–40 MB (model 8 MB, arm64 lib ~8 MB, armv7 lib ~6 MB, x86_64 lib
+  ~8 MB).
 - CPU: DFN3 is comfortably real time on a laptop core; on phones expect a few
   percent to low tens of percent of one core, and much worse on old armv7
   devices. Measure before believing this. The hard budget is 10 ms per frame —
