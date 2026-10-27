@@ -36,7 +36,7 @@ command -v "$PYTHON" >/dev/null 2>&1 || { echo "prepare-webapp: no python interp
 
 echo "==> webapp for $TAG"
 rm -rf "$DEST"
-mkdir -p "$DEST"
+mkdir -p "$DEST" "$WORK"
 
 if [ -n "${WEBAPP_DIR:-}" ]; then
   [ -f "$WEBAPP_DIR/index.html" ] || { echo "prepare-webapp: $WEBAPP_DIR has no index.html" >&2; exit 1; }
