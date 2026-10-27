@@ -30,11 +30,19 @@ done
 : "${ANDROID_NDK_HOME:=$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/ndk/* | sort -V | tail -1)}"
 export ANDROID_NDK_HOME
 
-cargo ndk -t arm64-v8a -t armeabi-v7a \
+cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 \
   -o "$here/plotina_dfn/android/src/main/jniLibs" \
   build --release --manifest-path "$here/plotina_dfn/rust/Cargo.toml"
 
 cd "$upstream"
 flutter pub get
-flutter build apk --release --target-platform android-arm64,android-arm
-echo "APK: $upstream/build/app/outputs/flutter-apk/app-release.apk"
+# Release signing needs android/key.properties; upstream's fallback points at a
+# dummy.keystore that is not in its repository, so build debug without it.
+variant=release
+[ -f android/key.properties ] || variant=debug
+echo "building the $variant variant"
+# No --target-platform: Flutter's Gradle plugin forces its default ABI filter
+# (armeabi-v7a, arm64-v8a, x86_64), so building fewer platforms would package
+# x86_64 libraries from dependencies without a libflutter.so next to them.
+flutter build apk "--$variant"
+echo "APK: $upstream/build/app/outputs/flutter-apk/app-$variant.apk"

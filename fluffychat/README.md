@@ -4,9 +4,11 @@ Plotina's Android build of [FluffyChat](https://github.com/krille-chan/fluffycha
 with DeepFilterNet3 (DFN3) denoising on outgoing call audio, on by default, no
 user action.
 
-**Status: scaffold.** Nothing here has been built or run on a device yet. The
-upstream reading below was done against the pinned tag; the Kotlin/Rust in
-`plotina_dfn/` is written against that code but has never been compiled.
+**Status: ready for the first CI run.** Nothing here has been built or run on a
+device yet. The upstream reading below was done against the pinned tag, the
+patch applies to it cleanly, and the Kotlin/Rust was reviewed against the pinned
+flutter_webrtc 1.6.2+hotfix.4 and DeepFilterNet v0.5.6 sources — but none of it
+has been compiled.
 
 ## Upstream
 
@@ -117,8 +119,9 @@ file of FluffyChat is modified**.
   package (`MediaRecorder`/`AudioRecord`) and are unaffected.
 - webrtc-sdk passes **channel 0 only**. Mono calls are fine; a stereo capture
   would denoise the left channel only.
-- x86/x86_64 emulators are not built by the workflow; `DfnNative.available`
-  stays false there and audio passes through untouched.
+- 32-bit x86 is not a Flutter target, so there is no x86 build. x86_64 is built
+  and works, including on emulators; if the native library ever fails to load,
+  `DfnNative.available` stays false and audio passes through untouched.
 - The built-in NS/AGC still run before DFN3 (double processing). Cheap to tune
   later via `androidUseHardwareAudioProcessing` / APM config if it matters.
 - 48 kHz only: any other rate is passed through rather than resampled.
@@ -159,50 +162,102 @@ file of FluffyChat is modified**.
 
 ## Building
 
-CI: `.github/workflows/build-fluffychat.yml`, triggered by a `v*-plotina.*` tag
-or `workflow_dispatch`. It clones upstream at the pinned tag, applies the patch,
-builds the Rust library for arm64-v8a / armeabi-v7a / x86_64 with `cargo ndk`,
-runs `flutter build apk --release --target-platform android-arm64,android-arm`
-and uploads **`Plotina-FluffyChat.apk`** (artifact and release asset, same name
-every time).
+CI: `.github/workflows/build-fluffychat.yml`, triggered by a tag matching
+`v*-plotina-fluffy.*` (for example `v2.11.3-plotina-fluffy.1`) or by
+`workflow_dispatch`. The client-specific suffix matters: this repository also
+builds Cinny, and the generic `v*-plotina.*` pattern used to start every client's
+workflow at once.
 
-Signing secrets (required for an APK that can update an installed Plotina build):
+The job clones upstream at the tag in `UPSTREAM_TAG`, applies the patch, builds
+the Rust library for arm64-v8a / armeabi-v7a / x86_64 with `cargo ndk`, runs
+`flutter build apk` (Flutter's default ABIs, which are exactly those three) and
+publishes **`Plotina-FluffyChat.apk`** — one constant file name for the artifact
+and for the release asset, so download links and update checks never have to
+guess.
 
-| Secret | |
+### Signing
+
+The key is a PKCS12 keystore with alias `plotina`, valid until 2126. Add these
+under *Settings → Secrets and variables → Actions*:
+
+| Secret | Value |
 |---|---|
 | `ANDROID_KEYSTORE_BASE64` | `base64 -w0 plotina-release.jks` |
 | `ANDROID_KEYSTORE_PASSWORD` | store password |
-| `ANDROID_KEY_ALIAS` | key alias |
-| `ANDROID_KEY_PASSWORD` | optional, defaults to the store password |
+| `ANDROID_KEY_ALIAS` | `plotina` |
+| `ANDROID_KEY_PASSWORD` | key password (falls back to the store password) |
 
-Without them Gradle falls back to upstream's committed `dummy.keystore`. That
-APK installs, but the key is public and shared by every build of this workflow:
-it cannot update an install signed with our real key, and cannot update an
-F-Droid/Play install at all. A signature change always means uninstall first,
-which loses the local database unless a backup exists.
+With them the workflow writes `android/key.properties` and
+`android/plotina-release.jks` into the upstream clone, which is exactly what
+upstream's `build.gradle.kts` reads (it asks for `key.properties` in the Android
+root and a `storeFile` relative to `android/app`).
+
+**Without them the workflow builds a debug APK**, signed with the standard
+Android debug key. It installs and is fine for testing the denoiser, but it
+cannot update an installed Plotina build (nor an F-Droid/Play install): a
+signature change always means uninstall first, which loses the local database
+unless a backup exists. Note that upstream's release signing config points at a
+`dummy.keystore` that is not in its repository, so a plain `--release` build
+without the secrets would fail rather than produce an unsigned APK.
 
 Locally: `fluffychat/scripts/build-android.sh` (needs Flutter 3.47.8, Rust with
 Android targets, `cargo-ndk`, SDK+NDK, JDK 17).
 
-## First-build checklist
+## First build checklist
 
-Nothing below has been done yet; these are the things that can only fail at
-build or on-device time.
+Nothing below has run yet. Ordered by when it can fail.
 
-1. `cargo ndk` produces three `.so` files; record their sizes.
-2. `unzip -l Plotina-FluffyChat.apk`: `lib/arm64-v8a/libplotina_dfn.so` and
-   `assets/flutter_assets/packages/plotina_dfn/assets/DeepFilterNet3_onnx.tar.gz`
-   are present exactly once.
-3. `flutter build` succeeds with `compileSdk = 37` on the runner (AGP may have to
-   download platform 37 and the NDK).
-4. On device, `adb logcat -s PlotinaDfn`: "denoiser attached" and
-   "DeepFilterNet3 ready, hop=480". If the attach message never appears, the
-   registration race against `LiveKitClient.initialize()` needs a Dart-side hook.
-5. `PlotinaDfn.status()` from a debug build returns `frameLength: 480`.
-6. A/B test: same room, two devices, one with `setEnabled(false)`. Listen for
-   pumping/artefacts on speech onsets and for the far end hearing less noise.
-7. CPU while in call: `adb shell top -H -p $(pidof chat.fluffy.fluffychat)`.
-8. No regression in voice messages and video calls.
+**In the CI log**
+
+1. `applying 0001-pubspec-add-plotina-dfn.patch` is followed by
+   `plugin registered in upstream/pubspec.yaml` — the patch landed.
+2. `Build native denoiser` prints three `libplotina_dfn.so` paths (arm64-v8a,
+   armeabi-v7a, x86_64) with non-zero sizes and `cargo ndk` exits 0. Record the
+   sizes; the estimates above are guesses until this line exists.
+3. `Configure signing` either says `signed with alias plotina` or warns that the
+   run produces a debug build because the keystore secret is missing.
+4. `Verify APK contents` lists `lib/arm64-v8a/libplotina_dfn.so`,
+   `lib/armeabi-v7a/libplotina_dfn.so`, `lib/x86_64/libplotina_dfn.so` and
+   `assets/flutter_assets/packages/plotina_dfn/assets/DeepFilterNet3_onnx.tar.gz`.
+   If this step fails, the APK would otherwise have shipped a silent no-op
+   denoiser.
+
+**In the APK**
+
+```sh
+unzip -l Plotina-FluffyChat.apk | grep -E 'libplotina_dfn|DeepFilterNet3'
+```
+
+Each `.so` appears once per ABI; the model tarball is 7,983,136 bytes.
+
+**On the device**
+
+5. `adb logcat -s PlotinaDfn` while opening a call shows
+   `model extracted … (7983136 bytes)`, `DeepFilterNet3 ready, hop=480 samples`
+   and `denoiser attached to flutter_webrtc capture post-processing`. An
+   `initialize(48000 Hz, …)` line may appear before them, but only if the plugin
+   won the race against `LiveKitClient.initialize()`; the denoiser works either
+   way (a zero sample rate just means the frame size is trusted). The attach line
+   appears only once a call screen has initialised flutter_webrtc; if it never
+   appears, the registration race needs a Dart-side hook after
+   `LiveKitClient.initialize()`.
+6. `PlotinaDfn.status()` from a debug build returns
+   `{available: true, enabled: true, attached: true, frameLength: 480}`.
+7. A/B test: same room, two devices, one of them calling
+   `PlotinaDfn.setEnabled(false)`. The far end should hear noticeably less noise
+   from the denoised device; listen for pumping or artefacts on speech onsets,
+   which is what double processing (WebRTC APM NS + DFN3) sounds like.
+8. CPU while in a call: `adb shell top -H -p $(pidof chat.fluffy.fluffychat)`.
+   Above ~10 ms of CPU per 10 ms frame (one core saturated) the call stutters.
+9. No regression in voice messages (they do not go through this path) and in
+   video calls.
+
+**For a signed build**
+
+Set `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`,
+`ANDROID_KEY_ALIAS=plotina` and `ANDROID_KEY_PASSWORD`, as described in
+[Signing](#signing). Without them the workflow builds a debug APK that installs
+but cannot update an installed Plotina build.
 
 ## Licensing
 
