@@ -80,9 +80,10 @@ jobs:
         with:
           workspaces: fluffychat/plotina_dfn/rust -> target
 
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-ndk
+      # cargo-binstall (behind install-action) runs `cargo metadata` in the
+      # repository root, which has no Cargo.toml. Plain `cargo install` does not.
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
 
       - name: Fetch DeepFilterNet3 model
         run: fluffychat/scripts/fetch-model.sh
