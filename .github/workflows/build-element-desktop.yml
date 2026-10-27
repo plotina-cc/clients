@@ -3,7 +3,7 @@ name: build-element-desktop
 on:
   workflow_dispatch:
   push:
-    tags: ["v*-plotina.*"]
+    tags: ["v*-plotina-element.*"]
 
 permissions:
   contents: read
