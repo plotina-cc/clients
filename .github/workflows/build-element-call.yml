@@ -1,0 +1,115 @@
+name: build-element-call
+
+# Static build of our own Element Call at call.plotina.cc: upstream v0.26.1
+# (see element-call/pins.env) with the noise/ wrapper injected into index.html.
+#
+# Default mode takes the upstream release tarball and verifies its SHA-256, so
+# a run is a minute of downloads and no compiler. The `source` mode builds from
+# the git tag with pnpm and exists for the day we have to carry a real patch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "release: upstream tarball (default). source: pnpm build from the git tag."
+        type: choice
+        options: ["release", "source"]
+        default: "release"
+  push:
+    tags: ["v*-plotina.*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-element-call-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build ${{ github.ref_name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read pins
+        id: pins
+        env:
+          REQUESTED_MODE: ${{ inputs.mode }}
+        run: |
+          set -euo pipefail
+          . element-call/pins.env
+          {
+            echo "mode=${REQUESTED_MODE:-release}"
+            echo "node=$NODE_VERSION"
+            echo "pnpm=$PNPM_VERSION"
+            echo "ec_tag=$EC_TAG"
+          } >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+      # Only the source mode needs a toolchain; the release tarball is prebuilt.
+      - uses: pnpm/action-setup@v4
+        if: steps.pins.outputs.mode == 'source'
+        with:
+          version: ${{ steps.pins.outputs.pnpm }}
+
+      - uses: actions/setup-node@v4
+        if: steps.pins.outputs.mode == 'source'
+        with:
+          node-version: ${{ steps.pins.outputs.node }}
+
+      - name: Build the bundle
+        run: |
+          bash element-call/build.sh --mode "${{ steps.pins.outputs.mode }}" --out dist
+
+      # build.sh already asserted the stage directory; this proves the tarball.
+      - name: Unpack and verify the artifact
+        run: |
+          set -euo pipefail
+          mkdir -p check
+          tar -xzf dist/plotina-element-call.tar.gz -C check
+          grep -q 'src="/noise/logic.js"' check/element-call-plotina/index.html
+          grep -q 'src="/noise/boot.js"' check/element-call-plotina/index.html
+          grep -q '"livekit_service_url"' check/element-call-plotina/config.json
+          test -s check/element-call-plotina/LICENSE-AGPL-3.0
+          test -s check/element-call-plotina/noise/vendor/dfn.esm.js
+          test -s check/element-call-plotina/noise/dfn/v3/pkg/df_bg.wasm
+          test -s check/element-call-plotina/noise/dfn/v3/models/DeepFilterNet3_onnx.tar.gz
+          echo "--- index.html head ---"
+          head -c 400 check/element-call-plotina/index.html; echo
+          du -sh check/element-call-plotina
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plotina-element-call
+          path: dist/plotina-element-call.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: plotina-element-call
+          path: dist
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/plotina-element-call.tar.gz
+          generate_release_notes: true
+          body: |
+            Собственный Element Call для plotina.cc: upstream v0.26.1 плюс обёртка
+            шумоподавления DeepFilterNet3 из `noise/`, вставленная в `index.html`.
+
+            Это статика. Распаковать на edge в `/srv/element-call` и отдавать как
+            SPA на `call.plotina.cc` — шаги в `element-call/README.md`.
+
+            Проверить после деплоя: `https://call.plotina.cc/room` открывается как
+            экран звонка, `window.__plotinaNoise.isSupported()` возвращает `true`,
+            а в консоли есть строка `[plotina-noise]`.
+
+            Исходники этой сборки — upstream-тег плюс этот репозиторий (AGPL-3.0).
