@@ -20,11 +20,9 @@ upstream tag plus the files in this repository.
 - `element-web/` — overlay for Element Web: a `Dockerfile` that starts from the
   pinned upstream image and drops `noise/` into `/app/noise` plus one `<script>`
   tag. Tests in `element-web/tests/`.
-- `cinny/web/` — how the same `noise/` is served next to the Cinny Web static
-  bundle on `cinny.plotina.cc`.
-- `cinny/desktop/` — wrapper around Cinny Desktop: patches the built web dist
-  before packaging (`apply-noise.py`), Tauri overlay config, and a hand-written
-  NSIS installer for Windows in `cinny/desktop/windows/`.
+- `cinny/` — everything Cinny in one place: the static patch for the web client
+  on `cinny.plotina.cc` and the Tauri/NSIS packaging for the desktop build, both
+  consuming `noise/`. Details in `cinny/README.md`.
 - `scripts/bump-element.sh` — re-resolves the upstream Element Web digest,
   rebuilds, runs both test suites and restores the Dockerfile if anything fails.
 - `scripts/publish-clients.sh` — copies built files to the edge host under stable
@@ -39,8 +37,8 @@ The Cinny Web counterpart (settings block for `cinny.plotina.cc`) is
 
 - Element Web: the `FROM` line in `element-web/Dockerfile`, pinned by tag **and**
   digest.
-- Cinny Desktop: `cinny/desktop/UPSTREAM_TAG`.
-- Denoiser assets: `cinny/desktop/noise.lock.json` and the SHA-256 pins in
+- Cinny Desktop: `cinny/UPSTREAM_TAG`.
+- Denoiser assets: `cinny/noise.lock.json` and the SHA-256 pins in
   `element-web/Dockerfile` (wasm and model are vendored, never fetched at
   runtime).
 
@@ -57,13 +55,13 @@ element-web/tests/integration.sh  # end-to-end with a fake microphone
 Cinny Desktop (Linux):
 
 ```
-cd cinny/desktop
+cd cinny
 npm ci && npm run build           # inside the upstream checkout
 python3 apply-noise.py --dist <upstream>/cinny/dist --noise noise
 ```
 
 The full sequence, including the Windows cross-build and the NSIS step, is in
-`cinny/desktop/README.md`. CI does the same thing on GitHub runners: see
+`cinny/README.md`. CI does the same thing on GitHub runners: see
 `.github/workflows/build-cinny-desktop.yml`, which triggers on a `v*-plotina.*`
 tag and attaches the installers to the release.
 

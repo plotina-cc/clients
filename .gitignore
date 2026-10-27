@@ -1,6 +1,6 @@
 node_modules/
 target/
 dist/
-cinny/desktop/noise/
+cinny/noise/
 upstream/
 *.log
