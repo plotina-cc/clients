@@ -16,7 +16,7 @@ on:
         options: ["release", "source"]
         default: "release"
   push:
-    tags: ["v*-plotina.*"]
+    tags: ["v*-plotina-call.*"]
 
 permissions:
   contents: write
