@@ -112,7 +112,14 @@ jobs:
           cargo ndk \
             -t arm64-v8a -t armeabi-v7a -t x86_64 \
             -o "$PLUGIN_DIR/android/src/main/jniLibs" \
-            build --release --manifest-path "$PLUGIN_DIR/rust/Cargo.toml"
+            build --release --manifest-path "$PLUGIN_DIR/rust/Cargo.toml" 2>&1 | tee /tmp/cargo-ndk.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            # The job log needs a token to read; the step summary is visible
+            # without one, so the failure reason goes there as well.
+            tail -n 60 /tmp/cargo-ndk.log >> "$GITHUB_STEP_SUMMARY"
+            exit "$status"
+          fi
           ls -l "$PLUGIN_DIR"/android/src/main/jniLibs/*/libplotina_dfn.so
 
       # The APK is signed with our key only when the keystore is configured.
