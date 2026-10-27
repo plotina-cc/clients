@@ -4,12 +4,14 @@ name: build-fluffychat
 # one patch from fluffychat/patches/, plus the DeepFilterNet3 plugin in
 # fluffychat/plotina_dfn/ (Kotlin + Rust).
 #
-# Tag a release as v*-plotina.* and the APK is attached to that release.
+# Triggered by tags of the form v<upstream>-plotina-fluffy.<n>, e.g.
+# v2.11.3-plotina-fluffy.1. The client-specific part keeps this workflow from
+# firing for tags that release the other clients in this repository.
 
 on:
   workflow_dispatch:
   push:
-    tags: ["v*-plotina.*"]
+    tags: ["v*-plotina-fluffy.*"]
 
 permissions:
   contents: write
@@ -21,11 +23,13 @@ concurrency:
 env:
   UPSTREAM_REPO: https://github.com/krille-chan/fluffychat
   PLUGIN_DIR: fluffychat/plotina_dfn
+  APK_NAME: Plotina-FluffyChat.apk
 
 jobs:
   apk:
     name: Android APK
     runs-on: ubuntu-latest
+    timeout-minutes: 120
 
     steps:
       - uses: actions/checkout@v4
@@ -41,6 +45,8 @@ jobs:
             echo "applying $(basename "$patch")"
             git -C upstream apply --verbose "$patch"
           done
+          grep -q '^  plotina_dfn:' upstream/pubspec.yaml
+          echo "plugin registered in upstream/pubspec.yaml"
 
       - name: Read Flutter version
         id: flutter_version
@@ -61,6 +67,11 @@ jobs:
           channel: stable
           cache: true
 
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
@@ -79,16 +90,37 @@ jobs:
       - name: Build native denoiser
         run: |
           set -euo pipefail
-          NDK_DIR="$(ls -d "${ANDROID_HOME:?}"/ndk/* 2>/dev/null | sort -V | tail -1)"
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?ANDROID_SDK_ROOT/ANDROID_HOME is not set}}"
+          NDK_DIR="$(ls -d "$SDK"/ndk/* 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -z "$NDK_DIR" ]; then
+            # No NDK in the runner image: install the one Flutter itself asks
+            # for, so Gradle does not have to download a second copy.
+            NDK_VERSION="$(sed -n 's/.*ndkVersion: String = "\([^"]*\)".*/\1/p' \
+              "${FLUTTER_ROOT:?}/packages/flutter_tools/gradle/src/main/kotlin/FlutterExtension.kt" | head -1)"
+            NDK_VERSION="${NDK_VERSION:-28.2.13676358}"
+            echo "no NDK found, installing $NDK_VERSION"
+            SDKMANAGER="$(command -v sdkmanager || echo "$SDK/cmdline-tools/latest/bin/sdkmanager")"
+            # `yes | …` alone trips `pipefail` via SIGPIPE when sdkmanager exits.
+            (yes || true) | "$SDKMANAGER" --install "ndk;$NDK_VERSION" > /dev/null
+            NDK_DIR="$SDK/ndk/$NDK_VERSION"
+          fi
           echo "using NDK $NDK_DIR"
+          # cargo-ndk only looks at the process environment: set it here as well
+          # as for the later Gradle step.
+          export ANDROID_NDK_HOME="$NDK_DIR"
           echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
           cargo ndk \
             -t arm64-v8a -t armeabi-v7a -t x86_64 \
             -o "$PLUGIN_DIR/android/src/main/jniLibs" \
             build --release --manifest-path "$PLUGIN_DIR/rust/Cargo.toml"
-          find "$PLUGIN_DIR/android/src/main/jniLibs" -name '*.so' -printf '%p %k KiB\n'
+          ls -l "$PLUGIN_DIR"/android/src/main/jniLibs/*/libplotina_dfn.so
 
-      - name: Configure release signing
+      # The APK is signed with our key only when the keystore is configured.
+      # Without the secrets there is nothing to sign with — upstream's
+      # build.gradle.kts points at a dummy.keystore that is not in the repo — so
+      # fall back to a debug build, which installs but cannot update a release.
+      - name: Configure signing
+        id: signing
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -98,34 +130,83 @@ jobs:
           set -euo pipefail
           cd fluffychat/upstream/android
           if [ -z "${KEYSTORE_B64:-}" ]; then
-            echo "::warning title=Unsigned-ish build::ANDROID_KEYSTORE_BASE64 is not set. Gradle falls back to upstream's public dummy.keystore, so this APK cannot update an installed Plotina build."
+            echo "::warning title=Debug build::ANDROID_KEYSTORE_BASE64 is not set, so this run produces a debug APK signed with the Android debug key. It installs, but it cannot update an installed Plotina build."
+            echo "variant=debug" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           printf '%s' "$KEYSTORE_B64" | base64 --decode > plotina-release.jks
+          if [ -z "${STORE_PASSWORD:-}" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is set but ANDROID_KEYSTORE_PASSWORD is empty"
+            exit 1
+          fi
           {
             echo "storePassword=$STORE_PASSWORD"
             echo "keyPassword=${KEY_PASSWORD:-$STORE_PASSWORD}"
-            echo "keyAlias=$KEY_ALIAS"
-            # Relative to android/app, where build.gradle.kts resolves it.
+            echo "keyAlias=${KEY_ALIAS:-plotina}"
+            # Relative to android/app, where build.gradle.kts resolves it:
+            # android/key.properties -> android/plotina-release.jks.
             echo "storeFile=../plotina-release.jks"
           } > key.properties
+          echo "signed with alias ${KEY_ALIAS:-plotina}"
+          echo "variant=release" >> "$GITHUB_OUTPUT"
 
       - name: Build APK
         working-directory: fluffychat/upstream
         run: |
           set -euo pipefail
+          VARIANT="${{ steps.signing.outputs.variant }}"
+          echo "building the $VARIANT variant"
           flutter pub get
-          flutter build apk --release \
-            --target-platform android-arm64,android-arm \
+          # No --target-platform: Flutter's Gradle plugin forces the ABI filter
+          # to its default {armeabi-v7a, arm64-v8a, x86_64}, and dependencies
+          # (webrtc-sdk, this plugin) do ship x86_64 libraries. Leaving x86_64
+          # out of the Flutter build would package those libraries without a
+          # libflutter.so and produce an APK that installs on an x86_64 emulator
+          # and then crashes.
+          flutter build apk "--$VARIANT" \
             --build-number "$GITHUB_RUN_NUMBER"
-          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/Plotina-FluffyChat.apk"
-          ls -lh "$GITHUB_WORKSPACE/Plotina-FluffyChat.apk"
-          sha256sum "$GITHUB_WORKSPACE/Plotina-FluffyChat.apk"
+          cp "build/app/outputs/flutter-apk/app-$VARIANT.apk" "$GITHUB_WORKSPACE/$APK_NAME"
+          ls -lh "$GITHUB_WORKSPACE/$APK_NAME"
+          sha256sum "$GITHUB_WORKSPACE/$APK_NAME"
+
+      # A missing libplotina_dfn.so or model asset does not fail the build on its
+      # own: the plugin just stays silent. Fail here instead.
+      - name: Verify APK contents
+        run: |
+          set -euo pipefail
+          python3 - "$APK_NAME" <<'PY'
+          import sys
+          import zipfile
+
+          apk = sys.argv[1]
+          wanted = [
+              "lib/arm64-v8a/libplotina_dfn.so",
+              "lib/armeabi-v7a/libplotina_dfn.so",
+              "lib/x86_64/libplotina_dfn.so",
+              "assets/flutter_assets/packages/plotina_dfn/assets/DeepFilterNet3_onnx.tar.gz",
+          ]
+          with zipfile.ZipFile(apk) as archive:
+              names = set(archive.namelist())
+              sizes = {name: archive.getinfo(name).file_size for name in names}
+
+          missing = [name for name in wanted if name not in names]
+          if missing:
+              print("missing from the APK:", *missing, sep="\n  ")
+              print("lib/ entries:", *sorted(n for n in names if n.startswith("lib/")), sep="\n  ")
+              print("model entries:", *sorted(n for n in names if "DeepFilterNet" in n), sep="\n  ")
+              sys.exit(1)
+
+          for name in wanted:
+              if sizes[name] == 0:
+                  print(f"empty entry: {name}")
+                  sys.exit(1)
+              print(f"{name}: {sizes[name]} bytes")
+          PY
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Plotina-FluffyChat
+          name: Plotina-FluffyChat.apk
           path: Plotina-FluffyChat.apk
           if-no-files-found: error
 
@@ -133,8 +214,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
-            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
-          gh release upload "$GITHUB_REF_NAME" Plotina-FluffyChat.apk --clobber
+          gh release view "$TAG" > /dev/null 2>&1 ||
+            gh release create "$TAG" --title "$TAG" --generate-notes
+          gh release upload "$TAG" "$APK_NAME" --clobber
