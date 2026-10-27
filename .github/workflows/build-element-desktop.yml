@@ -15,45 +15,10 @@ env:
   UPSTREAM_REPO: https://github.com/element-hq/element-web.git
 
 jobs:
-  # Path filters are not evaluated for tag pushes, so every v*-plotina.* tag
-  # wakes both this workflow and the Cinny one. Look at what the tagged commit
-  # actually changed and stay out of the way when it was not ours.
-  gate:
-    runs-on: ubuntu-24.04
-    outputs:
-      build: ${{ steps.check.outputs.build }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-
-      - name: Is this tag ours?
-        id: check
-        shell: bash
-        run: |
-          if [ "${GITHUB_REF_TYPE:-}" != "tag" ]; then
-            echo "manual run: building"
-            echo "build=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if ! files="$(git diff --name-only HEAD^ HEAD 2>/dev/null)"; then
-            echo "cannot read the tagged commit's diff, building anyway"
-            echo "build=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "$files"
-          if grep -qE '^(element-desktop|noise)/' <<<"$files"; then
-            echo "build=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "build=false" >> "$GITHUB_OUTPUT"
-          fi
-
   # One webapp for both platforms: the desktop shell embeds a fixed asar, so the
   # overlay has to be applied once and handed to the packaging jobs.
   webapp:
     name: webapp
-    needs: gate
-    if: needs.gate.outputs.build == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -78,8 +43,7 @@ jobs:
 
   build:
     name: ${{ matrix.name }}
-    needs: [gate, webapp]
-    if: needs.gate.outputs.build == 'true'
+    needs: [webapp]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -196,7 +160,7 @@ jobs:
           body: |
             Сборка Element Desktop для plotina.cc с шумоподавлением DeepFilterNet3.
 
-            Шумоподавление включено по умолчанию (уровень 60), настраивается в Настройки → Голос и видео.
+            Шумоподавление включено по умолчанию (уровень 70), настраивается в Настройки → Голос и видео.
             Windows: установщик не подписан, SmartScreen попросит подтверждение.
             Linux: AppImage или deb (Debian/Ubuntu). Автообновления нет — новая версия ставится поверх вручную.
             macOS не собирается.
