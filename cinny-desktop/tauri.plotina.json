@@ -1,0 +1,18 @@
+{
+  "productName": "Plotina",
+  "identifier": "cc.plotina.chat",
+  "build": {
+    "beforeBuildCommand": ""
+  },
+  "bundle": {
+    "active": true,
+    "createUpdaterArtifacts": false,
+    "shortDescription": "Matrix client for plotina.cc",
+    "longDescription": "Cinny build for plotina.cc with DeepFilterNet3 noise suppression; updates come only from plotina.cc builds."
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": []
+    }
+  }
+}

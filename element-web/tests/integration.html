@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>noise integration test</title>
+</head>
+<body>
+<pre id="out">running</pre>
+<script src="/noise/logic.js"></script>
+<script src="/noise/boot.js"></script>
+<script>
+const result = {};
+window.onerror = (m, s, l) => { result.pageError = m + " @" + l; };
+
+function rmsOf(analyser, buf, ms) {
+  return new Promise((resolve) => {
+    let sum = 0, n = 0;
+    const t0 = performance.now();
+    const tick = () => {
+      analyser.getFloatTimeDomainData(buf);
+      for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+      n += buf.length;
+      if (performance.now() - t0 < ms) setTimeout(tick, 40);
+      else resolve(Math.sqrt(sum / n));
+    };
+    tick();
+  });
+}
+
+async function measure(constraints, ms) {
+  const stream = await navigator.mediaDevices.getUserMedia(constraints);
+  const ctx = new AudioContext();
+  const src = ctx.createMediaStreamSource(stream);
+  const an = ctx.createAnalyser();
+  an.fftSize = 2048;
+  src.connect(an);
+  const buf = new Float32Array(an.fftSize);
+  await new Promise((r) => setTimeout(r, 300));
+  const rms = await rmsOf(an, buf, ms);
+  stream.getTracks().forEach((t) => t.stop());
+  await ctx.close();
+  return rms;
+}
+
+function report() {
+  // The runner listens on 127.0.0.1:8098/log and reads this GET.
+  const img = new Image();
+  img.src = "http://127.0.0.1:8098/log?data=" + encodeURIComponent(JSON.stringify(result));
+  document.getElementById('out').textContent = JSON.stringify(result, null, 2);
+}
+
+const CALL = { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } };
+const VOICE_MSG = {
+  audio: { channelCount: 1, echoCancellation: { ideal: true }, noiseSuppression: { ideal: true }, autoGainControl: { ideal: true } },
+};
+
+(async () => {
+  try {
+    result.bootLoaded = !!window.__plotinaNoise;
+    result.support = window.__plotinaNoise && window.__plotinaNoise.isSupported();
+    result.defaultLevel = window.__plotinaNoise && window.__plotinaNoise.defaultLevel;
+
+    result.rms_voicemsg = await measure(VOICE_MSG, 2000);
+    result.rms_call_60 = await measure(CALL, 2000);
+
+    window.__plotinaNoise.setLevel(0);
+    result.rms_call_0 = await measure(CALL, 2000);
+    window.__plotinaNoise.setLevel(60);
+
+    result.ratio_60 = result.rms_call_60 / (result.rms_voicemsg || 1);
+    result.ratio_0 = result.rms_call_0 / (result.rms_voicemsg || 1);
+    result.ok = true;
+  } catch (e) {
+    result.error = String(e && e.stack ? e.stack : e);
+    result.ok = false;
+  }
+  report();
+})();
+</script>
+</body>
+</html>

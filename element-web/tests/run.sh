@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Unit tests for the Plotina noise-suppression wrappers (Element Web + Cinny).
+# Runs every tests/*.test.html and tests/unit.html in headless Chromium and
+# fails on any assertion error.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(dirname "$HERE")"
+PORT="${PORT:-8097}"
+CHROME="${CHROME:-chromium}"
+
+python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$ROOT" >/tmp/plotina-noise-tests.log 2>&1 &
+SERVER_PID=$!
+trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
+sleep 1
+
+status=0
+for page in unit.html cinny-ui.test.html; do
+  DOM="$("$CHROME" --headless=new --no-sandbox --disable-gpu --virtual-time-budget=5000 \
+    --dump-dom "http://127.0.0.1:${PORT}/tests/${page}" 2>/dev/null)"
+
+  # The inline <script> source contains the marker strings, so read the title only.
+  TITLE="$(echo "$DOM" | grep -o '<title>[^<]*</title>' | head -1 | sed 's#</\?title>##g')"
+  echo "--- ${page}"
+  echo "$DOM" | sed -n '/^PASS\|^FAIL/p'
+
+  case "$TITLE" in
+    "TESTS OK")
+      echo "    OK"
+      ;;
+    "TESTS FAILED"*)
+      echo "    ${TITLE}"
+      status=1
+      ;;
+    *)
+      echo "    harness did not finish (title='${TITLE}')"
+      status=1
+      ;;
+  esac
+done
+
+if [ "$status" -ne 0 ]; then
+  echo "unit tests: FAILED"
+  exit 1
+fi
+echo "unit tests: OK"

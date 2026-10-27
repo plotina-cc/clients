@@ -1,0 +1,48 @@
+{
+  "default_server_config": {
+    "m.homeserver": {
+      "base_url": "https://plotina.cc",
+      "server_name": "plotina.cc"
+    }
+  },
+  "brand": "Плотина",
+  "disable_guests": true,
+  "show_labs_settings": false,
+  "features": {},
+  "branding": {
+    "logo_link_url": "https://plotina.cc"
+  },
+  "setting_defaults": {
+    "language": "ru",
+    "theme": "custom-Plotina Mint",
+    "custom_themes": [
+      {
+        "name": "Plotina Mint",
+        "is_dark": false,
+        "colors": {
+          "accent-color": "#17795a",
+          "primary-color": "#17795a"
+        },
+        "compound": {
+          "--cpd-color-text-action-accent": "#17795a",
+          "--cpd-color-icon-accent-tertiary": "#17795a",
+          "--cpd-color-bg-action-primary-rest": "#17795a"
+        }
+      },
+      {
+        "name": "Plotina Mint Dark",
+        "is_dark": true,
+        "colors": {
+          "accent-color": "#7ee2b8",
+          "primary-color": "#7ee2b8"
+        },
+        "compound": {
+          "--cpd-color-text-action-accent": "#7ee2b8",
+          "--cpd-color-icon-accent-tertiary": "#7ee2b8",
+          "--cpd-color-bg-action-primary-rest": "#7ee2b8"
+        }
+      }
+    ]
+  },
+  "default_theme": "custom-Plotina Mint"
+}

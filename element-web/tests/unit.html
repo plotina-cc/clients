@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>plotina noise unit tests</title>
+</head>
+<body>
+<pre id="out">running</pre>
+<!-- Loaded first and expected to exist: tests define the contract for logic.js -->
+<script src="../noise/logic.js"></script>
+<script>
+const results = [];
+function test(name, fn) {
+  try {
+    fn();
+    results.push("PASS " + name);
+  } catch (e) {
+    results.push("FAIL " + name + " :: " + (e && e.message ? e.message : e));
+  }
+}
+function eq(actual, expected, what) {
+  const a = JSON.stringify(actual);
+  const b = JSON.stringify(expected);
+  if (a !== b) throw new Error((what || "value") + " expected " + b + " got " + a);
+}
+function L() {
+  const api = window.PlotinaNoiseLogic;
+  if (!api) throw new Error("PlotinaNoiseLogic is not defined (logic.js missing?)");
+  return api;
+}
+
+const CALL = { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } };
+const VOICE_MSG = {
+  audio: { channelCount: 1, echoCancellation: { ideal: true }, noiseSuppression: { ideal: true }, autoGainControl: { ideal: true } },
+};
+
+test("call audio (boolean constraints) is processed", () => {
+  eq(L().shouldProcess(CALL), true);
+});
+
+test("voice message audio (ideal constraints) is not processed", () => {
+  eq(L().shouldProcess(VOICE_MSG), false);
+});
+
+test("audio: true is not processed", () => {
+  eq(L().shouldProcess({ audio: true }), false);
+});
+
+test("missing audio is not processed", () => {
+  eq(L().shouldProcess({ video: true }), false);
+  eq(L().shouldProcess(undefined), false);
+});
+
+test("master switch off (noiseSuppression false) skips processing", () => {
+  eq(L().shouldProcess({ audio: { noiseSuppression: false, echoCancellation: true } }), false);
+});
+
+test("clampLevel keeps values inside 0..100 as integers", () => {
+  eq(L().clampLevel(150), 100);
+  eq(L().clampLevel(-5), 0);
+  eq(L().clampLevel(59.6), 60);
+  eq(L().clampLevel("42"), 42);
+});
+
+test("clampLevel falls back to the default on garbage", () => {
+  eq(L().clampLevel(undefined), 60);
+  eq(L().clampLevel(NaN), 60);
+  eq(L().clampLevel("abc"), 60);
+  eq(L().clampLevel(null), 60);
+});
+
+test("rawAudioConstraints disables browser noise suppression only", () => {
+  const out = L().rawAudioConstraints(CALL);
+  eq(out.audio.noiseSuppression, false, "noiseSuppression");
+  eq(out.audio.echoCancellation, true, "echoCancellation kept");
+  eq(out.audio.autoGainControl, true, "autoGainControl kept");
+});
+
+test("rawAudioConstraints does not mutate the caller's object", () => {
+  const input = { audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } };
+  L().rawAudioConstraints(input);
+  eq(input.audio.noiseSuppression, true, "input untouched");
+});
+
+test("rawAudioConstraints keeps video constraints", () => {
+  const out = L().rawAudioConstraints({ audio: { noiseSuppression: true }, video: { width: 640 } });
+  eq(out.video, { width: 640 });
+});
+
+test("strings follow the page language", () => {
+  eq(L().strings("ru-RU").title, "Уровень шумоподавления");
+  eq(L().strings("de-DE").title, "Noise suppression level");
+  eq(L().strings(undefined).title, "Уровень шумоподавления");
+});
+
+test("level storage key is versioned and explicit", () => {
+  eq(L().LEVEL_KEY, "plotina.noise.level");
+  eq(L().DEFAULT_LEVEL, 60);
+});
+
+const failed = results.filter((r) => r.startsWith("FAIL"));
+document.title = failed.length ? "TESTS FAILED (" + failed.length + ")" : "TESTS OK";
+document.getElementById("out").textContent = results.join("\n") + "\n" + document.title;
+</script>
+</body>
+</html>

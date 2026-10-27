@@ -1,0 +1,10 @@
+{
+  "dfn/v3/pkg/df_bg.wasm": {
+    "url": "https://cinny.plotina.cc/noise/dfn/v3/pkg/df_bg.wasm",
+    "sha256": "440b5d12b6ea7d95008736f844221d7874ee15de5cb10d3015002470fdba0432"
+  },
+  "dfn/v3/models/DeepFilterNet3_onnx.tar.gz": {
+    "url": "https://cinny.plotina.cc/noise/dfn/v3/models/DeepFilterNet3_onnx.tar.gz",
+    "sha256": "c94d91f70911001c946e0fabb4aa9adc37045f45a03b56008cb0c8244cb63616"
+  }
+}

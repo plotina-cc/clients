@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><title>cinny ui tests</title></head>
+<body>
+<!-- Fixture mirrors the live Cinny 4.12.6 settings dialog: a scroll container with
+     sections; each section starts with a 12px/600 heading paragraph. -->
+<div id="scroller">
+  <div id="content">
+    <div class="section">
+      <p class="heading">Appearance</p>
+      <div class="row" style="background:rgb(242,242,242);color:rgb(0,0,0)">System Theme</div>
+      <div class="row" style="background:rgb(242,242,242);color:rgb(0,0,0)">Monochrome Mode</div>
+    </div>
+    <div class="section">
+      <p class="heading">Date &amp; Time</p>
+      <div class="row" style="background:rgb(242,242,242);color:rgb(0,0,0)">24-Hour Time Format</div>
+    </div>
+  </div>
+</div>
+
+<script src="../noise/logic.js"></script>
+<script src="../noise/cinny-ui.js"></script>
+<script>
+const results = [];
+function test(name, fn) {
+  try { fn(); results.push("PASS " + name); }
+  catch (e) { results.push("FAIL " + name + " :: " + (e && e.message ? e.message : e)); }
+}
+function ok(cond, msg) { if (!cond) throw new Error(msg || "expected truthy"); }
+function eq(a, b, msg) { if (JSON.stringify(a) !== JSON.stringify(b)) throw new Error((msg||"") + " expected " + JSON.stringify(b) + " got " + JSON.stringify(a)); }
+
+function inject() {
+  if (!window.PlotinaNoiseCinny || typeof window.PlotinaNoiseCinny.inject !== "function") {
+    throw new Error("PlotinaNoiseCinny.inject is missing (cinny-ui.js not loaded?)");
+  }
+  window.PlotinaNoiseCinny.inject();
+  return document.getElementById("plotina-noise-cinny");
+}
+
+test("block is injected into the General tab", () => {
+  const block = inject();
+  ok(block, "block not found");
+});
+
+test("block sits right before the Appearance section", () => {
+  const block = inject();
+  const appearance = [...document.querySelectorAll("p")].find((p) => p.textContent.trim() === "Appearance");
+  eq(block.nextElementSibling, appearance.parentElement, "block should precede the Appearance section");
+});
+
+test("slider starts at the default level", () => {
+  const block = inject();
+  const range = block.querySelector("input[type=range]");
+  ok(range, "no range input");
+  eq(range.value, "60");
+});
+
+test("changing the slider stores the level", () => {
+  const block = inject();
+  const range = block.querySelector("input[type=range]");
+  range.value = "35";
+  range.dispatchEvent(new Event("input"));
+  eq(localStorage.getItem("plotina.noise.level"), "35", "localStorage");
+  eq(block.querySelector("[data-plotina-value]").textContent, "35", "shown value");
+  range.value = "60";
+  range.dispatchEvent(new Event("input"));
+});
+
+test("injection is idempotent", () => {
+  inject(); inject();
+  eq(document.querySelectorAll("#plotina-noise-cinny").length, 1, "only one block");
+});
+
+test("no Appearance section means no injection", () => {
+  document.getElementById("scroller").remove();
+  window.PlotinaNoiseCinny.reset();
+  eq(document.getElementById("plotina-noise-cinny"), null, "should not inject without an anchor");
+});
+
+const failed = results.filter((r) => r.startsWith("FAIL"));
+document.title = failed.length ? "TESTS FAILED (" + failed.length + ")" : "TESTS OK";
+document.body.insertAdjacentHTML("beforeend", "<pre id='out'>" + results.join("\n") + "\n" + document.title + "</pre>");
+</script>
+</body>
+</html>
