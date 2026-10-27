@@ -2,10 +2,14 @@
 //!
 //! JNI shim that runs DeepFilterNet3 over WebRTC capture audio.
 //!
-//! The Java/Kotlin side (`cc.plotina.dfn.DfnProcessor`) is called by
-//! flutter_webrtc from webrtc-sdk's `ExternalAudioProcessor::Process()`, which
-//! hands over **mono float32, 48 kHz, 10 ms** frames (480 samples) taken from
-//! `AudioBuffer::channels()[0]` — see
+//! The Kotlin side is `cc.plotina.dfn.DfnNative` (`android/…/DfnNative.kt`).
+//! Its four `native…` methods map to the `Java_cc_plotina_dfn_DfnNative_*`
+//! symbols below; the names are resolved by the VM at call time, so the two
+//! files have to be renamed together.
+//!
+//! flutter_webrtc calls us from webrtc-sdk's `ExternalAudioProcessor::Process()`,
+//! which hands over **mono float32, 48 kHz, 10 ms** frames (480 samples) taken
+//! from `AudioBuffer::channels()[0]` — see
 //! `sdk/android/src/jni/pc/external_audio_processor.cc` in webrtc-sdk m150.
 //! That is exactly DeepFilterNet3's native rate and hop size, so no resampling
 //! or format conversion happens here.
@@ -40,10 +44,10 @@ struct Handle(Mutex<Dfn>);
 /// opaque handle, or 0 on failure. `atten_lim_db` is the maximum attenuation in
 /// dB; 100 means unlimited.
 #[no_mangle]
-pub extern "system" fn Java_cc_plotina_dfn_DfnNative_create(
-    env: JNIEnv,
-    _this: JObject,
-    model_path: JString,
+pub extern "system" fn Java_cc_plotina_dfn_DfnNative_nativeCreate<'local>(
+    mut env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    model_path: JString<'local>,
     atten_lim_db: jfloat,
 ) -> jlong {
     let created = catch_unwind(AssertUnwindSafe(|| -> Option<jlong> {
@@ -68,9 +72,9 @@ pub extern "system" fn Java_cc_plotina_dfn_DfnNative_create(
 
 /// DeepFilterNet hop size in samples (480 at 48 kHz), 0 for a dead handle.
 #[no_mangle]
-pub extern "system" fn Java_cc_plotina_dfn_DfnNative_frameLength(
-    _env: JNIEnv,
-    _this: JObject,
+pub extern "system" fn Java_cc_plotina_dfn_DfnNative_nativeFrameLength<'local>(
+    _env: JNIEnv<'local>,
+    _this: JObject<'local>,
     handle: jlong,
 ) -> jint {
     if handle == 0 {
@@ -87,11 +91,11 @@ pub extern "system" fn Java_cc_plotina_dfn_DfnNative_frameLength(
 /// left untouched (wrong size, poisoned lock, model error) — the caller then
 /// keeps the original audio.
 #[no_mangle]
-pub extern "system" fn Java_cc_plotina_dfn_DfnNative_process(
-    env: JNIEnv,
-    _this: JObject,
+pub extern "system" fn Java_cc_plotina_dfn_DfnNative_nativeProcess<'local>(
+    env: JNIEnv<'local>,
+    _this: JObject<'local>,
     handle: jlong,
-    samples: JFloatArray,
+    samples: JFloatArray<'local>,
     frames: jint,
 ) -> jboolean {
     if handle == 0 || frames <= 0 {
@@ -136,11 +140,11 @@ pub extern "system" fn Java_cc_plotina_dfn_DfnNative_process(
     }
 }
 
-/// Frees the handle created by `create`.
+/// Frees the handle created by `nativeCreate`.
 #[no_mangle]
-pub extern "system" fn Java_cc_plotina_dfn_DfnNative_destroy(
-    _env: JNIEnv,
-    _this: JObject,
+pub extern "system" fn Java_cc_plotina_dfn_DfnNative_nativeDestroy<'local>(
+    _env: JNIEnv<'local>,
+    _this: JObject<'local>,
     handle: jlong,
 ) {
     if handle == 0 {
