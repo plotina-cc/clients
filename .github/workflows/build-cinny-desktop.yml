@@ -22,8 +22,10 @@ jobs:
         include:
           - name: linux
             os: ubuntu-24.04
+            bundles: appimage deb
           - name: windows
             os: windows-latest
+            bundles: nsis msi
 
     steps:
       - uses: actions/checkout@v4
@@ -83,7 +85,7 @@ jobs:
 
       - name: Build installers
         working-directory: cinny/upstream
-        run: npm run tauri -- build --config "${{ github.workspace }}/cinny/tauri.plotina.json"
+        run: npm run tauri -- build --config "${{ github.workspace }}/cinny/tauri.plotina.json" --bundles ${{ matrix.bundles }}
 
       - uses: actions/upload-artifact@v4
         with:
