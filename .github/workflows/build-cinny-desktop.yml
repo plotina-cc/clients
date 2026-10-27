@@ -3,7 +3,7 @@ name: build-cinny-desktop
 on:
   workflow_dispatch:
   push:
-    tags: ["v*-plotina.*"]
+    tags: ["v*-plotina-cinny.*"]
     paths: ["cinny/**", ".github/workflows/build-cinny-desktop.yml"]
 
 permissions:
