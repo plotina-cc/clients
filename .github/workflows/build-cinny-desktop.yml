@@ -60,8 +60,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p noise/vendor
-          cp ../noise/logic.js ../noise/boot.js ../noise/cinny-ui.js noise/
-          cp -a ../noise/vendor/. noise/vendor/
+          cp ../../noise/logic.js ../../noise/boot.js ../../noise/cinny-ui.js noise/
+          cp -a ../../noise/vendor/. noise/vendor/
           python scripts/fetch-noise.py
 
       - name: Build Cinny web
