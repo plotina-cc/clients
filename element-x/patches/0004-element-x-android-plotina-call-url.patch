@@ -1,0 +1,27 @@
+diff --git a/features/call/impl/src/main/kotlin/io/element/android/features/call/impl/utils/DefaultCallWidgetProvider.kt b/features/call/impl/src/main/kotlin/io/element/android/features/call/impl/utils/DefaultCallWidgetProvider.kt
+index 8de7b81d..ae5459d7 100644
+--- a/features/call/impl/src/main/kotlin/io/element/android/features/call/impl/utils/DefaultCallWidgetProvider.kt
++++ b/features/call/impl/src/main/kotlin/io/element/android/features/call/impl/utils/DefaultCallWidgetProvider.kt
+@@ -19,6 +19,12 @@ import io.element.android.libraries.preferences.api.store.AppPreferencesStore
+ import io.element.android.services.appnavstate.api.ActiveRoomsHolder
+ import kotlinx.coroutines.flow.firstOrNull
+ 
++// Plotina: upstream loads the Element Call bundle it ships inside the APK. This build points calls
++// at our own Element Call instead, so a call opens on our origin without anyone typing a URL. The
++// developer setting below ("Custom Element Call base URL") still overrides it, and the bundled
++// copy stays in the APK as the offline fallback - select it by entering
++// "https://appassets.androidplatform.net/element-call/index.html" there.
++private const val PLOTINA_CALL_WIDGET_BASE_URL = "https://call.plotina.cc/room"
+ private const val EMBEDDED_CALL_WIDGET_BASE_URL = "https://appassets.androidplatform.net/element-call/index.html"
+ 
+ @ContributesBinding(AppScope::class)
+@@ -42,7 +48,8 @@ class DefaultCallWidgetProvider(
+             ?: error("Room not found")
+ 
+         val customBaseUrl = appPreferencesStore.getCustomElementCallBaseUrlFlow().firstOrNull()
+-        val baseUrl = customBaseUrl ?: EMBEDDED_CALL_WIDGET_BASE_URL
++        // Plotina: our Element Call unless a custom base URL is set in developer settings.
++        val baseUrl = customBaseUrl ?: PLOTINA_CALL_WIDGET_BASE_URL
+ 
+         val roomInfo = room.info()
+         val isEncrypted = roomInfo.isEncrypted ?: room.getUpdatedIsEncrypted().getOrThrow()

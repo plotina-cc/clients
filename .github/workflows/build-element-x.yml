@@ -1,21 +1,27 @@
-# Builds Plotina's Element X Android APK: upstream Element X + element-call-android patched to run
-# DeepFilterNet3 over the microphone, plus the Rust JNI shim in element-x/native/plotina-dfn.
+# Builds Plotina's Element X Android APK: upstream element-x-android, with the call WebView pointed
+# at our own Element Call (https://call.plotina.cc/room) by default, so a call opens there without
+# anyone typing a URL into developer settings.
+#
+# The native Rust/JNI denoiser path (element-x/native/plotina-dfn, patches 0001 and 0003) is kept in
+# this repository as a reserve but is deliberately NOT part of this build: nothing here compiles
+# Rust, installs the NDK, or publishes element-call-android to mavenLocal. The WebView call reaches
+# noise suppression through our own Element Call deployment instead.
 #
 # Nothing is built on golova; this workflow is the build machine. It needs no macOS runner: the
 # Android target is all we ship (see element-x/README.md, "Limitations").
 #
-# Secrets, all optional - without them the job builds a signed-with-the-debug-key debug APK that
+# Secrets, all optional - without them the job builds a debug APK signed with the debug key, which
 # cannot replace an installed release:
 #   ANDROID_KEYSTORE_BASE64   base64 of the .jks/.keystore (base64 -w0 plotina.jks)
 #   ANDROID_KEYSTORE_PASSWORD store password
-#   ANDROID_KEY_ALIAS         key alias
+#   ANDROID_KEY_ALIAS         key alias (plotina)
 #   ANDROID_KEY_PASSWORD      key password
 name: Build Element X (Android, Plotina)
 
 on:
   push:
     tags:
-      - "v*-plotina.*"
+      - "v*-plotina-x.*"
   pull_request:
     paths:
       - "element-x/**"
@@ -26,10 +32,6 @@ on:
         description: "element-x-android tag (empty = the pin in element-x/pins.env)"
         required: false
         default: ""
-      native_calls:
-        description: "Turn the native call stack on by default (needed for the denoiser to hear anything)"
-        type: boolean
-        default: true
 
 permissions:
   contents: write
@@ -38,8 +40,12 @@ concurrency:
   group: build-element-x-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Same heap upstream CI uses: R8 on the full app runs out of memory well before 4g.
+  GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx8g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8 -XX:+UseG1GC
+
 jobs:
-  # Cheap and first: if the patches no longer apply to the pinned tags, nothing below is worth the
+  # Cheap and first: if the patches no longer apply to the pinned tag, nothing below is worth the
   # machine time, and this is the check that upstream drift breaks.
   patches:
     runs-on: ubuntu-latest
@@ -47,13 +53,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Read pins
         run: cat element-x/pins.env >> "$GITHUB_ENV"
-      - name: 0001 applies to element-call-android
-        run: |
-          git clone --depth 1 --branch "$ELEMENT_CALL_TAG" \
-            https://github.com/element-hq/element-call-android "$RUNNER_TEMP/element-call"
-          cd "$RUNNER_TEMP/element-call"
-          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0001-element-call-android-plotina-dfn.patch"
-      - name: 0002 applies to element-x-android
+      - name: Patches apply to element-x-android
         env:
           UPSTREAM_TAG: ${{ inputs.upstream_tag }}
         run: |
@@ -61,15 +61,16 @@ jobs:
           # `env` context of the same step: stay in the shell.
           tag="${UPSTREAM_TAG:-$ELEMENT_X_TAG}"
           echo "element-x-android: $tag"
-          git clone --depth 1 --branch "$tag" \
+          # LFS holds screenshot-test blobs worth hundreds of MB; the build never reads them.
+          GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 --branch "$tag" \
             https://github.com/element-hq/element-x-android "$RUNNER_TEMP/element-x"
           cd "$RUNNER_TEMP/element-x"
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0002-element-x-android-plotina-signing.patch"
-          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0003-element-x-android-native-calls-default.patch"
+          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0004-element-x-android-plotina-call-url.patch"
 
   build:
     needs: patches
-    # Pull requests get the patch check only: a full build is 30-45 minutes and needs no review.
+    # Pull requests get the patch check only: a full build is 20-40 minutes and needs no review.
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -96,73 +97,23 @@ jobs:
         run: |
           yes | sdkmanager --licenses > /dev/null || true
           # compileSdk/targetSdk 37 and build-tools 37.0.0 come from plugins/src/main/kotlin/Versions.kt
-          # at the pinned tag; the NDK is pinned in pins.env because "latest" moves under us.
-          sdkmanager --install "platforms;android-37" "build-tools;37.0.0" "ndk;$ANDROID_NDK_VERSION"
-          echo "ANDROID_NDK_HOME=${ANDROID_HOME:-$ANDROID_SDK_ROOT}/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+          # at the pinned tag. The canary channel is the fallback for the window where a package is
+          # published there but not yet in the stable channel.
+          sdkmanager --install "platforms;android-37" "build-tools;37.0.0" \
+            || sdkmanager --channel=3 --install "platforms;android-37" "build-tools;37.0.0"
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: element-x/native/plotina-dfn -> target
-
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked
-
-      - name: Build the denoiser (arm64-v8a)
-        working-directory: element-x/native/plotina-dfn
-        run: |
-          cargo ndk -t arm64-v8a -o jniLibs build --release
-          ls -l jniLibs/arm64-v8a/
-          # The model is 7,983,136 bytes and is inside the .so; anything much smaller means
-          # `default-model` was dropped from the feature list and DFN would fall back at runtime.
-          size=$(stat -c %s jniLibs/arm64-v8a/libplotina_dfn.so)
-          echo "libplotina_dfn.so: $size bytes"
-          [ "$size" -gt 7000000 ]
-
-      - name: element-call-android, patched and published to mavenLocal
-        run: |
-          git clone --depth 1 --branch "$ELEMENT_CALL_TAG" \
-            https://github.com/element-hq/element-call-android upstream/element-call
-          cd upstream/element-call
-          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0001-element-call-android-plotina-dfn.patch"
-
-          # The AAR owns its native library: it is packaged into call/impl, so the published
-          # element-call artifact is self-contained and the app module needs no knowledge of it.
-          mkdir -p call/impl/src/main/jniLibs/arm64-v8a
-          cp "$GITHUB_WORKSPACE/element-x/native/plotina-dfn/jniLibs/arm64-v8a/libplotina_dfn.so" \
-             call/impl/src/main/jniLibs/arm64-v8a/
-
-          # matrix-rust-rtc: the release AAR element-call's gradle.properties pins by URL+sha256.
-          ./tools/rtc/fetch-rust-rtc
-
-          ./gradlew publishToMavenLocal -PVERSION_NAME="$ELEMENT_CALL_LOCAL_VERSION"
-
-          # The library is useless if the .so did not make it into the AAR, and the Kotlin side
-          # would then fall back to raw capture at runtime without saying so.
-          aar=$(ls "$HOME"/.m2/repository/io/element/android/element-call/"$ELEMENT_CALL_LOCAL_VERSION"/*.aar)
-          unzip -l "$aar" | grep -q "jni/arm64-v8a/libplotina_dfn.so"
-
       - name: element-x-android, patched
-        env:
-          NATIVE_CALLS: ${{ inputs.native_calls }}
         run: |
-          git clone --depth 1 --branch "$ELEMENT_X_TAG" \
+          GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 --branch "$ELEMENT_X_TAG" \
             https://github.com/element-hq/element-x-android upstream/element-x
           cd upstream/element-x
+          # 0002: release is signed with our key instead of upstream's debug key, and
+          # `-PplotinaSingleApk` builds one APK instead of four ABI splits.
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0002-element-x-android-plotina-signing.patch"
-          # `inputs.native_calls` is empty on a tag push, where the answer is the default: yes.
-          if [ "${NATIVE_CALLS:-true}" != "false" ]; then
-            git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0003-element-x-android-native-calls-default.patch"
-          else
-            echo "::notice::Building without 0003: calls go through the bundled Element Call WebView and the denoiser is never reached"
-          fi
-          # R8 over the whole app in 4 GB is a coin flip; the runner has 16.
-          sed -i 's/^org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8/' gradle.properties
+          # 0004: the call WebView defaults to https://call.plotina.cc/room.
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0004-element-x-android-plotina-call-url.patch"
 
       - name: Decode the signing key
         id: keystore
@@ -190,27 +141,32 @@ jobs:
         working-directory: upstream/element-x
         run: |
           if [ "${{ steps.keystore.outputs.signed }}" = "true" ]; then
-            ./gradlew -PelementCallLocalVersion="$ELEMENT_CALL_LOCAL_VERSION" -PplotinaSingleApk \
-              assembleFdroidRelease
+            ./gradlew -PplotinaSingleApk assembleFdroidRelease --stacktrace --no-configuration-cache
             apk_dir=app/build/outputs/apk/fdroid/release
           else
-            ./gradlew -PelementCallLocalVersion="$ELEMENT_CALL_LOCAL_VERSION" -PplotinaSingleApk \
-              assembleFdroidDebug
+            ./gradlew -PplotinaSingleApk assembleFdroidDebug --stacktrace --no-configuration-cache
             apk_dir=app/build/outputs/apk/fdroid/debug
           fi
           apk=$(find "$apk_dir" -name '*.apk' | head -1)
           echo "APK: $apk"
           cp "$apk" "$GITHUB_WORKSPACE/Plotina-ElementX.apk"
 
-      - name: Check the APK actually carries the denoiser
+      - name: Check the APK carries our call URL and the bundled fallback
         run: |
           cd "$GITHUB_WORKSPACE"
-          unzip -l Plotina-ElementX.apk | grep "lib/arm64-v8a/" || true
-          unzip -l Plotina-ElementX.apk | grep -q "lib/arm64-v8a/libplotina_dfn.so"
           ls -lh Plotina-ElementX.apk
-          if [ "${{ steps.keystore.outputs.signed }}" = "true" ]; then
-            "${ANDROID_HOME:-$ANDROID_SDK_ROOT}/build-tools/37.0.0/apksigner" verify --print-certs Plotina-ElementX.apk | head -5
-          fi
+
+          # The bundled Element Call stays in the APK: it is the offline fallback if our host is down.
+          unzip -l Plotina-ElementX.apk | grep -E "assets/element-call/" | head -5
+          unzip -l Plotina-ElementX.apk | grep -q "assets/element-call/index.html"
+
+          # And our URL is in the code, not only in the README. This is the whole point of the build:
+          # if the next person bumps the pin and 0004 stops applying, this fails instead of shipping
+          # an APK that silently opens Element's bundle again.
+          unzip -p Plotina-ElementX.apk "classes*.dex" | strings | grep -F "https://call.plotina.cc/room"
+          unzip -p Plotina-ElementX.apk "classes*.dex" | strings | grep -qF "https://call.plotina.cc/room"
+
+          "${ANDROID_HOME:-$ANDROID_SDK_ROOT}/build-tools/37.0.0/apksigner" verify --print-certs Plotina-ElementX.apk | head -5
 
       - uses: actions/upload-artifact@v4
         with:
@@ -226,13 +182,16 @@ jobs:
           files: Plotina-ElementX.apk
           generate_release_notes: true
           body: |
-            Element X for Android built from `${{ env.ELEMENT_X_TAG }}`, with DeepFilterNet3 noise
-            suppression in the microphone path (element-call-android `${{ env.ELEMENT_CALL_TAG }}`,
-            patched).
+            Element X for Android built from element-x-android `${{ env.ELEMENT_X_TAG }}`, with calls
+            opening on **https://call.plotina.cc/room** by default — no setting to change, no URL to
+            type. Element Call is loaded in the WebView from our origin, which is where our noise
+            suppression lives.
 
-            - **arm64-v8a only** for the denoiser. Other ABIs install and run, with the raw microphone.
-            - Native calls (`feature.native_call`) are **on by default** in this build: the bundled
-              Element Call WebView cannot reach the denoiser. The flag is still in developer options.
-            - Signed with the plotina key: installs over previous builds from this workflow, but not
-              over Element X from Google Play (same application id, different key) — uninstall that first.
-            - Source: this repository at this tag plus the upstream tags pinned in `element-x/pins.env`.
+            - The bundled Element Call stays in the APK as the offline fallback; developer settings
+              ("Custom Element Call base URL") still override the default.
+            - **Debug APK**: no signing secrets are configured yet, so this is signed with the Android
+              debug key and has application id `io.element.android.x.debug`. It installs next to a
+              release build, but a later signed release has to be installed from scratch.
+            - Source: this repository at this tag plus the upstream tag pinned in `element-x/pins.env`.
+
+            Check that `https://call.plotina.cc/room` answers before handing this APK out.
