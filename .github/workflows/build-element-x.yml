@@ -52,7 +52,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Read pins
-        run: cat element-x/pins.env >> "$GITHUB_ENV"
+        # $GITHUB_ENV takes KEY=VALUE lines only: a '#' line is rejected as "Invalid format",
+        # which is how the first run of this workflow died in ten seconds.
+        run: grep -Ev '^[[:space:]]*(#|$)' element-x/pins.env >> "$GITHUB_ENV"
       - name: Patches apply to element-x-android
         env:
           UPSTREAM_TAG: ${{ inputs.upstream_tag }}
@@ -79,7 +81,7 @@ jobs:
 
       - name: Read pins
         run: |
-          cat element-x/pins.env >> "$GITHUB_ENV"
+          grep -Ev '^[[:space:]]*(#|$)' element-x/pins.env >> "$GITHUB_ENV"
           if [ -n "${UPSTREAM_TAG:-}" ]; then
             echo "ELEMENT_X_TAG=$UPSTREAM_TAG" >> "$GITHUB_ENV"
           fi
