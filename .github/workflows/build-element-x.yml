@@ -93,16 +93,34 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - uses: android-actions/setup-android@v3
-
       - name: Install the SDK packages Element X compiles against
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
+          # ubuntu-latest ships the Android SDK and upstream's own CI never installs anything, so
+          # nothing here may fail just because a package is already present. Do not use
+          # android-actions/setup-android@v3: it asks the repository for the `tools` package, which
+          # no longer exists there, and the job dies before Gradle starts.
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "SDK: $SDK"
+          # Gradle finds the SDK through ANDROID_HOME; make sure the later steps have it even if the
+          # image stopped exporting it.
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          if [ -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          else
+            SDKMANAGER=$(ls -d "$SDK"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -1)
+          fi
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
           # compileSdk/targetSdk 37 and build-tools 37.0.0 come from plugins/src/main/kotlin/Versions.kt
-          # at the pinned tag. The canary channel is the fallback for the window where a package is
-          # published there but not yet in the stable channel.
-          sdkmanager --install "platforms;android-37" "build-tools;37.0.0" \
-            || sdkmanager --channel=3 --install "platforms;android-37" "build-tools;37.0.0"
+          # at the pinned tag.
+          "$SDKMANAGER" --install "platforms;android-37" "build-tools;37.0.0" \
+            || "$SDKMANAGER" --channel=3 --install "platforms;android-37" "build-tools;37.0.0" \
+            || {
+              echo "::warning::sdkmanager could not install them: falling back to whatever the image already has"
+              "$SDKMANAGER" --list_installed || true
+              test -d "$SDK/platforms/android-37"
+              test -d "$SDK/build-tools/37.0.0"
+            }
 
       - uses: gradle/actions/setup-gradle@v4
 
@@ -168,7 +186,10 @@ jobs:
           unzip -p Plotina-ElementX.apk "classes*.dex" | strings | grep -F "https://call.plotina.cc/room"
           unzip -p Plotina-ElementX.apk "classes*.dex" | strings | grep -qF "https://call.plotina.cc/room"
 
-          "${ANDROID_HOME:-$ANDROID_SDK_ROOT}/build-tools/37.0.0/apksigner" verify --print-certs Plotina-ElementX.apk | head -5
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          APKSIGNER=$(ls "$SDK"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          echo "apksigner: $APKSIGNER"
+          "$APKSIGNER" verify --print-certs Plotina-ElementX.apk | head -5
 
       - uses: actions/upload-artifact@v4
         with:
