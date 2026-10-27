@@ -171,7 +171,9 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
+          # Releases here share a tag namespace with the other clients, so the
+          # generated changelog would compare against an unrelated product.
+          generate_release_notes: false
           body: |
             Сборка Element Desktop для plotina.cc с шумоподавлением DeepFilterNet3.
 
