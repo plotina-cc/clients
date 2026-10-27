@@ -1,0 +1,140 @@
+name: build-fluffychat
+
+# Builds Plotina's FluffyChat APK: upstream pinned in fluffychat/UPSTREAM_TAG,
+# one patch from fluffychat/patches/, plus the DeepFilterNet3 plugin in
+# fluffychat/plotina_dfn/ (Kotlin + Rust).
+#
+# Tag a release as v*-plotina.* and the APK is attached to that release.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*-plotina.*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-fluffychat-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UPSTREAM_REPO: https://github.com/krille-chan/fluffychat
+  PLUGIN_DIR: fluffychat/plotina_dfn
+
+jobs:
+  apk:
+    name: Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin upstream and apply patches
+        working-directory: fluffychat
+        run: |
+          set -euo pipefail
+          TAG="$(cat UPSTREAM_TAG)"
+          echo "upstream: $UPSTREAM_REPO @ $TAG"
+          git clone --depth 1 --branch "$TAG" "$UPSTREAM_REPO" upstream
+          for patch in "$PWD"/patches/*.patch; do
+            echo "applying $(basename "$patch")"
+            git -C upstream apply --verbose "$patch"
+          done
+
+      - name: Read Flutter version
+        id: flutter_version
+        working-directory: fluffychat/upstream
+        run: |
+          set -euo pipefail
+          if [ ! -f .fvmrc ]; then
+            echo "::error::upstream ${{ env.UPSTREAM_REPO }} has no .fvmrc; set the Flutter version by hand"
+            exit 1
+          fi
+          VERSION="$(python3 -c 'import json; print(json.load(open(".fvmrc"))["flutter"])')"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "flutter $VERSION"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ steps.flutter_version.outputs.version }}
+          channel: stable
+          cache: true
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fluffychat/plotina_dfn/rust -> target
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+
+      - name: Fetch DeepFilterNet3 model
+        run: fluffychat/scripts/fetch-model.sh
+
+      - name: Build native denoiser
+        run: |
+          set -euo pipefail
+          NDK_DIR="$(ls -d "${ANDROID_HOME:?}"/ndk/* 2>/dev/null | sort -V | tail -1)"
+          echo "using NDK $NDK_DIR"
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          cargo ndk \
+            -t arm64-v8a -t armeabi-v7a -t x86_64 \
+            -o "$PLUGIN_DIR/android/src/main/jniLibs" \
+            build --release --manifest-path "$PLUGIN_DIR/rust/Cargo.toml"
+          find "$PLUGIN_DIR/android/src/main/jniLibs" -name '*.so' -printf '%p %k KiB\n'
+
+      - name: Configure release signing
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          cd fluffychat/upstream/android
+          if [ -z "${KEYSTORE_B64:-}" ]; then
+            echo "::warning title=Unsigned-ish build::ANDROID_KEYSTORE_BASE64 is not set. Gradle falls back to upstream's public dummy.keystore, so this APK cannot update an installed Plotina build."
+            exit 0
+          fi
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > plotina-release.jks
+          {
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyPassword=${KEY_PASSWORD:-$STORE_PASSWORD}"
+            echo "keyAlias=$KEY_ALIAS"
+            # Relative to android/app, where build.gradle.kts resolves it.
+            echo "storeFile=../plotina-release.jks"
+          } > key.properties
+
+      - name: Build APK
+        working-directory: fluffychat/upstream
+        run: |
+          set -euo pipefail
+          flutter pub get
+          flutter build apk --release \
+            --target-platform android-arm64,android-arm \
+            --build-number "$GITHUB_RUN_NUMBER"
+          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/Plotina-FluffyChat.apk"
+          ls -lh "$GITHUB_WORKSPACE/Plotina-FluffyChat.apk"
+          sha256sum "$GITHUB_WORKSPACE/Plotina-FluffyChat.apk"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Plotina-FluffyChat
+          path: Plotina-FluffyChat.apk
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" Plotina-FluffyChat.apk --clobber

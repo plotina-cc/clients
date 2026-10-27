@@ -1,0 +1,57 @@
+group = "cc.plotina.dfn"
+version = "0.1.0"
+
+// Same shape as the `flutter create --template=plugin` Android template, with
+// AGP/Kotlin pinned to the versions FluffyChat 2.11.3 declares in its
+// android/settings.gradle.kts so the two classpaths cannot disagree.
+buildscript {
+    ext.kotlin_version = "2.2.20"
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath "com.android.tools.build:gradle:8.11.1"
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: "com.android.library"
+apply plugin: "kotlin-android"
+
+android {
+    namespace = "cc.plotina.dfn"
+    compileSdk = 36
+
+    defaultConfig {
+        minSdk = 21
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+
+    kotlinOptions {
+        jvmTarget = "11"
+    }
+
+    sourceSets {
+        main.java.srcDirs += "src/main/kotlin"
+    }
+}
+
+dependencies {
+    // `FlutterWebRTCPlugin.audioProcessingController` and
+    // `AudioProcessingAdapter.ExternalAudioFrameProcessing` live here. Flutter
+    // registers every plugin as a Gradle subproject, so this resolves without a
+    // Maven coordinate; the AAR itself comes from pubspec (flutter_webrtc).
+    implementation project(":flutter_webrtc")
+}

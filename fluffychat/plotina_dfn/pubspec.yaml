@@ -1,0 +1,21 @@
+name: plotina_dfn
+description: "DeepFilterNet3 denoising for WebRTC capture audio (plotina.cc)."
+version: 0.1.0
+publish_to: none
+
+environment:
+  sdk: ">=3.6.0 <4.0.0"
+  flutter: ">=3.27.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: cc.plotina.dfn
+        pluginClass: PlotinaDfnPlugin
+  assets:
+    - assets/DeepFilterNet3_onnx.tar.gz

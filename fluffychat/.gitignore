@@ -1,0 +1,9 @@
+# Upstream checkout created by scripts/build-android.sh
+/upstream/
+
+# Fetched by scripts/fetch-model.sh (pinned by SHA-256)
+plotina_dfn/assets/*.tar.gz
+
+# Produced by cargo ndk
+plotina_dfn/rust/target/
+plotina_dfn/android/src/main/jniLibs/
