@@ -10,10 +10,11 @@ That is the whole product: the app stays upstream Element X (same UI, same login
 call runs on our origin, which is where our noise suppression lives and where we control the
 deployment. The bundled Element Call stays in the APK untouched, as the offline fallback.
 
-**Status:** the URL patch, the workflow and the APK checks are in place; the first CI build is the
-open question, not the design. `https://call.plotina.cc/room` is deployed separately (Caddy on the
-edge + the element-call artifact) and may not answer yet — that does not stop the APK from building,
-but an APK should not be handed out until it does.
+**Status:** green in CI. `v26.10.1-plotina-x.4` built `assembleFdroidDebug` in 12m24s and the
+workflow's own checks passed: the APK contains `assets/element-call/index.html` (the fallback) and the
+string `https://call.plotina.cc/room` in `classes*.dex`. `https://call.plotina.cc/room` answers `200`
+from Caddy. What is **not** verified is a call on a phone — see
+[what to check on a device](#what-to-check-on-a-device).
 
 Contents: [what is baked in](#what-is-baked-in) · [override](#overriding-it) ·
 [install and signing](#installing-and-signing) · [building](#building) ·
@@ -62,6 +63,11 @@ plainly: it is signed with the debug key and has the `.debug` application id, so
 alongside an existing Element X rather than over it — and a later release-signed build (same id, our
 key) has to be installed **from scratch**, after uninstalling. It is fine for testing the call path;
 it is not a build to hand to a community and then update in place.
+
+It is also **468 MB**: a debug build is not R8'd and carries all four ABIs, and matrix-rust-sdk's
+native libraries are most of it. The signed release build shrinks the app and strips three ABIs, so
+expect a fraction of that once the key exists. Until then, if a smaller install is needed, build with
+ABI splits (`-PplotinaSingleApk` off) and hand out the `arm64-v8a` APK only.
 
 Signing is one set of repository secrets away, no code change:
 
