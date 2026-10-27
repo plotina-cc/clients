@@ -1,0 +1,7 @@
+{
+    "appId": "cc.plotina.element",
+    "name": "plotina-element",
+    "productName": "Plotina Element",
+    "description": "Element for plotina.cc with DeepFilterNet3 noise suppression",
+    "protocols": ["cc.plotina.element"]
+}

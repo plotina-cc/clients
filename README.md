@@ -16,10 +16,13 @@ upstream tag plus the files in this repository.
   as call audio, level clamping, UI strings), `boot.js` (the wrapper on
   `navigator.mediaDevices.getUserMedia`), `cinny-ui.js` (settings block for Cinny
   Web) and the vendored DeepFilterNet3 bundle in `noise/vendor/`. Element Web,
-  Cinny Web and Cinny Desktop all ship this same code.
+  Element Desktop, Cinny Web and Cinny Desktop all ship this same code.
 - `element-web/` — overlay for Element Web: a `Dockerfile` that starts from the
   pinned upstream image and drops `noise/` into `/app/noise` plus one `<script>`
   tag. Tests in `element-web/tests/`.
+- `element-desktop/` — the Electron shell from `apps/desktop` of the same
+  element-web tag, with the pinned upstream webapp plus the `noise/` overlay
+  baked into `webapp.asar`. Details in `element-desktop/README.md`.
 - `cinny/` — everything Cinny in one place: the static patch for the web client
   on `cinny.plotina.cc` and the Tauri/NSIS packaging for the desktop build, both
   consuming `noise/`. Details in `cinny/README.md`.
@@ -37,6 +40,9 @@ The Cinny Web counterpart (settings block for `cinny.plotina.cc`) is
 
 - Element Web: the `FROM` line in `element-web/Dockerfile`, pinned by tag **and**
   digest.
+- Element Desktop: `element-desktop/UPSTREAM_TAG` (element-web tag, which now
+  contains `apps/desktop`) and the webapp tarball in
+  `element-desktop/webapp.lock.json`, pinned by SHA-256.
 - Cinny Desktop: `cinny/UPSTREAM_TAG`.
 - Denoiser assets: `cinny/noise.lock.json` and the SHA-256 pins in
   `element-web/Dockerfile` (wasm and model are vendored, never fetched at
@@ -52,6 +58,12 @@ element-web/tests/run.sh          # unit tests
 element-web/tests/integration.sh  # end-to-end with a fake microphone
 ```
 
+Element Desktop (Linux: AppImage + deb, Windows: NSIS):
+
+```
+element-desktop/scripts/build.sh
+```
+
 Cinny Desktop (Linux):
 
 ```
@@ -61,9 +73,12 @@ python3 apply-noise.py --dist <upstream>/cinny/dist --noise noise
 ```
 
 The full sequence, including the Windows cross-build and the NSIS step, is in
-`cinny/README.md`. CI does the same thing on GitHub runners: see
-`.github/workflows/build-cinny-desktop.yml`, which triggers on a `v*-plotina.*`
-tag and attaches the installers to the release.
+`cinny/README.md`. The Element Desktop build clones the pinned element-web tag,
+drops the pinned upstream webapp plus `noise/` into `webapp.asar` and lets
+electron-builder package it; `element-desktop/README.md` has the details. CI does
+the same thing on GitHub runners: `.github/workflows/build-cinny-desktop.yml` and
+`.github/workflows/build-element-desktop.yml` trigger on a `v*-plotina.*` tag and
+attach the installers to the release.
 
 ## Why the patch rather than a fork
 
