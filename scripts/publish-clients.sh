@@ -35,7 +35,7 @@ echo "$ASSETS" | while read -r asset stable; do
 done
 
 # rpm appears from -plotina.7 onwards
-if curl -sSL --fail --max-time 900 -o "$WORK/Plotina.rpm" "$BASE/Plotina_4.12.8_x86_64.rpm" 2>/dev/null; then
+if curl -sSL --fail --max-time 900 -o "$WORK/Plotina.rpm" "$BASE/Plotina-4.12.8-1.x86_64.rpm" 2>/dev/null; then
   printf '    %-32s %s\n' "Plotina.rpm" "$(du -h "$WORK/Plotina.rpm" | cut -f1)"
 else
   echo "    rpm в этом релизе нет, пропускаю"
