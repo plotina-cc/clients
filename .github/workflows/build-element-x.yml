@@ -112,14 +112,14 @@ jobs:
           fi
           yes | "$SDKMANAGER" --licenses > /dev/null || true
           # compileSdk/targetSdk 37 and build-tools 37.0.0 come from plugins/src/main/kotlin/Versions.kt
-          # at the pinned tag.
+          # at the pinned tag. The image carries "platforms;android-37.0" (the API 37 minor-version
+          # naming), the repository may not know a bare "platforms;android-37": that is not fatal,
+          # AGP downloads the SDK packages it resolves to itself once the licences are accepted.
           "$SDKMANAGER" --install "platforms;android-37" "build-tools;37.0.0" \
             || "$SDKMANAGER" --channel=3 --install "platforms;android-37" "build-tools;37.0.0" \
             || {
-              echo "::warning::sdkmanager could not install them: falling back to whatever the image already has"
+              echo "::warning::sdkmanager has no 'platforms;android-37'; leaving it to Gradle"
               "$SDKMANAGER" --list_installed || true
-              test -d "$SDK/platforms/android-37"
-              test -d "$SDK/build-tools/37.0.0"
             }
 
       - uses: gradle/actions/setup-gradle@v4
