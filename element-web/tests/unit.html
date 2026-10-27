@@ -63,10 +63,10 @@ test("clampLevel keeps values inside 0..100 as integers", () => {
 });
 
 test("clampLevel falls back to the default on garbage", () => {
-  eq(L().clampLevel(undefined), 60);
-  eq(L().clampLevel(NaN), 60);
-  eq(L().clampLevel("abc"), 60);
-  eq(L().clampLevel(null), 60);
+  eq(L().clampLevel(undefined), 70);
+  eq(L().clampLevel(NaN), 70);
+  eq(L().clampLevel("abc"), 70);
+  eq(L().clampLevel(null), 70);
 });
 
 test("rawAudioConstraints disables browser noise suppression only", () => {
@@ -95,7 +95,7 @@ test("strings follow the page language", () => {
 
 test("level storage key is versioned and explicit", () => {
   eq(L().LEVEL_KEY, "plotina.noise.level");
-  eq(L().DEFAULT_LEVEL, 60);
+  eq(L().DEFAULT_LEVEL, 70);
 });
 
 const failed = results.filter((r) => r.startsWith("FAIL"));

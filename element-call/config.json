@@ -1,0 +1,12 @@
+{
+  "default_server_config": {
+    "m.homeserver": {
+      "base_url": "https://plotina.cc",
+      "server_name": "plotina.cc"
+    }
+  },
+  "livekit": {
+    "livekit_service_url": "https://plotina.cc/livekit/jwt"
+  },
+  "matrix_rtc_mode": "compatibility"
+}
