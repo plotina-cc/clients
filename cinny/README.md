@@ -1,56 +1,57 @@
-# Cinny для plotina.cc
+# Cinny for plotina.cc
 
-Один каталог на клиент, потому что модификация одна и та же: и веб-версия, и
-десктоп получают общий код шумодава из `../noise/` (`logic.js`, `boot.js`,
-`cinny-ui.js`, `vendor/` с DeepFilterNet3). Различается только доставка — веб
-раздаётся статикой, десктоп вкомпилирует дистрибутив в бинарник Tauri.
+One directory per client, because the modification is the same for both
+surfaces: the web app and the desktop build consume the shared wrapper in
+`../noise/` (`logic.js`, `boot.js`, `cinny-ui.js`, `vendor/` with DeepFilterNet3).
+Only the delivery differs — the web client is served as static files, the desktop
+build compiles the dist into a Tauri binary.
 
-Форк исходников здесь не нужен: Cinny берётся на закреплённом теге, патчится
-**готовый веб-дист**, установщики собираются нашим конфигом.
+No source fork is needed: Cinny is taken at a pinned tag, the **built web dist**
+is patched before packaging, and the installers are built with our own config.
 
-## Что внутри
+## What is here
 
 ```
-config.json          дефолтный homeserver (plotina.cc), без featured-коммьюнити
-UPSTREAM_TAG         тег cinny-desktop, на котором собираем
-apply-noise.py       копирует noise/ в dist и вставляет теги в два документа
-tauri.plotina.json   оверрайд сборки: без beforeBuildCommand, updater выключен
-noise.lock.json      URL и sha256 двух бинарников модели (wasm и .tar.gz)
-scripts/build.sh     локальная сборка Linux (AppImage + deb)
-scripts/fetch-noise.py  докачивает модель в noise/, сверяя sha256
-windows/             свой NSIS-установщик: installer.nsi + build-installer.sh
+config.json          default homeserver (plotina.cc), no featured communities
+UPSTREAM_TAG         the cinny-desktop tag we build against
+apply-noise.py       copies noise/ into dist and inserts the tags into two documents
+tauri.plotina.json   build override: no beforeBuildCommand, updater disabled
+noise.lock.json      URL and sha256 of the two model binaries (wasm and .tar.gz)
+scripts/build.sh     local Linux build (AppImage + deb)
+scripts/fetch-noise.py  downloads the model into noise/, verifying sha256
+windows/             our NSIS installer: installer.nsi + build-installer.sh
 ```
 
 ## Cinny Web
 
-Статика на edge (`/srv/cinny`), сборки нет.
+Static files on the edge (`/srv/cinny`), no build step.
 
-1. Скопировать `../noise/` в `/srv/cinny/noise`, чтобы `/noise/logic.js`
-   резолвился в том же origin.
-2. Вставить теги в два документа:
-   - `index.html` — оболочка приложения, получает
+1. Copy `../noise/` to `/srv/cinny/noise` so `/noise/logic.js` resolves on the
+   same origin.
+2. Insert the tags into two documents:
+   - `index.html` — the app shell, gets
      `<script src="/noise/logic.js"></script><script src="/noise/cinny-ui.js" defer></script>`
-     (это рисует ползунок в Настройки → General);
-   - `public/element-call/index.html` — встроенная страница Element Call,
-     единственная, кто реально вызывает `getUserMedia`, получает
+     which renders the level slider in Settings → General;
+   - `public/element-call/index.html` — the embedded Element Call page, the only
+     document that actually calls `getUserMedia`, gets
      `<script src="/noise/logic.js"></script><script src="/noise/boot.js" defer></script>`.
-3. Кэширование на edge: `/noise/dfn/*` — 30 дней, `/noise/*.js` — `no-cache`,
-   чтобы фикс доезжал без жёсткой перезагрузки.
+3. Cache headers on the edge: `/noise/dfn/*` for 30 days, `/noise/*.js` as
+   `no-cache`, so a fix reaches browsers without a hard reload.
 
-Правки идемпотентные: перед вставкой проверяется маркер, рядом с каждым
-изменённым документом остаётся `.bak-plotina`.
+Edits are idempotent: the marker is checked before inserting, and each patched
+document keeps a `.bak-plotina` copy.
 
-**Почему два документа.** Cinny показывает звонок в iframe на
-`public/element-call/index.html`; у iframe свой `window`, поэтому обёртка
-`getUserMedia` в родительской странице звонок не увидит. Родителю нужен только UI
-настроек.
+**Why two documents.** Cinny renders calls in an iframe pointing at
+`public/element-call/index.html`; that iframe has its own `window`, so wrapping
+`getUserMedia` in the parent page would never see the call. The parent only needs
+the settings UI.
 
-Проверка: `https://cinny.plotina.cc/noise/logic.js` отдаёт 200; в Настройки →
-General сверху виден ползунок «Подавление шума» со значением 60
-(`localStorage: plotina.noise.level`); в звонке внутри iframe
-`window.__plotinaNoise.isSupported()` возвращает `true`, а
-`window.__plotinaNoiseStats` считает `callRequests`, `otherAudioRequests`,
-`processed`, `failed` — по нему видно, если апстрим сменил форму constraints.
+Verifying: `https://cinny.plotina.cc/noise/logic.js` returns 200; Settings →
+General shows the noise slider at the top with the default level 60
+(`localStorage: plotina.noise.level`); inside a call, in the iframe,
+`window.__plotinaNoise.isSupported()` is `true` and `window.__plotinaNoiseStats`
+counts `callRequests`, `otherAudioRequests`, `processed` and `failed` — that is
+how an upstream change in the constraint shape shows up.
 
 ## Cinny Desktop
 
@@ -69,28 +70,27 @@ python3 apply-noise.py --dist upstream/cinny/dist --noise noise
 npm run tauri -- build --config "$PWD/tauri.plotina.json"
 ```
 
-Артефакты: `upstream/src-tauri/target/release/bundle/{appimage,deb}/`.
-Windows — кросс-сборкой (`cargo-xwin`, `--no-bundle`) плюс `windows/installer.nsi`
-через `makensis`; подробности в комментариях внутри этих файлов. CI делает то же
-самое нативно на windows-latest.
+Artifacts land in `upstream/src-tauri/target/release/bundle/{appimage,deb}/`.
+Windows is cross-built (`cargo-xwin`, `--no-bundle`) and wrapped by
+`windows/installer.nsi` through `makensis`; the comments inside those files list
+the details. CI does the same natively on windows-latest.
 
-**Почему не «пусть грузит наш сайт».** Tauri умеет открывать внешний URL, но
-тогда удалённой странице нужен доступ к IPC — это класс уязвимости
-CVE-2024-35222. Поэтому веб-часть вкомпилирована, а обновления идут только с
-наших сборок.
+**Why not point the app at our website.** Tauri can open an external URL, but
+then the remote page needs IPC access — that is the CVE-2024-35222 class of
+vulnerability. The web part is compiled into the app instead, and updates only
+come from our own builds.
 
-## Обновления
+## Updates
 
-`plugins.updater.endpoints` пустой, `createUpdaterArtifacts: false`: билд не
-предлагает обновиться до апстрима. Когда заведём свой фид, здесь появятся наш
-minisign-pubkey и ссылка на `latest.json` в релизах.
+`plugins.updater.endpoints` is empty and `createUpdaterArtifacts: false`: the
+build never offers an upstream update. Once we run our own feed, the minisign
+pubkey and a `latest.json` link from our releases go here.
 
-Тег `v*-plotina.*` в этом репозитории запускает сборку Linux/Windows/macOS и
-создаёт релиз с артефактами.
+A `v*-plotina.*` tag in this repository builds Linux, Windows and macOS and
+creates a release with the artifacts attached.
 
-## Лицензия
+## Licence
 
-Cinny и cinny-desktop — AGPL-3.0. Мы распространяем модифицированные бинарники и
-отдаём веб-версию по сети, поэтому обязаны предоставить соответствующий исходник:
-этот публичный репозиторий и есть выполнение требования. Уведомления об авторских
-правах апстрима не удалять.
+Cinny and cinny-desktop are AGPL-3.0. We distribute modified binaries and serve
+the web build over the network, so we must offer the corresponding source: this
+public repository is that offer. Do not remove the upstream copyright notices.
