@@ -1,4 +1,4 @@
-# plotina-clients
+# plotina.cc clients
 
 Modifications we apply to third-party Matrix clients before shipping them to the
 plotina.cc community, so that voice calls get real noise suppression without the
