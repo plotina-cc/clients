@@ -160,21 +160,28 @@ jobs:
       - name: Assemble
         working-directory: upstream/element-x
         run: |
+          # Per-ABI splits, not one universal APK: a single release APK with four ABIs is 400 MB,
+          # while arm64 alone is what almost every phone needs. `-PplotinaSingleApk` exists in the
+          # patch and turns the splits off, but it is not used here on purpose.
           if [ "${{ steps.keystore.outputs.signed }}" = "true" ]; then
-            ./gradlew -PplotinaSingleApk assembleFdroidRelease --stacktrace --no-configuration-cache
+            ./gradlew assembleFdroidRelease --stacktrace --no-configuration-cache
             apk_dir=app/build/outputs/apk/fdroid/release
           else
-            ./gradlew -PplotinaSingleApk assembleFdroidDebug --stacktrace --no-configuration-cache
+            ./gradlew assembleFdroidDebug --stacktrace --no-configuration-cache
             apk_dir=app/build/outputs/apk/fdroid/debug
           fi
-          apk=$(find "$apk_dir" -name '*.apk' | head -1)
-          echo "APK: $apk"
-          cp "$apk" "$GITHUB_WORKSPACE/Plotina-ElementX.apk"
+          ls -lh "$apk_dir"
+          arm64=$(find "$apk_dir" -name '*arm64-v8a*.apk' | head -1)
+          armv7=$(find "$apk_dir" -name '*armeabi-v7a*.apk' | head -1)
+          [ -n "$arm64" ] || { echo "::error::no arm64-v8a APK in $apk_dir"; exit 1; }
+          cp "$arm64" "$GITHUB_WORKSPACE/Plotina-ElementX.apk"
+          if [ -n "$armv7" ]; then cp "$armv7" "$GITHUB_WORKSPACE/Plotina-ElementX-armv7.apk"; fi
+          ls -lh "$GITHUB_WORKSPACE"/Plotina-ElementX*.apk
 
       - name: Check the APK carries our call URL and the bundled fallback
         run: |
           cd "$GITHUB_WORKSPACE"
-          ls -lh Plotina-ElementX.apk
+          ls -lh Plotina-ElementX*.apk
 
           # The bundled Element Call stays in the APK: it is the offline fallback if our host is down.
           unzip -l Plotina-ElementX.apk | grep -E "assets/element-call/" | head -5
@@ -194,7 +201,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: Plotina-ElementX
-          path: Plotina-ElementX.apk
+          path: Plotina-ElementX*.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -202,8 +209,10 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: Plotina-ElementX.apk
-          generate_release_notes: true
+          files: Plotina-ElementX*.apk
+          # Tag namespace is shared with the other clients in this repository, so generated notes
+          # would paste an unrelated changelog.
+          generate_release_notes: false
           body: |
             Element X for Android built from element-x-android `${{ env.ELEMENT_X_TAG }}`, with calls
             opening on **https://call.plotina.cc/room** by default — no setting to change, no URL to
@@ -212,9 +221,12 @@ jobs:
 
             - The bundled Element Call stays in the APK as the offline fallback; developer settings
               ("Custom Element Call base URL") still override the default.
-            - **Debug APK**: no signing secrets are configured yet, so this is signed with the Android
-              debug key and has application id `io.element.android.x.debug`. It installs next to a
-              release build, but a later signed release has to be installed from scratch.
+            - Signed with the Plotina key, application id `io.element.android.x`: installs over our
+              previous builds. Without signing secrets the build falls back to a debug APK with the
+              `.debug` application id, which has to be installed from scratch.
+            - `Plotina-ElementX.apk` is the arm64-v8a build (every phone from the last several
+              years); `Plotina-ElementX-armv7.apk` covers older 32-bit devices. There is no universal
+              APK on purpose: one file for all four ABIs is 400 MB.
             - Source: this repository at this tag plus the upstream tag pinned in `element-x/pins.env`.
 
             Check that `https://call.plotina.cc/room` answers before handing this APK out.
