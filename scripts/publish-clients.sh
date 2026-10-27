@@ -1,44 +1,54 @@
 #!/usr/bin/env bash
-# Publish Cinny Desktop builds to the edge and refresh the join page.
+# Publish a GitHub release of this repository to the edge host.
 #
-#   scripts/publish-clients.sh /path/to/dir-with-builds <version>
+#   scripts/publish-clients.sh v4.12.8-plotina.7
 #
-# The directory must contain Plotina-<version>-setup.exe,
-# Plotina-x86_64.AppImage and Plotina_<version>_amd64.deb.
-# Stable names are what the join page links to; versioned copies stay next to
-# them so an already-printed URL keeps working after a bump.
+# The release is public, so no token is needed. Assets are installed under the
+# stable names the join page links to, and the versioned names stay next to them
+# so an already-printed URL keeps working after a bump. The join page itself
+# lives in the infrastructure repository and is not touched here.
 set -euo pipefail
 
-SRC="${1:?usage: publish-clients.sh <build-dir> <version>}"
-VERSION="${2:?usage: publish-clients.sh <build-dir> <version>}"
+TAG="${1:?usage: publish-clients.sh <tag>}"
+REPO=plotina-cc/clients
 EDGE=adman-edge
 DEST=/srv/dl
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BASE="https://github.com/$REPO/releases/download/$TAG"
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
 
-SETUP="Plotina-${VERSION}-setup.exe"
-APPIMAGE="Plotina-x86_64.AppImage"
-DEB="Plotina_${VERSION}_amd64.deb"
-for f in "$SETUP" "$APPIMAGE" "$DEB"; do
-  [[ -f "$SRC/$f" ]] || { echo "нет файла: $SRC/$f" >&2; exit 1; }
+# "<asset in the release> <stable name on the edge>"
+ASSETS="
+Plotina_4.12.8_x64-setup.exe Plotina-setup.exe
+Plotina_4.12.8_amd64.AppImage Plotina.AppImage
+Plotina_4.12.8_amd64.deb Plotina.deb
+Plotina_4.12.8_x64_en-US.msi Plotina.msi
+"
+
+echo "==> скачиваю $TAG"
+echo "$ASSETS" | while read -r asset stable; do
+  [[ -z "$asset" ]] && continue
+  curl -sSL --fail --max-time 900 -o "$WORK/$asset" "$BASE/$asset" \
+    || { echo "нет ассета: $asset" >&2; exit 1; }
+  cp "$WORK/$asset" "$WORK/$stable"
+  printf '    %-32s %s\n' "$stable" "$(du -h "$WORK/$stable" | cut -f1)"
 done
 
-tar -C "$SRC" -cf - "$SETUP" "$APPIMAGE" "$DEB" \
-  | ssh "$EDGE" 'mkdir -p /tmp/dlin && tar -xf - -C /tmp/dlin'
+# rpm appears from -plotina.7 onwards
+if curl -sSL --fail --max-time 900 -o "$WORK/Plotina.rpm" "$BASE/Plotina_4.12.8_x86_64.rpm" 2>/dev/null; then
+  printf '    %-32s %s\n' "Plotina.rpm" "$(du -h "$WORK/Plotina.rpm" | cut -f1)"
+else
+  echo "    rpm в этом релизе нет, пропускаю"
+fi
 
-ssh "$EDGE" "sudo install -d -m 755 $DEST && \
-  sudo install -m 644 /tmp/dlin/$SETUP $DEST/Plotina-setup.exe && \
-  sudo install -m 644 /tmp/dlin/$SETUP $DEST/$SETUP && \
-  sudo install -m 644 /tmp/dlin/$APPIMAGE $DEST/Plotina.AppImage && \
-  sudo install -m 644 /tmp/dlin/$APPIMAGE $DEST/Plotina-${VERSION}-x86_64.AppImage && \
-  sudo install -m 644 /tmp/dlin/$DEB $DEST/Plotina.deb && \
-  sudo install -m 644 /tmp/dlin/$DEB $DEST/$DEB && \
-  rm -rf /tmp/dlin && ls -lh $DEST"
+echo "==> кладу на $EDGE:$DEST"
+tar -C "$WORK" -cf - . | ssh "$EDGE" 'mkdir -p /tmp/dlin && tar -xf - -C /tmp/dlin &&
+  sudo install -d -m 755 /srv/dl &&
+  sudo install -m 644 /tmp/dlin/* /srv/dl/ &&
+  rm -rf /tmp/dlin && ls -lh /srv/dl'
 
-scp -q "$REPO/config/join/index.html" "$EDGE:/home/hermes/join-index.html"
-ssh "$EDGE" "sudo cp -a /srv/join/index.html /srv/join/index.html.bak-\$(date +%Y%m%d-%H%M%S) && \
-  sudo install -m 644 /home/hermes/join-index.html /srv/join/index.html && rm -f /home/hermes/join-index.html"
-
-for f in Plotina-setup.exe Plotina.AppImage Plotina.deb; do
+echo "==> проверка отдачи"
+for f in Plotina-setup.exe Plotina.AppImage Plotina.deb Plotina.rpm; do
   printf '%-22s ' "$f"
   curl -s -r 0-1023 -o /dev/null -w 'HTTP %{http_code} %{size_download}B %{content_type}\n' \
     --max-time 20 "https://plotina.cc/dl/$f"
