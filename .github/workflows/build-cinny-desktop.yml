@@ -44,7 +44,7 @@ jobs:
         if: matrix.name == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
       - name: Pin upstream
         working-directory: cinny-desktop
@@ -55,9 +55,14 @@ jobs:
           git clone --depth 1 --branch "$TAG" --recurse-submodules --shallow-submodules \
             "$UPSTREAM_REPO" upstream
 
-      - name: Fetch pinned model assets
+      - name: Assemble the noise bundle
         working-directory: cinny-desktop
-        run: python scripts/fetch-noise.py
+        run: |
+          mkdir -p noise/vendor
+          cp ../element-web/noise/logic.js ../element-web/noise/boot.js \
+             ../element-web/noise/cinny-ui.js noise/
+          cp -a ../element-web/noise/vendor/. noise/vendor/
+          python scripts/fetch-noise.py
 
       - name: Build Cinny web
         working-directory: cinny-desktop/upstream/cinny
