@@ -139,7 +139,9 @@ file of FluffyChat is modified**.
   lib ~8 MB, armv7 lib ~6 MB).
 - CPU: DFN3 is comfortably real time on a laptop core; on phones expect a few
   percent to low tens of percent of one core, and much worse on old armv7
-  devices. Measure before believing this.
+  devices. Measure before believing this. The hard budget is 10 ms per frame —
+  anything above that stutters the call, which is the first thing the CPU
+  measurement tells you.
 
 ## Maintenance cost
 
