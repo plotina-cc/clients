@@ -2,6 +2,10 @@
 # at our own Element Call (https://call.plotina.cc/room) by default, so a call opens there without
 # anyone typing a URL into developer settings.
 #
+# It is also the app behind https://plotina.cc/app: patch 0005 registers that URL as a verified
+# app link, because mobile.element.io's assetlinks.json lists Element's certificates and not the
+# Plotina key this build is signed with, so element.io invitation links cannot reach it.
+#
 # The native Rust/JNI denoiser path (element-x/native/plotina-dfn, patches 0001 and 0003) is kept in
 # this repository as a reserve but is deliberately NOT part of this build: nothing here compiles
 # Rust, installs the NDK, or publishes element-call-android to mavenLocal. The WebView call reaches
@@ -69,6 +73,8 @@ jobs:
           cd "$RUNNER_TEMP/element-x"
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0002-element-x-android-plotina-signing.patch"
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0004-element-x-android-plotina-call-url.patch"
+          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0005-element-x-android-plotina-app-link.patch"
+          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0006-element-x-android-plotina-account-provider.patch"
 
   build:
     needs: patches
@@ -134,6 +140,12 @@ jobs:
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0002-element-x-android-plotina-signing.patch"
           # 0004: the call WebView defaults to https://call.plotina.cc/room.
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0004-element-x-android-plotina-call-url.patch"
+          # 0005: https://plotina.cc/app is a verified app link of this APK (pathPrefix only, so the
+          # rest of the site stays in the browser).
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0005-element-x-android-plotina-app-link.patch"
+          # 0006: the default account provider is plotina.cc instead of matrix.org, so sign-in opens
+          # on our homeserver without anyone typing the address.
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0006-element-x-android-plotina-account-provider.patch"
 
       - name: Decode the signing key
         id: keystore
@@ -178,9 +190,10 @@ jobs:
           if [ -n "$armv7" ]; then cp "$armv7" "$GITHUB_WORKSPACE/Plotina-ElementX-armv7.apk"; fi
           ls -lh "$GITHUB_WORKSPACE"/Plotina-ElementX*.apk
 
-      - name: Check the APK carries our call URL and the bundled fallback
+      - name: Check the APK carries our call URL, the bundled fallback and the plotina.cc app link
         run: |
           cd "$GITHUB_WORKSPACE"
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           ls -lh Plotina-ElementX*.apk
 
           # The bundled Element Call stays in the APK: it is the offline fallback if our host is down.
@@ -193,10 +206,66 @@ jobs:
           unzip -p Plotina-ElementX.apk "classes*.dex" | strings | grep -F "https://call.plotina.cc/room"
           unzip -p Plotina-ElementX.apk "classes*.dex" | strings | grep -qF "https://call.plotina.cc/room"
 
-          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          # 0006 puts our homeserver in the login screen's default account provider. That string
+          # lives in the dex, so it is checked there: if the next pin bump drops 0006 the login
+          # screen silently falls back to matrix.org, which is exactly what this fails on.
+          unzip -p Plotina-ElementX.apk "classes*.dex" | strings | grep -F "plotina.cc" | sort -u | head -5
+          unzip -p Plotina-ElementX.apk "classes*.dex" | strings | grep -qF "plotina.cc"
+
           APKSIGNER=$(ls "$SDK"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
           echo "apksigner: $APKSIGNER"
           "$APKSIGNER" verify --print-certs Plotina-ElementX.apk | head -5
+
+          # --- the https://plotina.cc/app app link -------------------------------------------
+          # This APK is signed with the Plotina key, while mobile.element.io's assetlinks.json
+          # lists Element's own certificates: element.io invitation links can never resolve to it.
+          # The invitation page links to https://plotina.cc/app instead, and that only opens the
+          # app if the merged manifest carries our host as a *verified* filter whose only path
+          # claim is pathPrefix /app. A bare path="/" (or a filter without a path) would swallow
+          # the whole site, invitation page included, so that case has to fail here.
+
+          # aapt2 (then aapt) renders the compiled AndroidManifest.xml as a readable tree. Plain
+          # strings is the last resort: it can prove the host is in the string pool, not that the
+          # filter is shaped correctly, so the log says which method ran.
+          dump_manifest() {
+            local apk="$1" out="$2" aapt2 aapt
+            MODE=aapt2
+            aapt2=$(ls "$SDK"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1)
+            aapt=$(ls "$SDK"/build-tools/*/aapt 2>/dev/null | sort -V | tail -1)
+            if [ -n "$aapt2" ]; then
+              echo "   manifest check method: aapt2 dump xmltree ($aapt2)"
+              "$aapt2" dump xmltree --file AndroidManifest.xml "$apk" > "$out"
+            elif [ -n "$aapt" ]; then
+              MODE=aapt
+              echo "   manifest check method: aapt dump xmltree ($aapt)"
+              "$aapt" dump xmltree "$apk" AndroidManifest.xml > "$out"
+            else
+              MODE=strings
+              echo "::warning::no aapt/aapt2 in $SDK/build-tools: falling back to strings over the decompressed AndroidManifest.xml"
+              unzip -p "$apk" AndroidManifest.xml > "$out.bin"
+              { strings "$out.bin"; strings -e l "$out.bin"; } > "$out"
+            fi
+            # A dump that has no element lines is not a tree: treat it as a string scan.
+            if ! grep -qm1 'E: ' "$out"; then MODE=strings; fi
+          }
+
+          # One line on purpose: a heredoc cannot be indented inside a YAML block.
+          check_app_link() {
+            local apk="$1" out="$RUNNER_TEMP/manifest-$(basename "$apk").txt"
+            echo "   -- $apk"
+            dump_manifest "$apk" "$out"
+            echo "   plotina.cc in the manifest dump:"
+            grep -n -i "plotina\.cc" "$out" || echo "      (none)"
+            if [ "$MODE" = "strings" ]; then
+              grep -q "plotina\.cc" "$out"
+              grep -q -- "/app" "$out"
+              echo "   strings check: plotina.cc and /app are in the compiled manifest (structure NOT verified)"
+            else
+              awk -v apk="$apk" 'function close_block(){ if (inblock && block ~ /plotina\.cc/) { if (block ~ /autoVerify/ && block ~ /pathPrefix/ && block ~ /"\/app"/ && block !~ /:path\(/) { print "   OK: " apk " has a verified intent-filter for plotina.cc with pathPrefix /app at the filter level"; got=1 } else { print "   FAIL: intent-filter for plotina.cc is not autoVerify+pathPrefix /app:" block } } inblock=0; block="" } /E: intent-filter/ { close_block(); inblock=1; block=$0; next } inblock { if ($0 ~ /E: (activity|service|receiver|provider)/) { close_block(); next } block = block "\n" $0 } END { close_block(); if (!got) print "   FAIL: no intent-filter in the merged manifest claims plotina.cc"; exit (got ? 0 : 1) }' "$out"
+            fi
+          }
+
+          for apk in Plotina-ElementX*.apk; do check_app_link "$apk"; done
 
       - uses: actions/upload-artifact@v4
         with:
@@ -221,6 +290,11 @@ jobs:
 
             - The bundled Element Call stays in the APK as the offline fallback; developer settings
               ("Custom Element Call base URL") still override the default.
+            - **https://plotina.cc/app opens this app** on Android 12 and later, once the site's
+              `assetlinks.json` lists the Plotina signing certificate. Paths outside `/app` stay in
+              the browser.
+            - The sign-in screen is prefilled with **plotina.cc** as the homeserver; another
+              address can still be typed there.
             - Signed with the Plotina key, application id `io.element.android.x`: installs over our
               previous builds. Without signing secrets the build falls back to a debug APK with the
               `.debug` application id, which has to be installed from scratch.

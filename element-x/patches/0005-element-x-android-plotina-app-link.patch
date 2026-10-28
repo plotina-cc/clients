@@ -1,0 +1,28 @@
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 9193c6de..15e8dc2f 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -116,6 +116,23 @@
+                 <data android:host="mobile.element.io" />
+                 <data android:path="/element/" />
+             </intent-filter>
++            <!--
++              Plotina app links
++              Example: https://plotina.cc/app
++            -->
++            <intent-filter android:autoVerify="true">
++                <action android:name="android.intent.action.VIEW" />
++
++                <category android:name="android.intent.category.DEFAULT" />
++                <category android:name="android.intent.category.BROWSABLE" />
++
++                <data android:scheme="https" />
++                <!-- Matching asset file: https://plotina.cc/.well-known/assetlinks.json -->
++                <data android:host="plotina.cc" />
++                <!-- pathPrefix only: the rest of plotina.cc (the invitation page itself) has to stay
++                     in the browser, so this filter must not claim the whole host. -->
++                <data android:pathPrefix="/app" />
++            </intent-filter>
+             <!--
+               matrix: links
+             -->

@@ -1,0 +1,11 @@
+diff --git a/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/accountprovider/AccountProvider.kt b/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/accountprovider/AccountProvider.kt
+index c2d103b3..3e581b15 100644
+--- a/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/accountprovider/AccountProvider.kt
++++ b/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/accountprovider/AccountProvider.kt
+@@ -69,5 +69,5 @@ sealed interface AccountProvider {
+ }
+ 
+ val matrixOrgAccountProvider = AccountProvider.Generic(
+-    serverName = "matrix.org",
++    serverName = "plotina.cc",
+ )
