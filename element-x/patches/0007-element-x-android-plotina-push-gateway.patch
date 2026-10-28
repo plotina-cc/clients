@@ -1,0 +1,19 @@
+diff --git a/libraries/pushproviders/firebase/src/main/kotlin/io/element/android/libraries/pushproviders/firebase/FirebaseConfig.kt b/libraries/pushproviders/firebase/src/main/kotlin/io/element/android/libraries/pushproviders/firebase/FirebaseConfig.kt
+index 10891d51..91720b63 100644
+--- a/libraries/pushproviders/firebase/src/main/kotlin/io/element/android/libraries/pushproviders/firebase/FirebaseConfig.kt
++++ b/libraries/pushproviders/firebase/src/main/kotlin/io/element/android/libraries/pushproviders/firebase/FirebaseConfig.kt
+@@ -12,8 +12,13 @@ object FirebaseConfig {
+     /**
+      * It is the push gateway for firebase.
+      * Note: pusher_http_url should have path '/_matrix/push/v1/notify' -->
++     *
++     * Plotina: upstream points at matrix.org's gateway, which resolves FCM tokens against Element's
++     * own Firebase project and therefore rejects a token issued to ours. This build registers the
++     * pusher against our gateway instead, so Synapse dials push.plotina.cc and sygnal is the only
++     * holder of the Firebase service account.
+      */
+-    const val PUSHER_HTTP_URL: String = "https://matrix.org/_matrix/push/v1/notify"
++    const val PUSHER_HTTP_URL: String = "https://push.plotina.cc/_matrix/push/v1/notify"
+ 
+     const val INDEX = 0
+     const val NAME = "Firebase"

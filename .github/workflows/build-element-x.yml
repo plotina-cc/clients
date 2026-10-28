@@ -6,6 +6,19 @@
 # app link, because mobile.element.io's assetlinks.json lists Element's certificates and not the
 # Plotina key this build is signed with, so element.io invitation links cannot reach it.
 #
+# And it is the push build: the `gplay` flavour is the only one that carries the Firebase push
+# provider (`fdroid` has no Firebase at all), and patch 0007 points it at our gateway,
+# https://push.plotina.cc/_matrix/push/v1/notify, instead of matrix.org's. Note the flavour name:
+# there is no `play` flavour in element-x-android, it is `gplay`.
+#
+# Element X does not apply the com.google.gms.google-services Gradle plugin — upstream keeps that
+# alias commented out in app/build.gradle.kts and hand-maintains the Firebase values in
+# libraries/pushproviders/firebase/src/*/res/values/firebase.xml for Element's own project. This
+# workflow therefore decodes the GOOGLE_SERVICES_JSON secret, drops it at app/google-services.json
+# and lets element-x/scripts/firebase-resources.py write our project's values (plus the resource
+# keep list that AGP 9.3's default resource shrinking needs) into app/src/gplay/res. That overlay
+# outranks the library module, so the APK talks to the plotina-push project.
+#
 # The native Rust/JNI denoiser path (element-x/native/plotina-dfn, patches 0001 and 0003) is kept in
 # this repository as a reserve but is deliberately NOT part of this build: nothing here compiles
 # Rust, installs the NDK, or publishes element-call-android to mavenLocal. The WebView call reaches
@@ -20,6 +33,13 @@
 #   ANDROID_KEYSTORE_PASSWORD store password
 #   ANDROID_KEY_ALIAS         key alias (plotina)
 #   ANDROID_KEY_PASSWORD      key password
+#
+# One secret is not optional: GOOGLE_SERVICES_JSON, the base64 google-services.json of the
+# plotina-push Firebase project (client io.element.android.x). Without it the `gplay` flavour would
+# build an APK that installs, launches and never receives a notification, so the workflow fails
+# instead. Push also needs the server side: Synapse records our gateway URL as the pusher, and
+# sygnal on push.plotina.cc holds the Firebase service account for app_id im.vector.app.android
+# (the value BuildConfig.PUSHER_APP_ID carries into the pusher registration).
 name: Build Element X (Android, Plotina)
 
 on:
@@ -75,6 +95,7 @@ jobs:
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0004-element-x-android-plotina-call-url.patch"
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0005-element-x-android-plotina-app-link.patch"
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0006-element-x-android-plotina-account-provider.patch"
+          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0007-element-x-android-plotina-push-gateway.patch"
 
   build:
     needs: patches
@@ -146,6 +167,39 @@ jobs:
           # 0006: the default account provider is plotina.cc instead of matrix.org, so sign-in opens
           # on our homeserver without anyone typing the address.
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0006-element-x-android-plotina-account-provider.patch"
+          # 0007: the Firebase pusher registers against https://push.plotina.cc instead of
+          # matrix.org's gateway, which would reject a token from our Firebase project.
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0007-element-x-android-plotina-push-gateway.patch"
+
+      - name: Write the Firebase project into the gplay flavour
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          # FCM is the point of the gplay build, so a missing secret is a failure, not a warning: an
+          # APK without a Firebase project installs, launches and silently never receives anything.
+          if [ -z "$GOOGLE_SERVICES_JSON" ]; then
+            echo "::error::GOOGLE_SERVICES_JSON is not set: the gplay flavour would ship without a Firebase project"
+            exit 1
+          fi
+          # The secret is base64(google-services.json); accept a raw JSON payload as well so a
+          # hand-run does not need the extra encoding step. Neither branch may print the value.
+          if printf '%s' "$GOOGLE_SERVICES_JSON" | tr -d '\r\n' | base64 -d \
+               > upstream/element-x/app/google-services.json 2>/dev/null \
+             && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' upstream/element-x/app/google-services.json 2>/dev/null; then
+            echo "google-services.json decoded from base64"
+          else
+            printf '%s' "$GOOGLE_SERVICES_JSON" > upstream/element-x/app/google-services.json
+            python3 -c 'import json,sys; json.load(open(sys.argv[1]))' upstream/element-x/app/google-services.json
+            echo "google-services.json taken as raw JSON"
+          fi
+
+          # No Google Services Gradle plugin here (see the header): the values become the string
+          # resources Firebase actually reads, in an app-module overlay for the gplay flavour only,
+          # plus the keep.xml that stops AGP 9.3's resource shrinker from deleting them.
+          python3 "$GITHUB_WORKSPACE/element-x/scripts/firebase-resources.py" \
+            upstream/element-x/app/google-services.json \
+            upstream/element-x/app/src/gplay/res
+          find upstream/element-x/app/src/gplay/res -type f -print
 
       - name: Decode the signing key
         id: keystore
@@ -175,12 +229,17 @@ jobs:
           # Per-ABI splits, not one universal APK: a single release APK with four ABIs is 400 MB,
           # while arm64 alone is what almost every phone needs. `-PplotinaSingleApk` exists in the
           # patch and turns the splits off, but it is not used here on purpose.
+          #
+          # `gplay`, not `play`: element-x-android's store flavours are `gplay` and `fdroid`, and
+          # only `gplay` links the Firebase push provider (see the dependencies block of
+          # app/build.gradle.kts: `gplayImplementation(projects.libraries.pushproviders.firebase)`).
+          # Asking Gradle for `assemblePlayRelease` fails with "Task not found".
           if [ "${{ steps.keystore.outputs.signed }}" = "true" ]; then
-            ./gradlew assembleFdroidRelease --stacktrace --no-configuration-cache
-            apk_dir=app/build/outputs/apk/fdroid/release
+            ./gradlew assembleGplayRelease --stacktrace --no-configuration-cache
+            apk_dir=app/build/outputs/apk/gplay/release
           else
-            ./gradlew assembleFdroidDebug --stacktrace --no-configuration-cache
-            apk_dir=app/build/outputs/apk/fdroid/debug
+            ./gradlew assembleGplayDebug --stacktrace --no-configuration-cache
+            apk_dir=app/build/outputs/apk/gplay/debug
           fi
           ls -lh "$apk_dir"
           arm64=$(find "$apk_dir" -name '*arm64-v8a*.apk' | head -1)
@@ -267,6 +326,69 @@ jobs:
 
           for apk in Plotina-ElementX*.apk; do check_app_link "$apk"; done
 
+      - name: Check the APK carries Firebase and our push project
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          AAPT2=$(ls "$SDK"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1)
+          echo "aapt2: ${AAPT2:-none}"
+          failed=0
+          for apk in Plotina-ElementX*.apk; do
+            echo "-- $apk"
+
+            # 1. The library itself. Two notes on the command: `unzip -l | grep -c
+            #    'com/google/firebase'` lists *zip entries*, and Firebase's classes are inside
+            #    classes*.dex rather than separate entries, so that count is 0 even in a correct
+            #    APK. It is printed for the record; the gate is the same measurement against the
+            #    places the classes actually live — the dex string pool and the merged manifest
+            #    (FirebaseInitProvider / FirebaseMessagingService are manifest components).
+            echo "   zip entries matching com/google/firebase: $(unzip -l "$apk" | grep -c 'com/google/firebase' || true)"
+            dex_hits=$(unzip -p "$apk" "classes*.dex" | strings | grep -c 'com/google/firebase' || true)
+            manifest_hits=$({ unzip -p "$apk" AndroidManifest.xml | strings -a; unzip -p "$apk" AndroidManifest.xml | strings -a -e l; } | grep -c 'com\.google\.firebase' || true)
+            echo "   com/google/firebase strings: $dex_hits in classes*.dex, $manifest_hits in the manifest"
+            if [ "${dex_hits:-0}" -eq 0 ] && [ "${manifest_hits:-0}" -eq 0 ]; then
+              echo "::error file=$apk::$apk contains no Firebase: the gplay flavour's push provider is missing"
+              failed=1
+              continue
+            fi
+
+            # 2. The Firebase project. project_id is a string resource, not a dex constant, so it
+            #    lives in resources.arsc — this is the check that GOOGLE_SERVICES_JSON reached the
+            #    build and that it is our project rather than Element's vector-alpha.
+            if [ -n "$AAPT2" ]; then
+              line=$("$AAPT2" dump resources "$apk" | grep 'string/project_id' | head -1 || true)
+              echo "   aapt2 dump resources: ${line:-<no string/project_id>}"
+              case "$line" in
+                *plotina-push*) echo "   OK: project_id is plotina-push" ;;
+                *) echo "::error file=$apk::$apk does not carry the plotina-push project id: the Firebase overlay did not reach the build"; failed=1 ;;
+              esac
+              # Same question for the app id: without it FirebaseApp cannot initialise at all.
+              appid=$("$AAPT2" dump resources "$apk" | grep 'string/google_app_id' | head -1 || true)
+              echo "   aapt2 dump resources: ${appid:-<no string/google_app_id>}"
+              case "$appid" in
+                *android:*) echo "   OK: google_app_id is present" ;;
+                *) echo "::error file=$apk::$apk has no google_app_id resource"; failed=1 ;;
+              esac
+            else
+              echo "   no aapt2 in $SDK/build-tools: scanning resources.arsc instead (value only, no resource name)"
+              { unzip -p "$apk" resources.arsc | strings -a; unzip -p "$apk" resources.arsc | strings -a -e l; } \
+                | grep -F 'plotina-push' | head -1 || true
+              if unzip -p "$apk" resources.arsc | strings -a | grep -qF 'plotina-push'; then
+                echo "   OK: plotina-push is in resources.arsc"
+              else
+                echo "::error file=$apk::$apk does not carry the plotina-push project id"
+                failed=1
+              fi
+            fi
+
+            # 3. And the gateway in the code. The generic `plotina.cc` check above also matches the
+            #    account provider, so this one is specific about the push URL of patch 0007.
+            unzip -p "$apk" "classes*.dex" | strings | grep -F "https://push.plotina.cc/_matrix/push/v1/notify" | head -1 || true
+            unzip -p "$apk" "classes*.dex" | strings | grep -qF "https://push.plotina.cc/_matrix/push/v1/notify" \
+              || { echo "::error file=$apk::$apk does not call https://push.plotina.cc/_matrix/push/v1/notify: patch 0007 is missing"; failed=1; }
+          done
+          exit "$failed"
+
       - uses: actions/upload-artifact@v4
         with:
           name: Plotina-ElementX
@@ -295,6 +417,9 @@ jobs:
               the browser.
             - The sign-in screen is prefilled with **plotina.cc** as the homeserver; another
               address can still be typed there.
+            - **Push notifications come through FCM**, registered against our own push gateway at
+              `https://push.plotina.cc` instead of Element's. The phone needs Google Play Services
+              for that; where they are missing, the app falls back to UnifiedPush (ntfy).
             - Signed with the Plotina key, application id `io.element.android.x`: installs over our
               previous builds. Without signing secrets the build falls back to a debug APK with the
               `.debug` application id, which has to be installed from scratch.

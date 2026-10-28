@@ -10,6 +10,10 @@ That is the whole product: the app stays upstream Element X (same UI, same login
 call runs on our origin, which is where our noise suppression lives and where we control the
 deployment. The bundled Element Call stays in the APK untouched, as the offline fallback.
 
+Two more things are baked in, both one-liners or one secret: **push notifications** go through our own
+gateway (`https://push.plotina.cc`) from the `gplay` flavour, which is the only upstream flavour that
+carries the Firebase provider at all, and the sign-in screen is prefilled with `plotina.cc`.
+
 **Status:** green in CI. `v26.10.1-plotina-x.4` built `assembleFdroidDebug` in 12m24s and the
 workflow's own checks passed: the APK contains `assets/element-call/index.html` (the fallback) and the
 string `https://call.plotina.cc/room` in `classes*.dex`. `https://call.plotina.cc/room` answers `200`
@@ -30,6 +34,17 @@ Contents: [what is baked in](#what-is-baked-in) · [override](#overriding-it) ·
 | Where | `features/call/impl/.../utils/DefaultCallWidgetProvider.kt`, `PLOTINA_CALL_WIDGET_BASE_URL` (patch `0004`, line 27 of the patched file) |
 | Used at | the same file, `val baseUrl = customBaseUrl ?: PLOTINA_CALL_WIDGET_BASE_URL` (line 52) |
 | Upstream default it replaces | `https://appassets.androidplatform.net/element-call/index.html` (still in the file, still in the APK) |
+
+Push:
+
+| | |
+| :-- | :-- |
+| Push gateway | `https://push.plotina.cc/_matrix/push/v1/notify` |
+| Where | `libraries/pushproviders/firebase/.../FirebaseConfig.kt`, `PUSHER_HTTP_URL` (patch `0007`) |
+| Upstream default it replaces | `https://matrix.org/_matrix/push/v1/notify` — Element's gateway, which resolves an FCM token against Element's own Firebase project and rejects a token issued to ours |
+| Firebase project | `plotina-push`, from the `GOOGLE_SERVICES_JSON` secret, written into `app/src/gplay/res/values/firebase.xml` at build time |
+| Flavour | `gplay`; `fdroid` has no Firebase dependency at all (`gplayImplementation(...)` in `app/build.gradle.kts`) |
+| Pusher `app_id` | `im.vector.app.android` (upstream default, `BuildConfig.PUSHER_APP_ID`); sygnal keys its Firebase credentials on it |
 
 Element X builds the final URL itself: `getWidget()` takes the base URL, asks the Rust SDK to append
 the widget query (`widgetId`, `roomId`, `parentUrl`, `userId`, …) and loads the result in the WebView.
@@ -55,20 +70,18 @@ The workflow builds what the secrets allow:
 
 | Secrets present | Variant | Application id | Signed with |
 | :-- | :-- | :-- | :-- |
-| none | `assembleFdroidDebug` | `io.element.android.x.debug` | the Android debug key |
-| `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` | `assembleFdroidRelease` | `io.element.android.x` | the plotina key |
+| none | `assembleGplayDebug` | `io.element.android.x.debug` | the Android debug key |
+| `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` | `assembleGplayRelease` | `io.element.android.x` | the plotina key |
 
-**No secrets are configured yet, so today's APK is a debug build.** Consequences worth stating
-plainly: it is signed with the debug key and has the `.debug` application id, so it installs
-alongside an existing Element X rather than over it — and a later release-signed build (same id, our
-key) has to be installed **from scratch**, after uninstalling. It is fine for testing the call path;
-it is not a build to hand to a community and then update in place.
+The four signing secrets are configured, so what is published is a release build signed with the
+Plotina key. Without them the workflow still builds, but a debug APK carries the `.debug` application
+id and the debug key: it installs alongside a release build instead of over it, and the next release
+build has to be installed from scratch. `GOOGLE_SERVICES_JSON` is deliberately not in that table —
+it is not optional, and the build fails without it.
 
-It is also **468 MB**: a debug build is neither R8'd nor stripped, and it carries all four ABIs —
-matrix-rust-sdk's native libraries are most of it. A release build is R8'd and its native libraries
-are stripped of debug symbols, so expect a fraction of that once the key exists; to drop the other
-ABIs as well, build with ABI splits (`-PplotinaSingleApk` off) and hand out the `arm64-v8a` APK
-only.
+Sizes are the per-ABI splits of a release build: the arm64-v8a APK is ~136 MB and the armeabi-v7a one
+~99 MB (measured on `v26.10.1-plotina-x.7`; the `gplay` variant adds a few MB of Firebase and Play
+Services classes). A universal APK would be ~400 MB, which is why the workflow ships splits.
 
 Signing is one set of repository secrets away, no code change:
 
@@ -90,13 +103,19 @@ CI only (`.github/workflows/build-element-x.yml`); nothing is built on golova.
 - **Tags** `v*-plotina-x.*` (e.g. `v26.10.1-plotina-x.1`) and **workflow_dispatch** build. Tags also
   publish a GitHub release.
 - Artifact and release asset always have the same name: **`Plotina-ElementX.apk`**.
-- Jobs: `patches` (clone the pinned tag, `git apply --check` both patches — two minutes, catches
+- Jobs: `patches` (clone the pinned tag, `git apply --check` every patch — two minutes, catches
   upstream drift before the expensive job) then `build` (JDK 21, SDK 37 / build-tools 37.0.0,
-  `assembleFdroidDebug`, publish).
+  `assembleGplayRelease`, publish).
+- Before Gradle runs, `GOOGLE_SERVICES_JSON` is decoded to `app/google-services.json` and
+  `element-x/scripts/firebase-resources.py` writes `app/src/gplay/res/{values/firebase.xml,
+  raw/keep.xml}` from it. No Google Services Gradle plugin — see [push](#what-is-baked-in): upstream
+  does not use it either, and its Firebase values are hand-maintained resources.
 - No Rust, no cargo-ndk, no NDK, no `publishToMavenLocal`: the native path below is not in this
   build's dependency graph at all.
 - The build fails rather than shipping a wrong APK if `assets/element-call/index.html` is missing
-  (the fallback must stay) or if `https://call.plotina.cc/room` is not in `classes*.dex`.
+  (the fallback must stay), if `https://call.plotina.cc/room` is not in `classes*.dex`, if the APK
+  has no `com/google/firebase` entries, if `project_id` is not `plotina-push`, or if
+  `https://push.plotina.cc/_matrix/push/v1/notify` is not in the dex.
 - Pull requests touching `element-x/**` run the patch check only.
 
 Locally, by hand:
@@ -105,12 +124,20 @@ Locally, by hand:
 git clone --depth 1 -b v26.10.1 https://github.com/element-hq/element-x-android /tmp/ex
 cd /tmp/ex
 git apply /path/to/clients/element-x/patches/0002-element-x-android-plotina-signing.patch \
-          /path/to/clients/element-x/patches/0004-element-x-android-plotina-call-url.patch
-./gradlew -PplotinaSingleApk assembleFdroidDebug
+          /path/to/clients/element-x/patches/0004-element-x-android-plotina-call-url.patch \
+          /path/to/clients/element-x/patches/0005-element-x-android-plotina-app-link.patch \
+          /path/to/clients/element-x/patches/0006-element-x-android-plotina-account-provider.patch \
+          /path/to/clients/element-x/patches/0007-element-x-android-plotina-push-gateway.patch
+base64 -d /path/to/google-services.json.b64 > app/google-services.json
+python3 /path/to/clients/element-x/scripts/firebase-resources.py \
+        app/google-services.json app/src/gplay/res
+./gradlew -PplotinaSingleApk assembleGplayDebug
 ```
 
 `0002` is only needed for a signed release build; `-PplotinaSingleApk` is what turns the four ABI
-splits into one APK, and is not required for a debug build either.
+splits into one APK, and is not required for a debug build either. The Firebase step is what makes
+the `gplay` build able to talk to our project: skip it and the APK builds, installs, and never gets
+a token.
 
 ## The native path, kept as a reserve
 
