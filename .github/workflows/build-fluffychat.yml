@@ -24,6 +24,7 @@ env:
   UPSTREAM_REPO: https://github.com/krille-chan/fluffychat
   PLUGIN_DIR: fluffychat/plotina_dfn
   APK_NAME: Plotina-FluffyChat.apk
+  APK_NAME_ARMV7: Plotina-FluffyChat-armv7.apk
 
 jobs:
   apk:
@@ -170,32 +171,34 @@ jobs:
           VARIANT="${{ steps.signing.outputs.variant }}"
           echo "building the $VARIANT variant"
           flutter pub get
-          # No --target-platform: Flutter's Gradle plugin forces the ABI filter
-          # to its default {armeabi-v7a, arm64-v8a, x86_64}, and dependencies
-          # (webrtc-sdk, this plugin) do ship x86_64 libraries. Leaving x86_64
-          # out of the Flutter build would package those libraries without a
-          # libflutter.so and produce an APK that installs on an x86_64 emulator
-          # and then crashes.
-          flutter build apk "--$VARIANT" \
+          # Per-ABI splits: the universal APK carries four sets of native
+          # libraries and is roughly twice the size of the arm64 one, which is
+          # what every phone from the last several years needs. x86_64 is left
+          # to emulators and is not published.
+          flutter build apk --split-per-abi "--$VARIANT" \
             --build-number "$GITHUB_RUN_NUMBER"
-          cp "build/app/outputs/flutter-apk/app-$VARIANT.apk" "$GITHUB_WORKSPACE/$APK_NAME"
-          ls -lh "$GITHUB_WORKSPACE/$APK_NAME"
-          sha256sum "$GITHUB_WORKSPACE/$APK_NAME"
+          arm64="build/app/outputs/flutter-apk/app-arm64-v8a-$VARIANT.apk"
+          armv7="build/app/outputs/flutter-apk/app-armeabi-v7a-$VARIANT.apk"
+          [ -f "$arm64" ] || { echo "::error::no arm64-v8a APK"; ls build/app/outputs/flutter-apk; exit 1; }
+          [ -f "$armv7" ] || { echo "::error::no armeabi-v7a APK"; ls build/app/outputs/flutter-apk; exit 1; }
+          cp "$arm64" "$GITHUB_WORKSPACE/$APK_NAME"
+          cp "$armv7" "$GITHUB_WORKSPACE/$APK_NAME_ARMV7"
+          ls -lh "$GITHUB_WORKSPACE/$APK_NAME" "$GITHUB_WORKSPACE/$APK_NAME_ARMV7"
+          sha256sum "$GITHUB_WORKSPACE/$APK_NAME" "$GITHUB_WORKSPACE/$APK_NAME_ARMV7"
 
       # A missing libplotina_dfn.so or model asset does not fail the build on its
       # own: the plugin just stays silent. Fail here instead.
       - name: Verify APK contents
         run: |
           set -euo pipefail
-          python3 - "$APK_NAME" <<'PY'
+          python3 - "$APK_NAME" arm64-v8a <<'PY'
           import sys
           import zipfile
 
           apk = sys.argv[1]
+          abi = sys.argv[2]
           wanted = [
-              "lib/arm64-v8a/libplotina_dfn.so",
-              "lib/armeabi-v7a/libplotina_dfn.so",
-              "lib/x86_64/libplotina_dfn.so",
+              f"lib/{abi}/libplotina_dfn.so",
               "assets/flutter_assets/packages/plotina_dfn/assets/DeepFilterNet3_onnx.tar.gz",
           ]
           with zipfile.ZipFile(apk) as archive:
@@ -215,12 +218,30 @@ jobs:
                   sys.exit(1)
               print(f"{name}: {sizes[name]} bytes")
           PY
+          python3 - "$APK_NAME_ARMV7" armeabi-v7a <<'PY'
+          import sys
+          import zipfile
+
+          apk = sys.argv[1]
+          abi = sys.argv[2]
+          wanted = [
+              f"lib/{abi}/libplotina_dfn.so",
+              "assets/flutter_assets/packages/plotina_dfn/assets/DeepFilterNet3_onnx.tar.gz",
+          ]
+          with zipfile.ZipFile(apk) as archive:
+              names = set(archive.namelist())
+          missing = [name for name in wanted if name not in names]
+          if missing:
+              print("missing from the APK:", *missing, sep="\n  ")
+              sys.exit(1)
+          print("armv7 split: ok")
+          PY
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Plotina-FluffyChat.apk
-          path: Plotina-FluffyChat.apk
+          name: Plotina-FluffyChat
+          path: Plotina-FluffyChat*.apk
           if-no-files-found: error
 
       - name: Attach to release
@@ -240,4 +261,4 @@ jobs:
           EOF
           gh release view "$TAG" > /dev/null 2>&1 ||
             gh release create "$TAG" --title "FluffyChat $TAG" --notes-file "$BODY"
-          gh release upload "$TAG" "$APK_NAME" --clobber
+          gh release upload "$TAG" "$APK_NAME" "$APK_NAME_ARMV7" --clobber
