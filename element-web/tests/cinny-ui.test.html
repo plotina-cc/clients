@@ -82,6 +82,26 @@ test("on a narrow screen the label wraps and the slider stays usable", () => {
   scroller.style.width = "";
 });
 
+test("changing the slider while a call runs retunes it", () => {
+  const calls = [];
+  window.__plotinaNoise = { setLevel: (v) => calls.push(v) };
+  const block = inject();
+  const range = block.querySelector("input[type=range]");
+  range.value = "40";
+  range.dispatchEvent(new Event("input"));
+  eq(calls, [40], "running processor should get the new level");
+  delete window.__plotinaNoise;
+});
+
+test("a missing wrapper does not break the slider", () => {
+  delete window.__plotinaNoise;
+  const block = inject();
+  const range = block.querySelector("input[type=range]");
+  range.value = "50";
+  range.dispatchEvent(new Event("input"));
+  eq(localStorage.getItem("plotina.noise.level"), "50", "level still stored");
+});
+
 test("injection is idempotent", () => {
   inject(); inject();
   eq(document.querySelectorAll("#plotina-noise-cinny").length, 1, "only one block");

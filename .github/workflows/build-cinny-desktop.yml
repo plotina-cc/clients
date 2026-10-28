@@ -4,7 +4,8 @@ on:
   workflow_dispatch:
   push:
     tags: ["v*-plotina-cinny.*"]
-    paths: ["cinny/**", ".github/workflows/build-cinny-desktop.yml"]
+    # noise/ is baked into the bundle, so a change there must rebuild too.
+    paths: ["cinny/**", "noise/**", ".github/workflows/build-cinny-desktop.yml"]
 
 permissions:
   contents: write

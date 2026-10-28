@@ -104,6 +104,15 @@
     range.addEventListener("input", function () {
       var next = writeLevel(range.value);
       value.textContent = String(next);
+      // Write to storage alone only affects the next getUserMedia. boot.js keeps
+      // the running processors and can retune them, so hand the value over and
+      // let a call in progress change without redialling.
+      try {
+        var api = global.__plotinaNoise;
+        if (api && typeof api.setLevel === "function") api.setLevel(next);
+      } catch (e) {
+        /* no wrapper on this page */
+      }
     });
 
     var hint = document.createElement("div");
