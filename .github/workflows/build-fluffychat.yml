@@ -230,6 +230,14 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          BODY="$RUNNER_TEMP/release-notes.md"
+          cat > "$BODY" <<'EOF'
+          FluffyChat for Android with DeepFilterNet3 noise suppression built in.
+
+          - The sign-in screen already points at plotina.cc, so there is no server to type.
+          - Signed with the Plotina key: installs over our previous builds.
+          - Source: this repository at this tag (AGPL-3.0).
+          EOF
           gh release view "$TAG" > /dev/null 2>&1 ||
-            gh release create "$TAG" --title "$TAG" --generate-notes
+            gh release create "$TAG" --title "FluffyChat $TAG" --notes-file "$BODY"
           gh release upload "$TAG" "$APK_NAME" --clobber
