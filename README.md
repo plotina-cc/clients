@@ -30,7 +30,6 @@ upstream tag plus the files in this repository.
   rebuilds, runs both test suites and restores the Dockerfile if anything fails.
 - `scripts/publish-clients.sh` — copies built files to the edge host under stable
   and versioned names and refreshes the join page.
-- `scripts/pack-sources.sh` — packs this delta into the source tarball linked from
   that page.
 
 The Cinny Web counterpart (settings block for `cinny.plotina.cc`) is
