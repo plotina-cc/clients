@@ -97,3 +97,10 @@ and pays for the $99/year account.
 Cinny and cinny-desktop are AGPL-3.0. We distribute modified binaries and serve
 the web build over the network, so we must offer the corresponding source: this
 public repository is that offer. Do not remove the upstream copyright notices.
+
+## Build inputs
+
+The desktop bundle embeds the shared `noise/` layer at build time, so the
+default suppression level and the settings block come from whatever `noise/`
+held when the tag was cut. The web build is served from the same files, which
+is why the two must be rebuilt together after a change there.
