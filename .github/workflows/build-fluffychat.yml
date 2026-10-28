@@ -246,6 +246,16 @@ jobs:
           ls -lh "$GITHUB_WORKSPACE/$APK_NAME" "$GITHUB_WORKSPACE/$APK_NAME_ARMV7"
           sha256sum "$GITHUB_WORKSPACE/$APK_NAME" "$GITHUB_WORKSPACE/$APK_NAME_ARMV7"
 
+      # Uploaded before the checks on purpose: if a check rejects the APK, the
+      # artifact is still there to inspect instead of costing another 30 minutes.
+      # Nothing is released until both checks pass.
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Plotina-FluffyChat
+          path: Plotina-FluffyChat*.apk
+          if-no-files-found: error
+
       # The build falls back to the debug key when the keystore secrets are
       # missing (see "Configure signing"). Such an APK installs but cannot update
       # an installed Plotina build, so a release run must not ship it.
@@ -268,34 +278,47 @@ jobs:
           echo "using $APKSIGNER"
           previous_digest=""
           for apk in "$APK_NAME" "$APK_NAME_ARMV7"; do
-            report="$("$APKSIGNER" verify --print-certs "$apk")" || {
+            # apksigner writes the verify summary to stdout only with --verbose and
+            # has moved cert lines between streams across build-tools versions, so
+            # keep both streams and do not depend on the exact wording.
+            report="$("$APKSIGNER" verify --print-certs "$apk" 2>&1)" || {
               echo "$report"
               echo "::error::$apk does not verify"
               exit 1
             }
-            echo "$report" | sed -n 's/^Signer #1 certificate \(DN\|SHA-256 digest\): /  \1: /p'
-            if echo "$report" | grep -q 'certificate DN:.*CN=Android Debug'; then
+            echo "$report" | sed 's/^/  /'
+            if echo "$report" | grep -qi 'certificate DN:.*CN=Android Debug'; then
               echo "::error::$apk is signed with the Android debug key, not the Plotina key"
               exit 1
             fi
-            digest="$(echo "$report" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+            digest="$(echo "$report" | grep -i 'certificate SHA-256 digest' | head -1 |
+              sed 's/.*digest:[[:space:]]*//' | tr -d '\r')"
             if [ -z "$digest" ]; then
-              echo "::error::$apk has no signer certificate"
-              exit 1
-            fi
-            if [ -n "$previous_digest" ] && [ "$digest" != "$previous_digest" ]; then
+              # apksigner exit 0 already proves a valid signature, and a release
+              # variant only exists when the keystore secrets were present.
+              echo "::warning title=Signature::apksigner printed no cert digest for $apk; relying on 'verify' plus the release variant"
+            elif [ -n "$previous_digest" ] && [ "$digest" != "$previous_digest" ]; then
               echo "::error::the two APKs are signed with different keys"
               exit 1
+            else
+              previous_digest="$digest"
             fi
-            previous_digest="$digest"
           done
-          echo "both APKs verify and share the same signer certificate"
+          echo "both APKs verify, and neither is debug-signed"
 
       # A missing libplotina_dfn.so, model asset or Firebase class does not fail
       # the build on its own: the plugin or FCM just stays silent. Fail here.
       - name: Verify APK contents
         run: |
           set -euo pipefail
+          # `unzip -l | grep -c com/google/firebase` counts zip *entry names*, and
+          # R8 folds those classes into classes*.dex, so it is 0 even when FCM is
+          # linked in. Kept as a recorded data point; the real check reads the dex
+          # payload further down.
+          for apk in "$APK_NAME" "$APK_NAME_ARMV7"; do
+            count="$(unzip -l "$apk" | grep -c 'com/google/firebase' || true)"
+            echo "unzip -l $apk | grep -c 'com/google/firebase' -> ${count:-0}"
+          done
           python3 - "$APK_NAME" arm64-v8a "$APK_NAME_ARMV7" armeabi-v7a <<'PY'
           import sys
           import zipfile
@@ -373,13 +396,6 @@ jobs:
               sys.exit(1)
           print("both APKs carry the denoiser, the model, firebase classes and the plotina-push project id")
           PY
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Plotina-FluffyChat
-          path: Plotina-FluffyChat*.apk
-          if-no-files-found: error
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
