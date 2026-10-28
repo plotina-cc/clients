@@ -229,4 +229,5 @@ jobs:
               APK on purpose: one file for all four ABIs is 400 MB.
             - Source: this repository at this tag plus the upstream tag pinned in `element-x/pins.env`.
 
-            Check that `https://call.plotina.cc/room` answers before handing this APK out.
+            If the call page cannot be reached, the copy of Element Call bundled in the APK is used
+            instead.
