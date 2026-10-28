@@ -37,4 +37,7 @@ approach follows:
 - [element-hq/element-call#3819](https://github.com/element-hq/element-call/pull/3819) — DeepFilterNet proof of concept.
 - [element-hq/element-call#3772](https://github.com/element-hq/element-call/pull/3772) — RNNoise variant.
 
-None of that code is shipped here; the wrappers in `noise/` are ours.
+No lines from those pull requests are shipped here — they hook into Element
+Call's own audio pipeline, while our wrapper patches `getUserMedia` one level up,
+so it covers Element Web, Cinny, Element Desktop and Element Call without
+touching upstream code. The denoiser itself is the library credited above.
