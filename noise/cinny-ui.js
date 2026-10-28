@@ -61,31 +61,105 @@
     return fallback;
   }
 
+  /* Cinny paints its rows with the theme's own colours; we cannot use its CSS
+     modules, so the shape of the block is rebuilt by hand and matched to the
+     surrounding sections: a heading outside, a rounded card, a title row, a
+     full width slider. */
+
+  function sampleAccent() {
+    var vars = [
+      "--mui-palette-primary-main",
+      "--accent",
+      "--primary-color",
+      "--cpd-color-accent",
+    ];
+    try {
+      var cs = getComputedStyle(document.documentElement);
+      for (var i = 0; i < vars.length; i++) {
+        var v = cs.getPropertyValue(vars[i]).trim();
+        if (v) return v;
+      }
+    } catch (e) {
+      /* no computed styles */
+    }
+    return "#8b7cf6";
+  }
+
+  function isDarkSurface(rgb) {
+    var m = /rgba?\(([^)]+)\)/.exec(rgb || "");
+    if (!m) return true;
+    var p = m[1].split(",").map(function (x) { return parseFloat(x); });
+    if (p.length < 3 || p.some(isNaN)) return true;
+    return (0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]) / 255 < 0.5;
+  }
+
+  function ensureSliderStyles(accent) {
+    var id = "plotina-noise-style";
+    var old = document.getElementById(id);
+    if (old) old.parentNode.removeChild(old);
+    var st = document.createElement("style");
+    st.id = id;
+    st.textContent = [
+      "#" + BLOCK_ID + " input[type=range]{-webkit-appearance:none;appearance:none;" +
+        "width:100%;height:6px;border-radius:3px;outline:none;margin:0;cursor:pointer;}",
+      "#" + BLOCK_ID + " input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;" +
+        "appearance:none;width:18px;height:18px;border-radius:50%;background:#fff;" +
+        "border:none;box-shadow:0 1px 4px rgba(0,0,0,.45);cursor:pointer;}",
+      "#" + BLOCK_ID + " input[type=range]::-moz-range-thumb{width:18px;height:18px;" +
+        "border-radius:50%;background:#fff;border:none;" +
+        "box-shadow:0 1px 4px rgba(0,0,0,.45);cursor:pointer;}",
+      "#" + BLOCK_ID + " input[type=range]::-moz-range-track{height:6px;" +
+        "border-radius:3px;background:transparent;}",
+      "#" + BLOCK_ID + " input[type=range]:focus-visible{box-shadow:0 0 0 2px " + accent + "66;}",
+    ].join("\n");
+    document.head.appendChild(st);
+  }
+
+  function paintTrack(range, level, accent, track) {
+    var pct = Math.max(0, Math.min(100, level));
+    range.style.background =
+      "linear-gradient(to right, " + accent + " 0 " + pct + "%, " + track + " " + pct + "% 100%)";
+  }
+
   function buildBlock(surface, lang) {
     var s = L.strings(lang);
     var level = readLevel();
+    var accent = sampleAccent();
+    var track = isDarkSurface(surface.background)
+      ? "rgba(255,255,255,0.18)"
+      : "rgba(0,0,0,0.12)";
+
+    ensureSliderStyles(accent);
 
     var block = document.createElement("div");
     block.id = BLOCK_ID;
-    block.style.cssText = "display:flex;flex-direction:column;gap:4px;";
+    block.style.cssText = "display:flex;flex-direction:column;margin:0 0 16px;";
 
     var heading = document.createElement("p");
     heading.textContent = s.section || "Sound";
     heading.style.cssText =
-      "font-size:12px;font-weight:600;margin:0;color:" + surface.color + ";";
+      "font-size:16px;font-weight:600;line-height:1.3;margin:0 0 10px;color:" +
+      surface.color + ";";
 
-    var row = document.createElement("div");
-    row.style.cssText =
-      "background:" + surface.background + ";color:" + surface.color + ";padding:12px;";
+    var card = document.createElement("div");
+    card.style.cssText =
+      "background:" + surface.background + ";color:" + surface.color +
+      ";border-radius:12px;padding:16px;";
 
-    var line = document.createElement("div");
-    // Wraps: on a phone the label is longer than the row, and a non-shrinking
-    // label squeezed the slider down to a few pixels.
-    line.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;";
+    var titleRow = document.createElement("div");
+    titleRow.style.cssText =
+      "display:flex;align-items:baseline;gap:12px;margin:0 0 12px;";
 
     var label = document.createElement("span");
     label.textContent = s.title;
-    label.style.cssText = "flex:1 1 auto;min-width:0;";
+    label.style.cssText = "flex:1 1 auto;min-width:0;font-size:16px;line-height:1.35;";
+
+    var value = document.createElement("span");
+    value.setAttribute("data-plotina-value", "");
+    value.textContent = String(level);
+    value.style.cssText =
+      "flex:0 0 auto;font-size:16px;line-height:1.35;opacity:.75;" +
+      "font-variant-numeric:tabular-nums;";
 
     var range = document.createElement("input");
     range.type = "range";
@@ -94,16 +168,16 @@
     range.step = "5";
     range.value = String(level);
     range.setAttribute("aria-label", s.title);
-    range.style.cssText = "flex:1 1 140px;min-width:0;accent-color:#0f7bff;";
+    paintTrack(range, level, accent, track);
 
-    var value = document.createElement("span");
-    value.setAttribute("data-plotina-value", "");
-    value.textContent = String(level);
-    value.style.cssText = "flex:0 0 3ch;text-align:right;opacity:.8;";
+    var hint = document.createElement("div");
+    hint.textContent = s.hint;
+    hint.style.cssText = "font-size:12px;opacity:.6;margin-top:12px;";
 
     range.addEventListener("input", function () {
       var next = writeLevel(range.value);
       value.textContent = String(next);
+      paintTrack(range, next, accent, track);
       // Write to storage alone only affects the next getUserMedia. boot.js keeps
       // the running processors and can retune them, so hand the value over and
       // let a call in progress change without redialling.
@@ -115,17 +189,13 @@
       }
     });
 
-    var hint = document.createElement("div");
-    hint.textContent = s.hint;
-    hint.style.cssText = "font-size:12px;opacity:.6;margin-top:6px;";
-
-    line.appendChild(label);
-    line.appendChild(range);
-    line.appendChild(value);
-    row.appendChild(line);
-    row.appendChild(hint);
+    titleRow.appendChild(label);
+    titleRow.appendChild(value);
+    card.appendChild(titleRow);
+    card.appendChild(range);
+    card.appendChild(hint);
     block.appendChild(heading);
-    block.appendChild(row);
+    block.appendChild(card);
     return block;
   }
 
