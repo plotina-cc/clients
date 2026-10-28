@@ -1,0 +1,22 @@
+diff --git a/android/app/build.gradle.kts b/android/app/build.gradle.kts
+index aa03a32..5fe387f 100644
+--- a/android/app/build.gradle.kts
++++ b/android/app/build.gradle.kts
+@@ -71,8 +71,15 @@ android {
+         targetSdk = flutter.targetSdkVersion
+         versionCode = flutter.versionCode
+         versionName = flutter.versionName
+-        ndk { // Workaround for https://github.com/flutter/flutter/issues/162153#issuecomment-2612443642
+-            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64", "x86")
++        // Workaround for https://github.com/flutter/flutter/issues/162153#issuecomment-2612443642
++        // plotina.cc: AGP rejects ndk abiFilters when ABI splits are enabled
++        // ("Conflicting configuration ... cannot be present when splits abi filters
++        // are set") and our build passes --split-per-abi, so the workaround only
++        // applies to fat builds, which is the case the Flutter issue describes.
++        if (project.findProperty("split-per-abi")?.toString()?.toBoolean() != true) {
++            ndk {
++                abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64", "x86")
++            }
+         }
+     }
+ 

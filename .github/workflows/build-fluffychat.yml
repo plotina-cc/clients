@@ -1,8 +1,10 @@
 name: build-fluffychat
 
 # Builds Plotina's FluffyChat APK: upstream pinned in fluffychat/UPSTREAM_TAG,
-# one patch from fluffychat/patches/, plus the DeepFilterNet3 plugin in
-# fluffychat/plotina_dfn/ (Kotlin + Rust).
+# our patches from fluffychat/patches/, the DeepFilterNet3 plugin in
+# fluffychat/plotina_dfn/ (Kotlin + Rust), and Firebase Cloud Messaging
+# (upstream's own scripts/add-firebase-messaging.sh plus google-services.json
+# from the GOOGLE_SERVICES_JSON secret).
 #
 # Triggered by tags of the form v<upstream>-plotina-fluffy.<n>, e.g.
 # v2.11.3-plotina-fluffy.1. The client-specific part keeps this workflow from
@@ -72,6 +74,64 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+
+      # Firebase Cloud Messaging. Upstream ships the switch as a script: it adds
+      # fcm_shared_isolate (which pulls in firebase_core and firebase-messaging)
+      # and uncomments the FCM code paths. google-services.json has to be in
+      # place before Gradle configures the project, because
+      # android/settings.gradle.kts only declares the com.google.gms.google-services
+      # plugin when that file exists — otherwise the manifest's FcmPushService
+      # has nothing to talk to and FCM silently stays off.
+      - name: Enable Firebase Cloud Messaging
+        working-directory: fluffychat/upstream
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GOOGLE_SERVICES_JSON:-}" ]; then
+            echo "::error::GOOGLE_SERVICES_JSON is not set, so FCM cannot be enabled. Add the base64 of google-services.json as a repository secret."
+            exit 1
+          fi
+          # The secret is base64; GitHub keeps no trailing newline, but strip any
+          # whitespace that a paste may have introduced.
+          printf '%s' "$GOOGLE_SERVICES_JSON" | tr -d '[:space:]' | base64 --decode \
+            > android/app/google-services.json
+          python3 - <<'PY'
+          import json
+          import sys
+
+          path = "android/app/google-services.json"
+          with open(path, "rb") as handle:
+              raw = handle.read()
+          if not raw.strip():
+              sys.exit(f"{path} decoded to an empty file; the secret is not base64")
+          config = json.loads(raw)
+          project = config["project_info"]["project_id"]
+          clients = [
+              entry["client_info"]["android_client_info"]["package_name"]
+              for entry in config.get("client", [])
+          ]
+          print(f"firebase project: {project}")
+          print("clients:", *clients, sep="\n  ")
+          expected = ["chat.fluffy.fluffychat", "io.element.android.x"]
+          missing = [name for name in expected if name not in clients]
+          if missing:
+              sys.exit(f"{path} has no client for: {', '.join(missing)}")
+          PY
+          bash scripts/add-firebase-messaging.sh
+          # The script is silent about whether it matched anything, so check the
+          # markers it is supposed to remove.
+          if grep -q '<GOOGLE_SERVICES>' lib/utils/background_push.dart; then
+            echo "::error::background_push.dart still has //<GOOGLE_SERVICES> markers"
+            exit 1
+          fi
+          grep -q '^  fcm_shared_isolate:' pubspec.yaml ||
+            { echo "::error::fcm_shared_isolate is not in pubspec.yaml"; exit 1; }
+          grep -qx 'package chat.fluffy.fluffychat' \
+            android/app/src/main/kotlin/chat/fluffy/fluffychat/FcmPushService.kt ||
+            { echo "::error::FcmPushService.kt is still commented out"; exit 1; }
+          grep -q 'com.google.gms.google-services' android/settings.gradle.kts
+          echo "FCM enabled: fcm_shared_isolate added, background_push.dart and FcmPushService.kt uncommented"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -186,55 +246,132 @@ jobs:
           ls -lh "$GITHUB_WORKSPACE/$APK_NAME" "$GITHUB_WORKSPACE/$APK_NAME_ARMV7"
           sha256sum "$GITHUB_WORKSPACE/$APK_NAME" "$GITHUB_WORKSPACE/$APK_NAME_ARMV7"
 
-      # A missing libplotina_dfn.so or model asset does not fail the build on its
-      # own: the plugin just stays silent. Fail here instead.
+      # The build falls back to the debug key when the keystore secrets are
+      # missing (see "Configure signing"). Such an APK installs but cannot update
+      # an installed Plotina build, so a release run must not ship it.
+      - name: Verify APK signature
+        env:
+          VARIANT: ${{ steps.signing.outputs.variant }}
+        run: |
+          set -euo pipefail
+          echo "build variant: $VARIANT"
+          if [ "$VARIANT" != "release" ]; then
+            echo "::error::expected the release variant signed with the Plotina key, got '$VARIANT'"
+            exit 1
+          fi
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?ANDROID_SDK_ROOT/ANDROID_HOME is not set}}"
+          APKSIGNER="$(ls -1 "$SDK"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::no apksigner under $SDK/build-tools, cannot prove the APKs are signed"
+            exit 1
+          fi
+          echo "using $APKSIGNER"
+          previous_digest=""
+          for apk in "$APK_NAME" "$APK_NAME_ARMV7"; do
+            report="$("$APKSIGNER" verify --print-certs "$apk")" || {
+              echo "$report"
+              echo "::error::$apk does not verify"
+              exit 1
+            }
+            echo "$report" | sed -n 's/^Signer #1 certificate \(DN\|SHA-256 digest\): /  \1: /p'
+            if echo "$report" | grep -q 'certificate DN:.*CN=Android Debug'; then
+              echo "::error::$apk is signed with the Android debug key, not the Plotina key"
+              exit 1
+            fi
+            digest="$(echo "$report" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+            if [ -z "$digest" ]; then
+              echo "::error::$apk has no signer certificate"
+              exit 1
+            fi
+            if [ -n "$previous_digest" ] && [ "$digest" != "$previous_digest" ]; then
+              echo "::error::the two APKs are signed with different keys"
+              exit 1
+            fi
+            previous_digest="$digest"
+          done
+          echo "both APKs verify and share the same signer certificate"
+
+      # A missing libplotina_dfn.so, model asset or Firebase class does not fail
+      # the build on its own: the plugin or FCM just stays silent. Fail here.
       - name: Verify APK contents
         run: |
           set -euo pipefail
-          python3 - "$APK_NAME" arm64-v8a <<'PY'
+          python3 - "$APK_NAME" arm64-v8a "$APK_NAME_ARMV7" armeabi-v7a <<'PY'
           import sys
           import zipfile
 
-          apk = sys.argv[1]
-          abi = sys.argv[2]
-          wanted = [
-              f"lib/{abi}/libplotina_dfn.so",
-              "assets/flutter_assets/packages/plotina_dfn/assets/DeepFilterNet3_onnx.tar.gz",
-          ]
-          with zipfile.ZipFile(apk) as archive:
-              names = set(archive.namelist())
-              sizes = {name: archive.getinfo(name).file_size for name in names}
+          pairs = [(sys.argv[1], sys.argv[2]), (sys.argv[3], sys.argv[4])]
+          failures = []
 
-          missing = [name for name in wanted if name not in names]
-          if missing:
-              print("missing from the APK:", *missing, sep="\n  ")
-              print("lib/ entries:", *sorted(n for n in names if n.startswith("lib/")), sep="\n  ")
-              print("model entries:", *sorted(n for n in names if "DeepFilterNet" in n), sep="\n  ")
+          for apk, abi in pairs:
+              print(f"== {apk} ({abi})")
+              with zipfile.ZipFile(apk) as archive:
+                  names = archive.namelist()
+                  sizes = {name: archive.getinfo(name).file_size for name in names}
+                  dex_names = sorted(name for name in names if name.endswith(".dex"))
+                  dex = b"".join(archive.read(name) for name in dex_names)
+                  resources = (
+                      archive.read("resources.arsc") if "resources.arsc" in names else b""
+                  )
+                  manifest = (
+                      archive.read("AndroidManifest.xml")
+                      if "AndroidManifest.xml" in names
+                      else b""
+                  )
+
+              wanted = [
+                  f"lib/{abi}/libplotina_dfn.so",
+                  "assets/flutter_assets/packages/plotina_dfn/assets/DeepFilterNet3_onnx.tar.gz",
+              ]
+              missing = [name for name in wanted if name not in names]
+              if missing:
+                  print("missing from the APK:", *missing, sep="\n  ")
+                  print("lib/ entries:", *sorted(n for n in names if n.startswith("lib/")), sep="\n  ")
+                  print("model entries:", *sorted(n for n in names if "DeepFilterNet" in n), sep="\n  ")
+                  failures.append(f"{apk}: missing {', '.join(missing)}")
+              for name in wanted:
+                  if name in sizes:
+                      if sizes[name] == 0:
+                          print(f"empty entry: {name}")
+                          failures.append(f"{apk}: {name} is empty")
+                      print(f"  {name}: {sizes[name]} bytes")
+
+              # Firebase. R8 folds the classes into classes*.dex, so no zip entry
+              # is ever called `com/google/firebase` and `unzip -l | grep -c` stays
+              # at 0 even when FCM is linked in. Look inside the dex payload.
+              entry_hits = len([name for name in names if "com/google/firebase" in name])
+              firebase_hits = dex.count(b"com/google/firebase")
+              print(f"  zip entries named com/google/firebase: {entry_hits} (expected 0: R8 dexes the classes)")
+              print(f"  'com/google/firebase' in {', '.join(dex_names)}: {firebase_hits} occurrences")
+              if firebase_hits == 0:
+                  failures.append(f"{apk}: no com/google/firebase classes in the dex payload")
+
+              # The google-services plugin turns google-services.json into string
+              # resources, so the project id ends up in resources.arsc; Firebase
+              # reads it back by name at runtime.
+              needle = b"plotina-push"
+              needle_utf16 = "plotina-push".encode("utf-16-le")
+              arsc_hits = resources.count(needle) + resources.count(needle_utf16)
+              dex_project_hits = dex.count(needle) + dex.count(needle_utf16)
+              manifest_hits = manifest.count(needle) + manifest.count(needle_utf16)
+              print(
+                  "  'plotina-push' — resources.arsc: "
+                  f"{arsc_hits}, dex: {dex_project_hits}, AndroidManifest.xml: {manifest_hits}"
+              )
+              if arsc_hits + dex_project_hits + manifest_hits == 0:
+                  failures.append(
+                      f"{apk}: project id plotina-push is nowhere in the APK "
+                      "(google-services.json did not reach the build)"
+                  )
+
+              event = b"com.google.firebase.MESSAGING_EVENT"
+              event_hits = manifest.count(event) + manifest.count(event.decode().encode("utf-16-le"))
+              print(f"  MESSAGING_EVENT service in AndroidManifest.xml: {event_hits > 0}")
+
+          if failures:
+              print("FAILED:", *failures, sep="\n  ")
               sys.exit(1)
-
-          for name in wanted:
-              if sizes[name] == 0:
-                  print(f"empty entry: {name}")
-                  sys.exit(1)
-              print(f"{name}: {sizes[name]} bytes")
-          PY
-          python3 - "$APK_NAME_ARMV7" armeabi-v7a <<'PY'
-          import sys
-          import zipfile
-
-          apk = sys.argv[1]
-          abi = sys.argv[2]
-          wanted = [
-              f"lib/{abi}/libplotina_dfn.so",
-              "assets/flutter_assets/packages/plotina_dfn/assets/DeepFilterNet3_onnx.tar.gz",
-          ]
-          with zipfile.ZipFile(apk) as archive:
-              names = set(archive.namelist())
-          missing = [name for name in wanted if name not in names]
-          if missing:
-              print("missing from the APK:", *missing, sep="\n  ")
-              sys.exit(1)
-          print("armv7 split: ok")
+          print("both APKs carry the denoiser, the model, firebase classes and the plotina-push project id")
           PY
 
       - name: Upload artifact
@@ -256,9 +393,17 @@ jobs:
           FluffyChat for Android with DeepFilterNet3 noise suppression built in.
 
           - The sign-in screen already points at plotina.cc, so there is no server to type.
+          - Push notifications go through FCM and our own push gateway (push.plotina.cc), no ntfy app needed.
           - Signed with the Plotina key: installs over our previous builds.
+          - Two APKs: arm64-v8a (most phones) and armeabi-v7a (older devices).
           - Source: this repository at this tag (AGPL-3.0).
           EOF
           gh release view "$TAG" > /dev/null 2>&1 ||
             gh release create "$TAG" --title "FluffyChat $TAG" --notes-file "$BODY"
           gh release upload "$TAG" "$APK_NAME" "$APK_NAME_ARMV7" --clobber
+          # The release is the deliverable, so prove both APKs are on it.
+          for asset in "$APK_NAME" "$APK_NAME_ARMV7"; do
+            gh release view "$TAG" --json assets \
+              -q ".assets[] | select(.name == \"$asset\") | \"\\(.name) \\(.size) bytes\"" \
+              | grep -q . || { echo "::error::$asset is not attached to release $TAG"; exit 1; }
+          done
