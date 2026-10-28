@@ -1,0 +1,107 @@
+name: Validate Element X configuration
+
+# A full Element X build is 25-40 minutes; a configuration mistake (an abiFilters
+# clash, a variant that does not exist, a patch that no longer applies) kills it in
+# the first two. This job runs the same setup as the real build and stops after
+# Gradle has configured the project, so a red run costs minutes, not half an hour.
+#
+# Run it before tagging: workflow_dispatch on the branch you are about to tag.
+on:
+  workflow_dispatch:
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read pins
+        run: |
+          grep -Ev '^[[:space:]]*(#|$)' element-x/pins.env >> "$GITHUB_ENV"
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL \
+                      /usr/local/share/boost /usr/local/share/powershell /opt/microsoft 2>/dev/null || true
+          df -h / | tail -1
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install the SDK packages Element X compiles against
+        run: |
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          if [ -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          else
+            SDKMANAGER=$(ls -d "$SDK"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -1)
+          fi
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install "platforms;android-37" "build-tools;37.0.0" \
+            || "$SDKMANAGER" --channel=3 --install "platforms;android-37" "build-tools;37.0.0" \
+            || echo "::warning::sdkmanager has no 'platforms;android-37'; leaving it to Gradle"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: element-x-android, patched
+        run: |
+          GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 --branch "$ELEMENT_X_TAG" \
+            https://github.com/element-hq/element-x-android upstream/element-x
+          cd upstream/element-x
+          for p in 0002-element-x-android-plotina-signing \
+                   0004-element-x-android-plotina-call-url \
+                   0005-element-x-android-plotina-app-link \
+                   0006-element-x-android-plotina-account-provider \
+                   0007-element-x-android-plotina-push-gateway; do
+            echo "==> $p"
+            git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/$p.patch"
+          done
+
+      - name: Write the Firebase project into the gplay flavour
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON" ]; then
+            echo "::error::GOOGLE_SERVICES_JSON is not set"
+            exit 1
+          fi
+          if printf '%s' "$GOOGLE_SERVICES_JSON" | tr -d '\r\n' | base64 -d \
+               > upstream/element-x/app/google-services.json 2>/dev/null \
+             && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' upstream/element-x/app/google-services.json 2>/dev/null; then
+            echo "google-services.json decoded from base64"
+          else
+            printf '%s' "$GOOGLE_SERVICES_JSON" > upstream/element-x/app/google-services.json
+            python3 -c 'import json,sys; json.load(open(sys.argv[1]))' upstream/element-x/app/google-services.json
+            echo "google-services.json taken as raw JSON"
+          fi
+          python3 "$GITHUB_WORKSPACE/element-x/scripts/firebase-resources.py" \
+            upstream/element-x/app/google-services.json \
+            upstream/element-x/app/src/gplay/res
+
+      - name: Decode the signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/plotina.keystore"
+          {
+            echo "PLOTINA_STOREFILE=$RUNNER_TEMP/plotina.keystore"
+            echo "PLOTINA_STOREPASSWORD=$KEYSTORE_PASSWORD"
+            echo "PLOTINA_KEY_ALIAS=$KEY_ALIAS"
+            echo "PLOTINA_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+      - name: Configure only (no compile, no package)
+        working-directory: upstream/element-x
+        run: |
+          # --dry-run runs the configuration phase and the task graph, then stops.
+          # Everything that has broken us so far (abiFilters vs splits, a variant
+          # that does not exist) fails here, in about ten minutes.
+          ./gradlew :app:assembleGplayRelease --dry-run --stacktrace --no-configuration-cache
