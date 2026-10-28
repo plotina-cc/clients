@@ -21,6 +21,7 @@
 <script src="../../noise/logic.js"></script>
 <script src="../../noise/cinny-ui.js"></script>
 <script>
+localStorage.removeItem("plotina.noise.level");
 const results = [];
 function test(name, fn) {
   try { fn(); results.push("PASS " + name); }
@@ -64,6 +65,21 @@ test("changing the slider stores the level", () => {
   eq(block.querySelector("[data-plotina-value]").textContent, "35", "shown value");
   range.value = "60";
   range.dispatchEvent(new Event("input"));
+});
+
+test("on a narrow screen the label wraps and the slider stays usable", () => {
+  const scroller = document.getElementById("scroller");
+  scroller.style.width = "320px";
+  const block = inject();
+  const range = block.querySelector("input[type=range]");
+  const width = range.getBoundingClientRect().width;
+  ok(width >= 90, "slider squeezed to " + Math.round(width) + "px");
+  ok(block.scrollWidth <= block.clientWidth + 1,
+     "block overflows: " + block.scrollWidth + " > " + block.clientWidth);
+  const label = block.querySelector("span");
+  ok(label.getBoundingClientRect().bottom <= range.getBoundingClientRect().top + 1,
+     "label should sit on its own line above the slider");
+  scroller.style.width = "";
 });
 
 test("injection is idempotent", () => {

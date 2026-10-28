@@ -16,8 +16,13 @@ trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
 sleep 1
 
 status=0
+# A fresh profile per run: with a shared one Chromium served cached copies of
+# noise/*.js, so a test could pass against code that was no longer on disk.
+PROFILE="$(mktemp -d)"
+trap 'kill "$SERVER_PID" 2>/dev/null || true; rm -rf "$PROFILE"' EXIT
 for page in unit.html cinny-ui.test.html; do
   DOM="$("$CHROME" --headless=new --no-sandbox --disable-gpu --virtual-time-budget=5000 \
+    --user-data-dir="$PROFILE" --disk-cache-size=1 \
     --dump-dom "http://127.0.0.1:${PORT}/${REL}/${page}" 2>/dev/null)"
 
   # The inline <script> source contains the marker strings, so read the title only.

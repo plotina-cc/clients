@@ -79,11 +79,13 @@
       "background:" + surface.background + ";color:" + surface.color + ";padding:12px;";
 
     var line = document.createElement("div");
-    line.style.cssText = "display:flex;align-items:center;gap:12px;";
+    // Wraps: on a phone the label is longer than the row, and a non-shrinking
+    // label squeezed the slider down to a few pixels.
+    line.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;";
 
     var label = document.createElement("span");
     label.textContent = s.title;
-    label.style.cssText = "flex:0 0 auto;";
+    label.style.cssText = "flex:1 1 auto;min-width:0;";
 
     var range = document.createElement("input");
     range.type = "range";
@@ -92,7 +94,7 @@
     range.step = "5";
     range.value = String(level);
     range.setAttribute("aria-label", s.title);
-    range.style.cssText = "flex:1 1 auto;accent-color:#0f7bff;";
+    range.style.cssText = "flex:1 1 140px;min-width:0;accent-color:#0f7bff;";
 
     var value = document.createElement("span");
     value.setAttribute("data-plotina-value", "");
