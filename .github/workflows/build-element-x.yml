@@ -65,8 +65,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Same heap upstream CI uses: R8 on the full app runs out of memory well before 4g.
-  GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx8g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8 -XX:+UseG1GC
+  # Same heap upstream CI uses: R8 on the full app runs out of memory well before 4g. The metaspace
+  # and Kotlin-daemon caps are upstream's too — on a 16 GB hosted runner the sum matters, and two
+  # gplay runs were killed by the runner while packaging (see the monitor in the Assemble step).
+  GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx8g -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8 -XX:+HeapDumpOnOutOfMemoryError -XX:+UseG1GC -Dkotlin.daemon.jvm.options=-Xmx4g -Dorg.gradle.workers.max=2
 
 jobs:
   # Cheap and first: if the patches no longer apply to the pinned tag, nothing below is worth the
@@ -114,6 +116,19 @@ jobs:
           fi
         env:
           UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+
+      - name: Free disk space
+        # The gplay release build writes four ABI splits plus a universal APK, and R8 keeps the
+        # whole app in the intermediate tree while it does. Two runs died while packaging, with the
+        # runner logging only "The runner has received a shutdown signal" — the hosted image ships
+        # ~20 GB of toolchains this build never touches, so they go first. Nothing here removes a
+        # JDK, the Android SDK or the Gradle caches.
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL \
+                      /usr/local/share/boost /usr/local/share/powershell /opt/microsoft 2>/dev/null || true
+          sudo docker image prune -af > /dev/null 2>&1 || true
+          df -h / | tail -1
 
       - uses: actions/setup-java@v4
         with:
@@ -226,6 +241,16 @@ jobs:
       - name: Assemble
         working-directory: upstream/element-x
         run: |
+          # A kill in this step only ever surfaces as "The runner has received a shutdown signal",
+          # with no word on what ran out first. Sample the machine every minute: the last monitor
+          # line in the log then says whether it was disk or memory.
+          (
+            while true; do
+              echo "[monitor $(date -u +%H:%M:%S)] $(df -h / | awk 'NR==2 {print "disk free " $4 " of " $2}') | $(free -m | awk 'NR==2 {print "mem available " $7 "MB of " $2 "MB"}')"
+              sleep 60
+            done
+          ) &
+          monitor=$!
           # Per-ABI splits, not one universal APK: a single release APK with four ABIs is 400 MB,
           # while arm64 alone is what almost every phone needs. `-PplotinaSingleApk` exists in the
           # patch and turns the splits off, but it is not used here on purpose.
@@ -248,6 +273,7 @@ jobs:
           cp "$arm64" "$GITHUB_WORKSPACE/Plotina-ElementX.apk"
           if [ -n "$armv7" ]; then cp "$armv7" "$GITHUB_WORKSPACE/Plotina-ElementX-armv7.apk"; fi
           ls -lh "$GITHUB_WORKSPACE"/Plotina-ElementX*.apk
+          kill "$monitor" 2>/dev/null || true
 
       - name: Check the APK carries our call URL, the bundled fallback and the plotina.cc app link
         run: |
