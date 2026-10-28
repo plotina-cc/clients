@@ -275,6 +275,16 @@ jobs:
           ls -lh "$GITHUB_WORKSPACE"/Plotina-ElementX*.apk
           kill "$monitor" 2>/dev/null || true
 
+      # Uploaded before the checks on purpose: a failing check must still leave the APK behind to
+      # inspect, otherwise the only trace of a wrong artifact is a red step.
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('Plotina-ElementX.apk') != ''
+        with:
+          name: Plotina-ElementX
+          path: Plotina-ElementX*.apk
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Check the APK carries our call URL, the bundled fallback and the plotina.cc app link
         run: |
           cd "$GITHUB_WORKSPACE"
@@ -381,20 +391,31 @@ jobs:
             # 2. The Firebase project. project_id is a string resource, not a dex constant, so it
             #    lives in resources.arsc — this is the check that GOOGLE_SERVICES_JSON reached the
             #    build and that it is our project rather than Element's vector-alpha.
+            #
+            #    `aapt2 dump resources` prints the resource on one line and each configuration's
+            #    value on the lines *after* it ("(default) \"...\""), so the value has to be read
+            #    with context: `grep 'string/project_id' | head -1` finds the name and never the
+            #    value, which is how the first version of this check failed a correct APK.
             if [ -n "$AAPT2" ]; then
-              line=$("$AAPT2" dump resources "$apk" | grep 'string/project_id' | head -1 || true)
-              echo "   aapt2 dump resources: ${line:-<no string/project_id>}"
-              case "$line" in
-                *plotina-push*) echo "   OK: project_id is plotina-push" ;;
-                *) echo "::error file=$apk::$apk does not carry the plotina-push project id: the Firebase overlay did not reach the build"; failed=1 ;;
-              esac
+              section=$("$AAPT2" dump resources "$apk" | grep -A3 'string/project_id' || true)
+              echo "   aapt2 dump resources, project_id:"
+              printf '%s\n' "${section:-<no string/project_id>}" | sed 's/^/      /'
+              if printf '%s' "$section" | grep -qF 'plotina-push'; then
+                echo "   OK: project_id is plotina-push"
+              else
+                echo "::error file=$apk::$apk does not carry the plotina-push project id: the Firebase overlay did not reach the build"
+                failed=1
+              fi
               # Same question for the app id: without it FirebaseApp cannot initialise at all.
-              appid=$("$AAPT2" dump resources "$apk" | grep 'string/google_app_id' | head -1 || true)
-              echo "   aapt2 dump resources: ${appid:-<no string/google_app_id>}"
-              case "$appid" in
-                *android:*) echo "   OK: google_app_id is present" ;;
-                *) echo "::error file=$apk::$apk has no google_app_id resource"; failed=1 ;;
-              esac
+              appid=$("$AAPT2" dump resources "$apk" | grep -A3 'string/google_app_id' || true)
+              echo "   aapt2 dump resources, google_app_id:"
+              printf '%s\n' "${appid:-<no string/google_app_id>}" | sed 's/^/      /'
+              if printf '%s' "$appid" | grep -q 'android:'; then
+                echo "   OK: google_app_id is present"
+              else
+                echo "::error file=$apk::$apk has no google_app_id resource"
+                failed=1
+              fi
             else
               echo "   no aapt2 in $SDK/build-tools: scanning resources.arsc instead (value only, no resource name)"
               { unzip -p "$apk" resources.arsc | strings -a; unzip -p "$apk" resources.arsc | strings -a -e l; } \
@@ -414,13 +435,6 @@ jobs:
               || { echo "::error file=$apk::$apk does not call https://push.plotina.cc/_matrix/push/v1/notify: patch 0007 is missing"; failed=1; }
           done
           exit "$failed"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Plotina-ElementX
-          path: Plotina-ElementX*.apk
-          if-no-files-found: error
-          retention-days: 30
 
       - name: Publish the release
         if: startsWith(github.ref, 'refs/tags/')
