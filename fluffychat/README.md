@@ -4,11 +4,11 @@ Plotina's Android build of [FluffyChat](https://github.com/krille-chan/fluffycha
 with DeepFilterNet3 (DFN3) denoising on outgoing call audio, on by default, no
 user action.
 
-**Status: ready for the first CI run.** Nothing here has been built or run on a
-device yet. The upstream reading below was done against the pinned tag, the
-patch applies to it cleanly, and the Kotlin/Rust was reviewed against the pinned
-flutter_webrtc 1.6.2+hotfix.4 and DeepFilterNet v0.5.6 sources — but none of it
-has been compiled.
+**Status:** building in CI. `v2.11.3-plotina-fluffy.8` is the first release with
+FCM push and per-ABI splits; earlier tags shipped the same denoiser as one fat APK.
+The DFN3 path below was read from the pinned upstream, flutter_webrtc and
+deep_filter sources and is covered by the APK-content check, but nobody has
+listened to a call on a device yet.
 
 ## Upstream
 
@@ -17,7 +17,7 @@ has been compiled.
 | Tag | `v2.11.3` (`UPSTREAM_TAG`), commit `6fc4920` |
 | Flutter | `3.47.8` (upstream `.fvmrc`) |
 | Call stack | `livekit_client` 2.13.1, `flutter_webrtc` 1.6.2+hotfix.4 (both from `pubspec.lock`) |
-| Patch | one file, four added lines (`patches/`) |
+| Patch | four: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters` (`patches/`) |
 
 ## How call audio works in this version
 
@@ -87,6 +87,9 @@ AAR only touches the Kotlin glue.
 ```
 UPSTREAM_TAG                       v2.11.3
 patches/0001-pubspec-add-plotina-dfn.patch
+patches/0002-plotina-default-homeserver.patch
+patches/0003-plotina-push-gateway.patch
+patches/0004-split-per-abi-vs-abi-filters.patch
 plotina_dfn/                       Flutter plugin (Android only)
   lib/plotina_dfn.dart             isAvailable / setEnabled / frameLength / status
   android/…/PlotinaDfnPlugin.kt    attaches to flutter_webrtc, extracts the model
@@ -107,6 +110,37 @@ The patch adds only this to `pubspec.yaml`:
 Gradle picks the Rust library up from
 `plotina_dfn/android/src/main/jniLibs/<abi>/libplotina_dfn.so`, so **no Gradle
 file of FluffyChat is modified**.
+
+## Push (FCM)
+
+The APK carries Firebase Cloud Messaging, so notifications do not depend on the
+ntfy app. The build does what upstream's Play build does:
+
+1. The `GOOGLE_SERVICES_JSON` secret (base64 of `google-services.json` for the
+   Firebase project `plotina-push`; it has clients for both
+   `chat.fluffy.fluffychat` and `io.element.android.x`) is decoded into
+   `android/app/google-services.json` **before** Gradle configures the project:
+   `android/settings.gradle.kts` only declares the
+   `com.google.gms.google-services` plugin when that file already exists.
+2. `bash scripts/add-firebase-messaging.sh` (upstream's own script) adds
+   `fcm_shared_isolate` — which brings `firebase_core` and
+   `firebase-messaging` — and uncomments the FCM paths in
+   `lib/utils/background_push.dart` and `FcmPushService.kt`.
+3. `0003` points `pushNotificationsGatewayUrl` at our sygnal,
+   `https://push.plotina.cc/_matrix/push/v1/notify`.
+
+`0004` is not about push: upstream's `ndk { abiFilters … }` workaround in
+`android/app/build.gradle.kts` makes AGP reject `--split-per-abi` ("Conflicting
+configuration … cannot be present when splits abi filters are set"), which is why
+tag `…-fluffy.7` produced no APK at all. The patch applies the workaround only to
+fat builds.
+
+Checked on the released APKs of `v2.11.3-plotina-fluffy.8`: 30
+`com/google/firebase` strings in `classes*.dex` (the zip entry names stay at 0 —
+R8 dexes the classes, so `unzip -l | grep com/google/firebase` proves nothing),
+`plotina-push` plus `gcm_defaultSenderId`/`google_app_id` in `resources.arsc`, and
+the gateway URL in `libapp.so` with the old `push.fluffychat.im` default gone. The
+CI step fails the build if any of that is missing.
 
 ## Limitations
 
@@ -149,9 +183,10 @@ file of FluffyChat is modified**.
 
 ## Maintenance cost
 
-- **Upstream bumps:** re-resolve `UPSTREAM_TAG`; the patch touches an
-  alphabetically sorted dependency block, so it usually applies with
-  `git apply -3`. If it conflicts, re-add the four lines by hand.
+- **Upstream bumps:** re-resolve `UPSTREAM_TAG` and re-check all four patches;
+  `0001` touches an alphabetically sorted dependency block and `0004` a Gradle
+  block, so `git apply -3` in the loop is the first thing to try. If one
+  conflicts, apply that hunk by hand.
 - **flutter_webrtc bumps:** we depend on `AudioProcessingAdapter`,
   `AudioProcessingAdapter.ExternalAudioFrameProcessing` and
   `FlutterWebRTCPlugin.audioProcessingController`, all public since 1.x. If they
@@ -169,12 +204,12 @@ CI: `.github/workflows/build-fluffychat.yml`, triggered by a tag matching
 builds Cinny, and the generic `v*-plotina.*` pattern used to start every client's
 workflow at once.
 
-The job clones upstream at the tag in `UPSTREAM_TAG`, applies the patch, builds
-the Rust library for arm64-v8a / armeabi-v7a / x86_64 with `cargo ndk`, runs
-`flutter build apk` (Flutter's default ABIs, which are exactly those three) and
-publishes **`Plotina-FluffyChat.apk`** — one constant file name for the artifact
-and for the release asset, so download links and update checks never have to
-guess.
+The job clones upstream at the tag in `UPSTREAM_TAG`, applies the patches in
+name order, builds the Rust library for arm64-v8a / armeabi-v7a / x86_64 with
+`cargo ndk`, then runs `flutter build apk --split-per-abi`. Two of the three
+splits are published: **`Plotina-FluffyChat.apk`** (arm64-v8a, what every recent
+phone needs) and **`Plotina-FluffyChat-armv7.apk`** (older devices); x86_64 stays
+with emulators.
 
 ### Signing
 
