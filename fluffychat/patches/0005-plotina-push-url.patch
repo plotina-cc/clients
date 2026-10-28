@@ -1,0 +1,18 @@
+diff --git a/lib/utils/background_push.dart b/lib/utils/background_push.dart
+index 924de25..875fee2 100644
+--- a/lib/utils/background_push.dart
++++ b/lib/utils/background_push.dart
+@@ -368,7 +368,12 @@ class BackgroundPush {
+     }
+     await setupPusher(
+       client: client,
+-      gatewayUrl: AppSettings.pushNotificationsGatewayUrl.value,
++      // Plotina: the gateway is fixed at build time. The setting below keeps a
++      // value stored on the device from an earlier install, so reading it here
++      // keeps pointing an updated app at push.fluffychat.im, where our FCM tokens
++      // are unknown. Our own sygnal is the only gateway that holds the project
++      // credentials.
++      gatewayUrl: 'https://push.plotina.cc/_matrix/push/v1/notify',
+       token: _fcmToken,
+     );
+   }
