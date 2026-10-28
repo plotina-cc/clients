@@ -1,21 +1,22 @@
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index 706a82f0..c4b56406 100644
+index 706a82f..7ebc23f 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
-@@ -49,8 +49,11 @@ android {
+@@ -48,9 +48,11 @@ android {
+         versionCode = Versions.VERSION_CODE
          versionName = Versions.VERSION_NAME
  
-         // Keep abiFilter for the universalApk
-+        // Plotina: the same two ABIs as the splits below. AGP refuses a `ndk.abiFilters` set wider
-+        // than the splits' filter list ("Conflicting configuration ... cannot be present when splits
-+        // abi filters are set"), and with the universal APK off nothing here needs x86 or x86_64.
+-        // Keep abiFilter for the universalApk
++        // Plotina: the same two ABIs the splits below produce. AGP refuses to configure
++        // the project when ndk.abiFilters and the split list disagree, and the split
++        // list is what decides which APKs exist.
          ndk {
 -            abiFilters += listOf("armeabi-v7a", "x86", "arm64-v8a", "x86_64")
 +            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
          }
  
          // Ref: https://developer.android.com/studio/build/configure-apk-splits.html#configure-abi-split
-@@ -60,7 +63,10 @@ android {
+@@ -60,7 +62,10 @@ android {
                  val buildingAppBundle = gradle.startParameter.taskNames.any { it.contains("bundle") }
  
                  // Enables building multiple APKs per ABI. This should be disabled when building an AAB.
@@ -27,7 +28,7 @@ index 706a82f0..c4b56406 100644
  
                  // By default all ABIs are included, so use reset() and include to specify that we only
                  // want APKs for armeabi-v7a, x86, arm64-v8a and x86_64.
-@@ -69,9 +75,14 @@ android {
+@@ -69,9 +74,14 @@ android {
  
                  if (!buildingAppBundle) {
                      // Specifies a list of ABIs that Gradle should create APKs for.
@@ -44,7 +45,7 @@ index 706a82f0..c4b56406 100644
                  }
              }
          }
-@@ -98,6 +109,19 @@ android {
+@@ -98,6 +108,19 @@ android {
              )
              storePassword = environmentOrGradleValue("ELEMENT_ANDROID_NIGHTLY_STOREPASSWORD", "signing.element.nightly.storePassword")
          }
@@ -64,7 +65,7 @@ index 706a82f0..c4b56406 100644
      }
  
      val baseAppName = BuildTimeConfig.APPLICATION_NAME
-@@ -124,7 +148,9 @@ android {
+@@ -124,7 +147,9 @@ android {
                  "login_redirect_scheme",
                  oAuthRedirectSchemeBase,
              )
