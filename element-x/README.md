@@ -81,7 +81,9 @@ it is not optional, and the build fails without it.
 
 Sizes are the per-ABI splits of a release build: the arm64-v8a APK is ~136 MB and the armeabi-v7a one
 ~99 MB (measured on `v26.10.1-plotina-x.7`; the `gplay` variant adds a few MB of Firebase and Play
-Services classes). A universal APK would be ~400 MB, which is why the workflow ships splits.
+Services classes). The build produces exactly those two: patch `0002` narrows the ABI splits to
+`arm64-v8a` and `armeabi-v7a` and turns the universal APK off, because packaging four splits plus a
+400 MB universal APK ran the Gradle daemon out of heap on the CI runner.
 
 Signing is one set of repository secrets away, no code change:
 

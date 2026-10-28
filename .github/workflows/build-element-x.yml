@@ -255,6 +255,11 @@ jobs:
           # while arm64 alone is what almost every phone needs. `-PplotinaSingleApk` exists in the
           # patch and turns the splits off, but it is not used here on purpose.
           #
+          # 0002 also limits the splits to arm64-v8a and armeabi-v7a and turns the universal APK
+          # off. That is not tidiness: `assembleGplayRelease` with four splits plus the universal
+          # one died in `:app:packageGplayRelease` with OutOfMemoryError: Java heap space, with the
+          # runner down to 1.5 GB of 16 GB free. Two outputs, both of which we publish, fit.
+          #
           # `gplay`, not `play`: element-x-android's store flavours are `gplay` and `fdroid`, and
           # only `gplay` links the Firebase push provider (see the dependencies block of
           # app/build.gradle.kts: `gplayImplementation(projects.libraries.pushproviders.firebase)`).
