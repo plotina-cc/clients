@@ -1,9 +1,9 @@
 diff --git a/src/plotina/dfn.ts b/src/plotina/dfn.ts
 new file mode 100644
-index 0000000..8e12d78
+index 0000000..f203cc2
 --- /dev/null
 +++ b/src/plotina/dfn.ts
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,37 @@
 +/*
 +Copyright 2026 New Vector Ltd.
 +
@@ -14,164 +14,31 @@ index 0000000..8e12d78
 +/**
 + * Plotina: DeepFilterNet3 as a LiveKit track processor.
 + *
-+ * The microphone is processed where LiveKit publishes it, not by wrapping
-+ * getUserMedia: a wrapper cannot tell the pre-join preview from the call, and
-+ * LiveKit is free to publish a track it created itself. A processor runs inside
-+ * the publish pipeline, so only real outgoing audio is affected and the model is
-+ * loaded once per track.
++ * This file is only the bridge. The processor itself lives in
++ * /noise/plotina-dfn.js, loaded as a plain script by index.html, so the attach
++ * strategy, the level and the debug badge can be changed by replacing one file
++ * on the edge — no Element Call rebuild, no new release.
 + */
 +
-+const LEVEL_KEY = "plotina.noise.level";
-+const DEFAULT_LEVEL = 70;
++type AttachFn = (track: unknown) => void;
++type EventFn = (source: string, hasTrack: boolean) => void;
 +
-+type PlotinaState = {
-+  status: "idle" | "attaching" | "attached" | "error" | "skipped";
-+  level?: number;
-+  error?: string;
-+  track?: string;
++const w = window as unknown as {
++  __plotinaAttach?: AttachFn;
++  __plotinaEvent?: EventFn;
 +};
 +
-+const state: PlotinaState = { status: "idle" };
-+(window as unknown as { __plotinaDfn?: PlotinaState }).__plotinaDfn = state;
-+
-+// Show "idle" immediately with ?plotina-debug=1: that distinguishes a hook that
-+// never fired from a processor that failed later.
-+setTimeout(renderBadge, 0);
-+
-+function renderBadge(): void {
-+  try {
-+    const debug =
-+      new URLSearchParams(window.location.search).get("plotina-debug") === "1";
-+    if (!debug) return;
-+    let badge = document.getElementById("plotina-dfn-badge");
-+    if (!badge) {
-+      badge = document.createElement("div");
-+      badge.id = "plotina-dfn-badge";
-+      badge.style.cssText = [
-+        "position:fixed",
-+        "left:8px",
-+        "bottom:8px",
-+        "z-index:2147483647",
-+        "background:rgba(0,0,0,.78)",
-+        "color:#fff",
-+        "font:12px/1.35 monospace",
-+        "padding:6px 8px",
-+        "border-radius:6px",
-+        "pointer-events:none",
-+        "white-space:pre-wrap",
-+        "overflow-wrap:anywhere",
-+        "max-width:min(92vw, 560px)",
-+      ].join(";");
-+      document.documentElement.appendChild(badge);
-+    }
-+    badge.textContent = [
-+      "DFN " + state.status,
-+      "level " + (state.level ?? "-"),
-+      state.track ? "track " + state.track : "",
-+      state.error ? "error " + state.error : "",
-+    ]
-+      .filter(Boolean)
-+      .join("\n");
-+  } catch {
-+    // the badge is diagnostics only
++export function attachPlotinaDfn(track: unknown): void {
++  if (typeof w.__plotinaAttach === "function") {
++    w.__plotinaAttach(track);
++  } else {
++    console.warn("[plotina] /noise/plotina-dfn.js is not loaded");
 +  }
 +}
 +
-+function readLevel(): number {
-+  const clamp = (value: number): number =>
-+    Number.isFinite(value)
-+      ? Math.max(0, Math.min(100, Math.round(value)))
-+      : DEFAULT_LEVEL;
-+
-+  try {
-+    const params = new URLSearchParams(window.location.search);
-+    const fromUrl = params.get("plotina-level");
-+    if (fromUrl !== null && fromUrl !== "") return clamp(Number(fromUrl));
-+
-+    const stored = window.localStorage.getItem(LEVEL_KEY);
-+    if (stored !== null && stored !== "") return clamp(Number(stored));
-+  } catch {
-+    // storage can be blocked; fall through to the default
-+  }
-+  return DEFAULT_LEVEL;
-+}
-+
-+/** Called from the publish hook so the badge can tell "event never fired" from
-+ * "event fired but carried no track". */
 +export function notePlotinaEvent(source: string, hasTrack: boolean): void {
-+  state.status = "attaching";
-+  state.error = undefined;
-+  state.track = "event " + source + (hasTrack ? " (track)" : " (no track)");
-+  renderBadge();
-+}
-+
-+type TrackWithProcessor = {
-+  setProcessor?: (processor: unknown) => Promise<void>;
-+  kind?: string;
-+};
-+
-+const attachedTracks = new WeakSet<object>();
-+
-+export async function attachPlotinaDfn(track: unknown): Promise<void> {
-+  const level = readLevel();
-+  state.level = level;
-+  if (level === 0) {
-+    state.status = "skipped";
-+    renderBadge();
-+    return;
-+  }
-+
-+  const candidate = track as TrackWithProcessor;
-+  if (!candidate || typeof candidate.setProcessor !== "function") {
-+    state.status = "error";
-+    state.error = "track has no setProcessor";
-+    renderBadge();
-+    return;
-+  }
-+
-+  if (attachedTracks.has(candidate as object)) {
-+    state.status = "attached";
-+    renderBadge();
-+    return;
-+  }
-+
-+  state.status = "attaching";
-+  renderBadge();
-+
-+  const base = new URL("noise/", window.location.href).href.replace(/\/$/, "");
-+  try {
-+    // The bundle is served next to the app; Vite must not try to resolve it.
-+    const mod = (await import(/* @vite-ignore */ `${base}/vendor/dfn.esm.js`)) as {
-+      DeepFilterNoiseFilterProcessor?: new (options: unknown) => unknown;
-+    };
-+    const Processor = mod.DeepFilterNoiseFilterProcessor;
-+    if (!Processor) {
-+      state.status = "error";
-+      state.error = "processor class missing";
-+      renderBadge();
-+      return;
-+    }
-+
-+    const filter = new Processor({
-+      sampleRate: 48000,
-+      noiseReductionLevel: level,
-+      enabled: true,
-+      assetConfig: { cdnUrl: `${base}/dfn` },
-+    });
-+    await candidate.setProcessor(filter);
-+    attachedTracks.add(candidate as object);
-+    state.status = "attached";
-+    state.track = candidate.kind ?? "audio";
-+    renderBadge();
-+    console.info(
-+      "[plotina] DeepFilterNet3 attached to the microphone track",
-+      level,
-+    );
-+  } catch (e) {
-+    state.status = "error";
-+    state.error = String((e as Error)?.message ?? e).slice(0, 120);
-+    renderBadge();
-+    console.warn("[plotina] DeepFilterNet3 could not attach", e);
++  if (typeof w.__plotinaEvent === "function") {
++    w.__plotinaEvent(source, hasTrack);
 +  }
 +}
 diff --git a/src/state/CallViewModel/localMember/Publisher.ts b/src/state/CallViewModel/localMember/Publisher.ts

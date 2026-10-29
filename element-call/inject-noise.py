@@ -20,6 +20,7 @@ MARKER = 'src="/noise/boot.js"'
 TAGS = (
     "<script>window.__plotinaEc=true;</script>"
     '<script src="/noise/logic.js"></script>'
+    '<script src="/noise/plotina-dfn.js"></script>'
     '<script src="/noise/boot.js"></script>'
 )
 

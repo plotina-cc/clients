@@ -158,7 +158,7 @@ python3 "$HERE/inject-noise.py" --check "$DIST/index.html"
 
 say "copying noise/ into the bundle"
 mkdir -p "$DIST/noise/vendor"
-install -m 0644 "$NOISE/logic.js" "$NOISE/boot.js" "$DIST/noise/"
+install -m 0644 "$NOISE/logic.js" "$NOISE/boot.js" "$NOISE/plotina-dfn.js" "$DIST/noise/"
 install -m 0644 "$NOISE/vendor/dfn.esm.js" "$DIST/noise/vendor/"
 # The vendored module is third-party; its licences travel with it.
 for lic in "$NOISE"/vendor/LICENSE-*; do
