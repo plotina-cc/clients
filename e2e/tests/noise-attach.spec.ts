@@ -27,9 +27,9 @@ test.describe("Element Call + DeepFilterNet3", () => {
   test("the published microphone track reaches status=attached", async ({
     page,
   }, testInfo) => {
-    // Login (up to 180 s including the first sync) + lobby + 60 s for the
-    // processor.
-    test.setTimeout(360_000);
+    // Session restore (up to 120 s including the first sync) + lobby + 60 s
+    // for the processor.
+    test.setTimeout(300_000);
 
     const diag = collectDiagnostics(page);
     const startedAt = Date.now();

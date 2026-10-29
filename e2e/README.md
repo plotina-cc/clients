@@ -47,6 +47,7 @@ password must never be committed, pasted into a command line or put in a
 | `QA_NOISE_PASSWORD` | attach test | Its password. |
 | `E2E_ROOM_ID` | no | Room the account is already joined to; defaults to `helpers/env.ts`. |
 | `E2E_BASE_URL` | no | Defaults to `https://call.plotina.cc`. |
+| `E2E_HOMESERVER` | no | Defaults to `https://plotina.cc`; where the API login goes. |
 
 **Do not run Playwright on golova or on the edge host.** Chromium plus the
 16 MB WASM module and the 8 MB model are the memory-heaviest thing we run, and
@@ -79,13 +80,31 @@ jq -n '{name:"Plotina noise E2E",preset:"private_chat",visibility:"private",
 
 Put the result in `E2E_ROOM_ID` (or replace the default in `helpers/env.ts`).
 
-## What the attach test waits for, and why it can be slow
+## How the test logs in
 
-Element Call's login is not finished when the HTTP request returns:
-`initClient` starts the Matrix client and waits for the first sync to reach
-`PREPARED`. On a cold profile that has taken 15–60 s here, so the helper waits
-up to 180 s for the route to change and fails with the page text if the form
-comes back with an error.
+The helper does a real `m.login.password` against the homeserver with
+`QA_NOISE_USER` / `QA_NOISE_PASSWORD`, then writes the resulting session to
+`localStorage["matrix-auth-store"]` — the entry `ClientContext.tsx` reads on
+every reload — and lets Element Call restore it. It uses the API rather than
+the `/login` form on purpose:
+
+- **The form can hang forever.** Element Call's login promise only resolves
+  after `initClient` sees the first sync reach `PREPARED`
+  (`src/utils/matrix.ts`, `waitForSync`). On a cold profile that step
+  intermittently never finishes: the page keeps long-polling `/sync` and stays
+  on "Logging in…" with the button disabled. It happened twice in four attempts
+  on a workstation (one run hung the whole 180 s we allowed), while the same
+  account logs in through the API in 1.5 s and the app restores the session in
+  12–16 s. That is an upstream defect worth reporting, not something this suite
+  should paper over with a retry.
+- **It is the path users hit anyway**: the restore code is what runs on every
+  reload, and it still initialises Rust crypto, sync and the call.
+- **It keeps the device count stable**: the login passes
+  `device_id=E2EPLAYWRIGHT`, so repeated runs reuse one Matrix device instead of
+  adding one per run (the QA account had six after a few manual attempts).
+
+If the homeserver is ever rate-limiting logins (`M_LIMIT_EXCEEDED`), the helper
+fails immediately with the HTTP body instead of timing out.
 
 `attached` is set by `noise/plotina-dfn.js` only after
 `track.setProcessor(filter)` resolves, and the hook runs from the publisher's

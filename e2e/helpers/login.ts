@@ -1,58 +1,88 @@
 import { expect, type Page } from "@playwright/test";
 
-import { QA_PASSWORD, QA_USER } from "./env";
+import { HOMESERVER, QA_PASSWORD, QA_USER } from "./env";
+
+/** The session object Element Call keeps in localStorage (`ClientContext.tsx`). */
+export interface MatrixSession {
+  user_id: string;
+  device_id: string;
+  access_token: string;
+  passwordlessUser: boolean;
+}
 
 /**
- * Logs in through Element Call's own /login page.
+ * Logs the QA account in against the homeserver and installs the session where
+ * Element Call expects to find it (`matrix-auth-store`), then loads the app.
  *
- * The session is a Matrix one, kept in the origin's storage; after the form
- * submits Element Call navigates back to the app. We wait for the user menu
- * rather than for a URL: `/login` redirects to `/`, but a slow homeserver can
- * leave the page on the spinner for a while.
+ * Why not the /login form: Element Call's login promise only resolves after
+ * `initClient` sees the first sync reach PREPARED (`src/utils/matrix.ts`,
+ * `waitForSync`). On a cold profile that step intermittently never completes —
+ * the client keeps long-polling `/sync` while the form stays on "Logging in…"
+ * forever. Reproduced on a workstation twice in four attempts (one run hung
+ * for the full 180 s); the same account logs in in 1.5 s through the API. The
+ * defect is worth reporting upstream, but it is not what this suite is about,
+ * so the helper uses the API and the app's normal session-restore path, which
+ * every reload already exercises.
+ *
+ * The device id is fixed so repeated runs do not create a new Matrix device
+ * each time (the QA account had six after a few manual attempts).
  */
 export async function login(page: Page): Promise<void> {
   const startedAt = Date.now();
-  await page.goto("/login", { waitUntil: "domcontentloaded" });
 
-  const username = page.getByTestId("login_username");
-  await expect(username).toBeVisible({ timeout: 30_000 });
-
-  await username.fill(QA_USER);
-  await page.getByTestId("login_password").fill(QA_PASSWORD);
-  await page.getByTestId("login_login").click();
-
-  // Element Call's login is not just the HTTP request: `initClient` waits for
-  // the first network sync to reach PREPARED before it resolves, and on a cold
-  // account that can take tens of seconds. So wait for the route to change,
-  // not for the button — but surface a real login error instead of hanging
-  // until the test timeout.
-  await page.waitForFunction(
-    () => {
-      if (location.pathname !== "/login") return true;
-      const button = document.querySelector('[data-testid="login_login"]');
-      return !!button && button.getAttribute("aria-disabled") !== "true";
+  const response = await page.request.post(
+    `${HOMESERVER}/_matrix/client/v3/login`,
+    {
+      headers: { "Content-Type": "application/json" },
+      data: {
+        type: "m.login.password",
+        identifier: { type: "m.id.user", user: QA_USER },
+        password: QA_PASSWORD,
+        device_id: "E2EPLAYWRIGHT",
+        initial_device_display_name: "Element Call E2E (Playwright)",
+      },
+      failOnStatusCode: false,
     },
-    undefined,
-    { timeout: 180_000, polling: 500 },
   );
 
-  if (new URL(page.url()).pathname === "/login") {
-    const body = (await page.locator("body").innerText()).slice(0, 500);
+  if (!response.ok()) {
+    const body = (await response.text()).slice(0, 400);
     throw new Error(
-      `login stayed on /login (${((Date.now() - startedAt) / 1000).toFixed(
-        0,
-      )}s): ${body.replace(/\n+/g, " | ")}`,
+      `Matrix login for ${QA_USER} failed: HTTP ${response.status()} ${body}`,
     );
   }
 
-  // The app also has to render the authenticated shell.
-  await expect(page.getByTestId("usermenu_open")).toBeVisible({
-    timeout: 60_000,
-  });
+  const payload = (await response.json()) as {
+    user_id: string;
+    access_token: string;
+    device_id: string;
+  };
+  const session: MatrixSession = {
+    user_id: payload.user_id,
+    device_id: payload.device_id,
+    access_token: payload.access_token,
+    passwordlessUser: false,
+  };
+
+  await page.addInitScript((value: MatrixSession) => {
+    try {
+      localStorage.setItem("matrix-auth-store", JSON.stringify(value));
+    } catch {
+      /* a cross-origin frame has no access to this origin's storage */
+    }
+  }, session);
+
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+  await expect(
+    page.getByTestId("usermenu_open"),
+    "the app should restore the session and render the authenticated shell",
+  ).toBeVisible({ timeout: 120_000 });
+
   console.log(
-    `[e2e] logged in as ${QA_USER} in ${((Date.now() - startedAt) / 1000).toFixed(
-      1,
-    )}s`,
+    `[e2e] session for ${session.user_id} restored in ${(
+      (Date.now() - startedAt) /
+      1000
+    ).toFixed(1)}s`,
   );
 }
 

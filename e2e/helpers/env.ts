@@ -16,6 +16,9 @@ function value(name: string): string | undefined {
 
 export const BASE_URL = value("E2E_BASE_URL") ?? "https://call.plotina.cc";
 
+/** Homeserver the QA account lives on; the app's config.json points here too. */
+export const HOMESERVER = value("E2E_HOMESERVER") ?? "https://plotina.cc";
+
 export const QA_USER = value("QA_NOISE_USER") ?? "";
 export const QA_PASSWORD = value("QA_NOISE_PASSWORD") ?? "";
 
