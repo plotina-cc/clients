@@ -104,7 +104,7 @@ jobs:
           echo "uploading symbols for $release"
           /tmp/sentry-cli releases new "$release"
           /tmp/sentry-cli sourcemaps upload --release "$release" \
-            --url-prefix "~/assets" dist/sourcemaps
+            --url-prefix "~/assets" dist/sourcemaps/assets
 
       - name: Skip the source map upload
         if: ${{ env.SENTRY_AUTH_TOKEN == '' }}

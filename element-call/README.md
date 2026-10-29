@@ -53,6 +53,28 @@ element-call-plotina/
 The tar is written with `--sort=name --mtime=@0` on GNU tar, so a rebuild of the same inputs is
 byte-identical and comparable with the published asset.
 
+## Error reporting
+
+`patches/0002-plotina-sentry.patch` initialises `@sentry/react` in `src/main.tsx`, before the first
+render and before `config.json` is fetched, so a crash during startup is still reported. The DSN is
+read from `VITE_SENTRY_DSN` at build time and the release from `VITE_SENTRY_RELEASE`; both are
+optional, and an empty DSN turns reporting off without changing anything else. Nothing is traced
+(`tracesSampleRate: 0`) and the environment is always `production`.
+
+```
+VITE_SENTRY_DSN=https://<key>@sentry.plotina.cc/1 \
+VITE_SENTRY_RELEASE=element-call@<tag> \
+  element-call/build.sh --mode source --maps-out dist/sourcemaps
+```
+
+`--maps-out` copies each source map and the script it describes to `dist/sourcemaps` and removes the
+maps from the bundle, so the published tarball never ships the TypeScript source. With
+`--sentry-cli /path/to/sentry-cli` the debug ids are injected first, which is what pairs an event
+with its map. The workflow does the upload (`releases new`, then `sourcemaps upload --url-prefix
+"~/assets" dist/sourcemaps/assets`) and skips it with a notice when `SENTRY_AUTH_TOKEN` is not set.
+Source maps for `v0.26.1-plotina-call.10` are in the `web-clients` project; releases are listed under
+`element-call@<tag>` in the GlitchTip UI.
+
 ## How the wrapper gets in
 
 `inject-noise.py` inserts, immediately after `<head>` and ahead of Vite's `<script type="module">`:
