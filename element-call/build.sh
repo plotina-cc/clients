@@ -136,8 +136,10 @@ build_from_source() {
   )
 
   [ -f "$WORK/src/dist/index.html" ] || die "the build produced no dist/index.html"
-  grep -rq "deepfilternet3-noise-filter" "$WORK/src/dist/assets" \
-    || die "the DeepFilterNet3 track processor is not in the bundle"
+  # The processor module itself is loaded at runtime from /noise/vendor, so the
+  # bundle can only be checked for our glue code.
+  grep -rq "DeepFilterNet3 attached to the microphone track" "$WORK/src/dist/assets" \
+    || die "the Plotina track-processor glue is not in the bundle"
   mv "$WORK/src/dist" "$WORK/dist"
 }
 
