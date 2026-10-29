@@ -83,14 +83,55 @@
   /* ---------------------------------------------------------------- audio */
 
   var modulePromise = null;
+  var moduleReady = false;
   function loadModule() {
     if (!modulePromise) {
-      modulePromise = import(MODULE_URL).catch(function (e) {
-        modulePromise = null;
-        throw e;
-      });
+      modulePromise = import(MODULE_URL).then(
+        function (mod) {
+          moduleReady = true;
+          return mod;
+        },
+        function (e) {
+          modulePromise = null;
+          throw e;
+        },
+      );
     }
     return modulePromise;
+  }
+
+  /* Warm the module, both assets and one initialised Core as soon as the page
+     loads. Element Call asks for the microphone on the first unmute and gives
+     up quickly: downloading 24 MB and compiling the model inside that promise
+     is what made the button spin and then silently fail. */
+  var warmCore = null;
+  var warmStarted = false;
+  function warmUp() {
+    if (warmStarted) return;
+    warmStarted = true;
+    try {
+      fetch(ASSET_BASE + "/v3/pkg/df_bg.wasm").catch(function () {});
+      fetch(ASSET_BASE + "/v3/models/DeepFilterNet3_onnx.tar.gz").catch(function () {});
+    } catch (e) {
+      /* best effort */
+    }
+    loadModule()
+      .then(function (mod) {
+        var Core = mod.DeepFilterNet3Core || (mod.default && mod.default.DeepFilterNet3Core);
+        if (!Core) return null;
+        var core = new Core({
+          sampleRate: 48000,
+          noiseReductionLevel: level,
+          assetConfig: { cdnUrl: ASSET_BASE },
+        });
+        return core.initialize().then(function () {
+          warmCore = core;
+          window.__plotinaNoiseCoreReady = true;
+        });
+      })
+      .catch(function (e) {
+        log("warm-up failed", e && e.message ? e.message : e);
+      });
   }
 
   async function attachProcessor(stream, videoTracks) {
@@ -100,12 +141,16 @@
 
     var ctx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
     try {
-      var core = new Core({
-        sampleRate: 48000,
-        noiseReductionLevel: level,
-        assetConfig: { cdnUrl: ASSET_BASE },
-      });
-      await core.initialize();
+      var core = warmCore;
+      warmCore = null;
+      if (!core) {
+        core = new Core({
+          sampleRate: 48000,
+          noiseReductionLevel: level,
+          assetConfig: { cdnUrl: ASSET_BASE },
+        });
+        await core.initialize();
+      }
 
       var node = await core.createAudioWorkletNode(ctx);
       var source = ctx.createMediaStreamSource(stream);
@@ -150,7 +195,7 @@
   var md = navigator.mediaDevices;
   if (md && typeof md.getUserMedia === "function") {
     var original = md.getUserMedia.bind(md);
-    var stats = { callRequests: 0, otherAudioRequests: 0, processed: 0, failed: 0 };
+    var stats = { callRequests: 0, otherAudioRequests: 0, processed: 0, failed: 0, skipped: 0 };
 
     md.getUserMedia = function (constraints) {
       var audio = constraints && constraints.audio;
@@ -163,6 +208,14 @@
         return original(constraints);
       }
       stats.callRequests += 1;
+      if (!warmCore) {
+        /* Never make the caller wait for a model that is still compiling: hand
+           back working audio now, keep warming, and process the next
+           acquisition. */
+        stats.skipped += 1;
+        warmUp();
+        return original(constraints);
+      }
 
       return original(L.rawAudioConstraints(constraints)).then(
         function (stream) {
@@ -326,6 +379,8 @@
   } else {
     scheduleInject();
   }
+
+  warmUp();
 
   /* -------------------------------------------------------------- warm-up */
 
