@@ -48,6 +48,7 @@ password must never be committed, pasted into a command line or put in a
 | `E2E_ROOM_ID` | no | Room the account is already joined to; defaults to `helpers/env.ts`. |
 | `E2E_BASE_URL` | no | Defaults to `https://call.plotina.cc`. |
 | `E2E_HOMESERVER` | no | Defaults to `https://plotina.cc`; where the API login goes. |
+| `E2E_DEVICE_ID` | no | Matrix device id for the login. One per runner: `E2EPW-ci` here, `E2EPW-laptop` on a workstation. |
 
 **Do not run Playwright on golova or on the edge host.** Chromium plus the
 16 MB WASM module and the 8 MB model are the memory-heaviest thing we run, and
@@ -99,9 +100,14 @@ the `/login` form on purpose:
   should paper over with a retry.
 - **It is the path users hit anyway**: the restore code is what runs on every
   reload, and it still initialises Rust crypto, sync and the call.
-- **It keeps the device count stable**: the login passes
-  `device_id=E2EPLAYWRIGHT`, so repeated runs reuse one Matrix device instead of
-  adding one per run (the QA account had six after a few manual attempts).
+- **It keeps the device count stable**: the login passes a fixed
+  `device_id` (`E2E_DEVICE_ID`), so repeated runs reuse one Matrix device
+  instead of adding one per run (the QA account had six after a few manual
+  attempts). The id must differ per runner, because a login with an existing
+  device id revokes that device's previous access token — this Synapse answers
+  `401` on the old token immediately. Two concurrent runs sharing an id killed
+  each other's session during the first CI attempt here; `E2EPW-ci` and
+  `E2EPW-laptop` keep CI and a workstation out of each other's way.
 
 If the homeserver is ever rate-limiting logins (`M_LIMIT_EXCEEDED`), the helper
 fails immediately with the HTTP body instead of timing out.

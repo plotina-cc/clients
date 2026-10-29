@@ -19,7 +19,7 @@ export default defineConfig({
   // One joined call at a time: two browsers publishing into the same room
   // make the attach event harder to attribute.
   workers: 1,
-  retries: process.env.CI ? 1 : 0,
+  retries: 0,
   forbidOnly: !!process.env.CI,
   reporter: [
     ["list"],

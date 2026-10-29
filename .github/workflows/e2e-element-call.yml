@@ -70,6 +70,7 @@ jobs:
           QA_NOISE_USER: ${{ secrets.QA_NOISE_USER }}
           QA_NOISE_PASSWORD: ${{ secrets.QA_NOISE_PASSWORD }}
           E2E_ROOM_ID: ${{ vars.E2E_ROOM_ID || secrets.E2E_ROOM_ID }}
+          E2E_DEVICE_ID: E2EPW-ci
           E2E_BASE_URL: https://call.plotina.cc
         run: npx playwright test
 

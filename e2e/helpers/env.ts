@@ -23,6 +23,16 @@ export const QA_USER = value("QA_NOISE_USER") ?? "";
 export const QA_PASSWORD = value("QA_NOISE_PASSWORD") ?? "";
 
 /**
+ * Matrix device id used for the login.
+ *
+ * Logging in with a device id that already exists invalidates the previous
+ * access token for it (verified: the second login makes the first token answer
+ * 401), so two runs that share a device id cannot be alive at the same time.
+ * CI uses `E2EPW-ci`, a workstation `E2EPW-laptop`; keep one id per runner.
+ */
+export const DEVICE_ID = value("E2E_DEVICE_ID") ?? "E2EPW";
+
+/**
  * Test room (`Plotina noise E2E`, join rule: invite) created by the QA account
  * on plotina.cc. Only @qa-noise:plotina.cc is joined to it.
  */

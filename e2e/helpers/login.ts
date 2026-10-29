@@ -1,6 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 
-import { HOMESERVER, QA_PASSWORD, QA_USER } from "./env";
+import { DEVICE_ID, HOMESERVER, QA_PASSWORD, QA_USER } from "./env";
 
 /** The session object Element Call keeps in localStorage (`ClientContext.tsx`). */
 export interface MatrixSession {
@@ -24,8 +24,10 @@ export interface MatrixSession {
  * so the helper uses the API and the app's normal session-restore path, which
  * every reload already exercises.
  *
- * The device id is fixed so repeated runs do not create a new Matrix device
- * each time (the QA account had six after a few manual attempts).
+ * The device id is fixed per runner (`E2E_DEVICE_ID`) so repeated runs do not
+ * create a new Matrix device each time, while a CI run and a workstation run
+ * do not invalidate each other's token (a login with an existing device id
+ * revokes that device's previous access token).
  */
 export async function login(page: Page): Promise<void> {
   const startedAt = Date.now();
@@ -38,7 +40,7 @@ export async function login(page: Page): Promise<void> {
         type: "m.login.password",
         identifier: { type: "m.id.user", user: QA_USER },
         password: QA_PASSWORD,
-        device_id: "E2EPLAYWRIGHT",
+        device_id: DEVICE_ID,
         initial_device_display_name: "Element Call E2E (Playwright)",
       },
       failOnStatusCode: false,
