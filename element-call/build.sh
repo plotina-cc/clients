@@ -115,6 +115,13 @@ build_from_source() {
   say "cloning $EC_REPO at $TAG"
   git clone --depth 1 --branch "$TAG" "$EC_REPO" "$WORK/src"
 
+  if compgen -G "$HERE/patches/*.patch" > /dev/null; then
+    say "applying plotina patches"
+    for patch in "$HERE"/patches/*.patch; do
+      ( cd "$WORK/src" && git apply --verbose "$patch" )
+    done
+  fi
+
   if ! command -v pnpm >/dev/null; then
     say "activating pnpm@$PNPM_VERSION through corepack"
     corepack enable
@@ -129,6 +136,8 @@ build_from_source() {
   )
 
   [ -f "$WORK/src/dist/index.html" ] || die "the build produced no dist/index.html"
+  grep -rq "deepfilternet3-noise-filter" "$WORK/src/dist/assets" \
+    || die "the DeepFilterNet3 track processor is not in the bundle"
   mv "$WORK/src/dist" "$WORK/dist"
 }
 

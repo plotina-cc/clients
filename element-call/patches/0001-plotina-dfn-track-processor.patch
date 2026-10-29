@@ -1,0 +1,104 @@
+diff --git a/src/plotina/dfn.ts b/src/plotina/dfn.ts
+new file mode 100644
+index 0000000..f4e7631
+--- /dev/null
++++ b/src/plotina/dfn.ts
+@@ -0,0 +1,72 @@
++/*
++Copyright 2026 New Vector Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE in the repository root for full details.
++*/
++
++/**
++ * Plotina: DeepFilterNet3 as a LiveKit track processor.
++ *
++ * The microphone is processed where LiveKit publishes it, not by wrapping
++ * getUserMedia: a wrapper cannot tell the pre-join preview from the call, and
++ * LiveKit is free to publish a track it created itself. A processor runs inside
++ * the publish pipeline, so only real outgoing audio is affected and the model is
++ * loaded once per track.
++ */
++
++const LEVEL_KEY = "plotina.noise.level";
++const DEFAULT_LEVEL = 70;
++
++function readLevel(): number {
++  const clamp = (value: number): number =>
++    Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : DEFAULT_LEVEL;
++
++  try {
++    const params = new URLSearchParams(window.location.search);
++    const fromUrl = params.get("plotina-level");
++    if (fromUrl !== null && fromUrl !== "") return clamp(Number(fromUrl));
++
++    const stored = window.localStorage.getItem(LEVEL_KEY);
++    if (stored !== null && stored !== "") return clamp(Number(stored));
++  } catch {
++    // storage can be blocked; fall through to the default
++  }
++  return DEFAULT_LEVEL;
++}
++
++type TrackWithProcessor = {
++  setProcessor?: (processor: unknown) => Promise<void>;
++};
++
++export async function attachPlotinaDfn(track: unknown): Promise<void> {
++  const level = readLevel();
++  if (level === 0) return;
++
++  const candidate = track as TrackWithProcessor;
++  if (!candidate || typeof candidate.setProcessor !== "function") return;
++
++  const base = new URL("noise/", window.location.href).href.replace(/\/$/, "");
++  try {
++    // The bundle is served next to the app; Vite must not try to resolve it.
++    const mod = (await import(/* @vite-ignore */ `${base}/vendor/dfn.esm.js`)) as {
++      DeepFilterNoiseFilterProcessor?: new (options: unknown) => unknown;
++    };
++    const Processor = mod.DeepFilterNoiseFilterProcessor;
++    if (!Processor) {
++      console.warn("[plotina] DeepFilterNoiseFilterProcessor is missing");
++      return;
++    }
++
++    const filter = new Processor({
++      sampleRate: 48000,
++      noiseReductionLevel: level,
++      enabled: true,
++      assetConfig: { cdnUrl: `${base}/dfn` },
++    });
++    await candidate.setProcessor(filter);
++    console.info("[plotina] DeepFilterNet3 attached to the microphone track", level);
++  } catch (e) {
++    console.warn("[plotina] DeepFilterNet3 could not attach to the microphone", e);
++  }
++}
+diff --git a/src/state/CallViewModel/localMember/Publisher.ts b/src/state/CallViewModel/localMember/Publisher.ts
+index 5353a98..822d699 100644
+--- a/src/state/CallViewModel/localMember/Publisher.ts
++++ b/src/state/CallViewModel/localMember/Publisher.ts
+@@ -13,6 +13,8 @@ import {
+   type Room as LivekitRoom,
+   Track,
+ } from "livekit-client";
++
++import { attachPlotinaDfn } from "../../../plotina/dfn";
+ import {
+   map,
+   NEVER,
+@@ -120,6 +122,12 @@ export class Publisher {
+       });
+     }
+     if (localTrackPublication.source === Track.Source.Microphone) {
++      // Plotina: attach DeepFilterNet3 where LiveKit publishes the microphone.
++      // Doing it here covers every path that creates a track (toggle, join,
++      // device change) and never touches the pre-join preview.
++      if (localTrackPublication.track) {
++        void attachPlotinaDfn(localTrackPublication.track);
++      }
+       const muteState = this.muteStates.audio;
+       // skip this if a sync is in progress: enabled$ still reflects the old
+       // state while the handler is mid-flight, so the handler itself will apply
