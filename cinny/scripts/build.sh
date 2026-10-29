@@ -25,13 +25,42 @@ git fetch --depth 1 origin "refs/tags/$TAG:refs/tags/$TAG" 2>/dev/null || true
 git checkout --quiet "$TAG"
 git submodule update --init --recursive --depth 1
 
+# The name that groups events in GlitchTip; it must be the same string CI
+# uploads the source maps for. At a tag that is the tag itself, otherwise a
+# local name that is easy to filter out in the dashboard.
+SENTRY_RELEASE="${VITE_SENTRY_RELEASE:-cinny@$(git -C "$ROOT" describe --tags --exact-match 2>/dev/null || printf '%s-local' "$TAG")}"
+
 echo "==> noise assets"
 python3 "$ROOT/scripts/fetch-noise.py"
 
-echo "==> web build"
+echo "==> sentry patch ($SENTRY_RELEASE)"
 cd cinny
+PATCH="$ROOT/patches/0001-plotina-sentry.patch"
+if git apply --check "$PATCH" 2>/dev/null; then
+  git apply "$PATCH"
+elif git apply -R --check "$PATCH" 2>/dev/null; then
+  echo "already applied"
+else
+  echo "build.sh: $PATCH does not apply; upstream src/index.tsx or vite.config.js changed" >&2
+  exit 1
+fi
+
+echo "==> web build"
 [ -d node_modules ] || npm ci
-npm run build
+# @sentry/browser is not in upstream's package.json on purpose: --no-save
+# leaves both package.json and package-lock.json untouched, and letting npm
+# read the lock file keeps transitive pins like @swc/core intact (a newer
+# @swc/core breaks vite-plugin-top-level-await).
+npm install --no-save --no-audit --no-fund "@sentry/browser@${SENTRY_SDK_VERSION:-10.27.0}"
+VITE_SENTRY_DSN="${VITE_SENTRY_DSN:-}" VITE_SENTRY_RELEASE="$SENTRY_RELEASE" npm run build
+
+# Maps are stripped before the dist goes into a Tauri binary or onto the edge.
+echo "==> source maps"
+CLI=()
+if [ -n "${SENTRY_CLI:-}" ]; then CLI=(--sentry-cli "$SENTRY_CLI"); fi
+python3 "$ROOT/scripts/sentry-sourcemaps.py" --dist dist \
+  --out "${MAPS_OUT:-$WORK/sourcemaps}" --release "$SENTRY_RELEASE" \
+  "${CLI[@]+"${CLI[@]}"}"
 
 echo "==> patch"
 cd ..

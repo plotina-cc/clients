@@ -1,0 +1,79 @@
+diff --git a/src/index.tsx b/src/index.tsx
+index 6cc0ca3..d933380 100644
+--- a/src/index.tsx
++++ b/src/index.tsx
+@@ -17,9 +17,15 @@ import App from './app/pages/App';
+ import './app/i18n';
+ import { pushSessionToSW } from './sw-session';
+ import { getFallbackSession } from './app/state/sessions';
++import { initPlotinaSentry } from './plotina/sentry';
+ 
+ document.body.classList.add(configClass, varsClass);
+ 
++// Plotina: before React mounts, so a failure in the first render, in the
++// config fetch or in the service-worker registration is reported. A no-op
++// when the build has no VITE_SENTRY_DSN.
++initPlotinaSentry();
++
+ // Register Service Worker
+ if ('serviceWorker' in navigator) {
+   const swUrl =
+diff --git a/src/plotina/sentry.ts b/src/plotina/sentry.ts
+new file mode 100644
+index 0000000..2d81f73
+--- /dev/null
++++ b/src/plotina/sentry.ts
+@@ -0,0 +1,37 @@
++import * as Sentry from '@sentry/browser';
++
++/**
++ * Plotina: error reporting for the Cinny bundle served at cinny.plotina.cc and
++ * shipped inside Plotina Desktop.
++ *
++ * Upstream Cinny has no error reporting of its own -- there is no @sentry
++ * dependency and no `sentry` key in config.json -- so this module is the
++ * integration point and src/index.tsx calls it before the first render. Both
++ * values come from the build environment:
++ *
++ *   VITE_SENTRY_DSN      GlitchTip DSN. Empty (the default for `npm start` and
++ *                        for a plain fork) turns reporting off completely.
++ *   VITE_SENTRY_RELEASE  cinny@<version+tag>; groups events in GlitchTip.
++ *
++ * Errors only: no tracing, no PII, and no breadcrumbs or HTTP context. A
++ * Matrix client's console output and URLs carry room, user and event ids, so
++ * the two default integrations that collect them are removed deliberately.
++ */
++const dsn = String(import.meta.env.VITE_SENTRY_DSN ?? '').trim();
++
++export function initPlotinaSentry(): void {
++  if (dsn === '') return;
++
++  Sentry.init({
++    dsn,
++    release: String(import.meta.env.VITE_SENTRY_RELEASE ?? '').trim() || 'cinny@dev',
++    environment: 'production',
++    tracesSampleRate: 0,
++    sendDefaultPii: false,
++    integrations: (defaults) =>
++      defaults.filter(({ name }) => name !== 'Breadcrumbs' && name !== 'HttpContext'),
++    initialScope: {
++      tags: { client: 'cinny' },
++    },
++  });
++}
+diff --git a/vite.config.js b/vite.config.js
+index a5af94d..e4bf4c3 100644
+--- a/vite.config.js
++++ b/vite.config.js
+@@ -129,7 +129,10 @@ export default defineConfig({
+   },
+   build: {
+     outDir: 'dist',
+-    sourcemap: true,
++    // Hidden maps: the Sentry step uploads them to GlitchTip and removes
++    // them from the published dist, so the served JavaScript carries no
++    // sourceMappingURL pointing at a file that is not there.
++    sourcemap: 'hidden',
+     copyPublicDir: false,
+     rollupOptions: {
+       plugins: [inject({ Buffer: ['buffer', 'Buffer'] })],

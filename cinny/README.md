@@ -53,6 +53,59 @@ General shows the noise slider at the top with the default level 60
 counts `callRequests`, `otherAudioRequests`, `processed` and `failed` — that is
 how an upstream change in the constraint shape shows up.
 
+## Error reporting
+
+Upstream Cinny has no Sentry support of its own: no `@sentry` dependency, no
+`sentry` key in `config.json`, nothing in the Tauri shell. The integration is
+therefore a patch — `patches/0001-plotina-sentry.patch` adds
+`src/plotina/sentry.ts`, calls it from `src/index.tsx` before the first render,
+and switches Vite to hidden source maps. `scripts/build.sh` and the CI workflow
+apply that same patch and both fail loudly if a future upstream tag moves
+`src/index.tsx` or the `build` block of `vite.config.js`.
+
+The DSN comes from `VITE_SENTRY_DSN` and the release from
+`VITE_SENTRY_RELEASE`, both read at build time. They are optional: an empty DSN
+turns reporting off and changes nothing else, which is what `npm start` and a
+plain fork get. Only errors are sent — no tracing, no PII, and no breadcrumbs or
+HTTP context, because a Matrix client's console output and URLs carry room, user
+and event identifiers.
+
+```bash
+VITE_SENTRY_DSN="https://<key>@sentry.plotina.cc/1" \
+VITE_SENTRY_RELEASE="cinny@v4.12.8-plotina-cinny.4" \
+  scripts/build.sh
+```
+
+The release is `cinny@<version+tag>` (`cinny@v4.12.8-plotina-cinny.4`);
+`build.sh` takes the checked-out tag and falls back to
+`cinny@<upstream tag>-local`. Events land in the `web-clients` project with
+environment `production` and the tag `client: cinny`. The web bundle on the edge
+must be built with the same `VITE_SENTRY_RELEASE` as the tag, otherwise its
+events will not match the uploaded maps.
+
+`scripts/sentry-sourcemaps.py` copies the app bundle's maps — everything under
+`dist/assets` plus the root service worker — and the scripts they describe to
+`$WORK/sourcemaps`, then removes the maps from `dist`, so neither the
+installers nor `/srv/cinny` ship the TypeScript source. `dist/public` is left
+alone: it holds packages we do not build (the embedded Element Call app, the
+pdf.js worker) and their symbols belong to whoever builds them. CI injects
+debug ids with sentry-cli and uploads that copy:
+
+```bash
+sentry-cli releases new "$release"
+sentry-cli sourcemaps upload --release "$release" --url-prefix "~" "$maps"
+```
+
+The upload currently answers 403: `https://sentry.plotina.cc` exposes only
+`/relay/1`, and `/api/0/*` has to be proxied by the relay (separate change), so
+the workflow step is non-fatal. Events themselves already reach GlitchTip
+through the relay.
+
+Do **not** also inject a shell-level Sentry script (such as a vendored
+`/noise/vendor/sentry-global.js`) into `index.html`: the bundle reports for
+itself, and a second `Sentry.init` would replace this client and lose the
+release and the source-map pairing.
+
 ## Cinny Desktop
 
 ```bash
