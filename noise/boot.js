@@ -58,7 +58,14 @@
     }
   }
 
+  /* Element Call marks its page: the microphone there is processed by the
+     LiveKit track processor, and a second wrapper would process it twice. */
+  var CALL_APP = window.__plotinaEc === true;
+
   var level = readLevel();
+  // ?plotina-level=0..100 overrides the stored level for this page load.
+  var qLevel = /[?&]plotina-level=(\d{1,3})\b/.exec(location.search);
+  if (qLevel) level = L.clampLevel(qLevel[1]);
   var instances = new Set();
 
   function setLevel(v, persist) {
@@ -100,14 +107,19 @@
     return modulePromise;
   }
 
-  /* Warm the module, both assets and one initialised Core as soon as the page
-     loads. Element Call asks for the microphone on the first unmute and gives
-     up quickly: downloading 24 MB and compiling the model inside that promise
-     is what made the button spin and then silently fail. */
-  var warmCore = null;
+  /* Two initialised cores are kept ready. Element Call asks for the microphone
+     once on the pre-join screen and again when the call starts; with a single
+     core the preview consumed it and the call fell back to raw audio. */
+  var WARM_TARGET = 2;
+  var warmPool = [];
+  var warmPromise = null;
+  var warmInFlight = false;
   var warmStarted = false;
-  function warmUp() {
-    if (warmStarted) return;
+  var warmError = null;
+
+  function startWarm() {
+    if (warmInFlight || warmPool.length >= WARM_TARGET) return;
+    warmInFlight = true;
     warmStarted = true;
     try {
       fetch(ASSET_BASE + "/v3/pkg/df_bg.wasm").catch(function () {});
@@ -115,23 +127,43 @@
     } catch (e) {
       /* best effort */
     }
-    loadModule()
+    warmPromise = loadModule()
       .then(function (mod) {
         var Core = mod.DeepFilterNet3Core || (mod.default && mod.default.DeepFilterNet3Core);
-        if (!Core) return null;
+        if (!Core) throw new Error("DeepFilterNet3Core is not exported");
         var core = new Core({
           sampleRate: 48000,
           noiseReductionLevel: level,
           assetConfig: { cdnUrl: ASSET_BASE },
         });
         return core.initialize().then(function () {
-          warmCore = core;
-          window.__plotinaNoiseCoreReady = true;
+          return core;
         });
       })
+      .then(function (core) {
+        warmPool.push(core);
+        window.__plotinaNoiseCoreReady = true;
+      })
       .catch(function (e) {
-        log("warm-up failed", e && e.message ? e.message : e);
+        warmError = (e && e.message ? e.message : String(e)) || "unknown";
+        log("warm-up failed", warmError);
+      })
+      .then(function () {
+        warmInFlight = false;
+        warmPromise = null;
+        if (warmPool.length < WARM_TARGET) startWarm();
       });
+  }
+
+  function warmUp() {
+    startWarm();
+  }
+
+  /* Take one ready core and immediately start refilling the pool. */
+  function takeCore() {
+    var core = warmPool.shift() || null;
+    if (core) startWarm();
+    return core;
   }
 
   async function attachProcessor(stream, videoTracks) {
@@ -141,8 +173,7 @@
 
     var ctx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
     try {
-      var core = warmCore;
-      warmCore = null;
+      var core = takeCore();
       if (!core) {
         core = new Core({
           sampleRate: 48000,
@@ -157,6 +188,11 @@
       var dest = ctx.createMediaStreamDestination();
       source.connect(node);
       node.connect(dest);
+      // Diagnostic: ?plotina-mute=1 publishes silence. If the far side still
+      // hears the microphone, LiveKit is not using the track we returned.
+      if (/[?&]plotina-mute=1\b/.test(location.search)) {
+        try { node.disconnect(); } catch (e) {}
+      }
 
       var rawTrack = stream.getAudioTracks()[0];
       var cleanTrack = dest.stream.getAudioTracks()[0];
@@ -195,9 +231,11 @@
   var md = navigator.mediaDevices;
   if (md && typeof md.getUserMedia === "function") {
     var original = md.getUserMedia.bind(md);
-    var stats = { callRequests: 0, otherAudioRequests: 0, processed: 0, failed: 0, skipped: 0 };
+    md.__plotinaOriginal = original;
+    var stats = { callRequests: 0, otherAudioRequests: 0, processed: 0, failed: 0, skipped: 0, retried: 0, last: "-" };
 
-    md.getUserMedia = function (constraints) {
+    md.getUserMedia = async function (constraints) {
+      if (CALL_APP) return original(constraints);
       var audio = constraints && constraints.audio;
       if (audio && typeof audio === "object" && typeof audio.noiseSuppression !== "boolean") {
         /* Voice messages and anything else that is not Element Call. Counted so
@@ -208,13 +246,27 @@
         return original(constraints);
       }
       stats.callRequests += 1;
-      if (!warmCore) {
-        /* Never make the caller wait for a model that is still compiling: hand
-           back working audio now, keep warming, and process the next
-           acquisition. */
-        stats.skipped += 1;
+      stats.last = "request";
+      if (!warmPool.length) {
+        /* The pre-join mic preview consumes the warm core, and the join request
+           arrives milliseconds later. Wait for the refill briefly instead of
+           handing back raw audio; only give up if it really is not coming. */
         warmUp();
-        return original(constraints);
+        if (warmPromise) {
+          var ready = await Promise.race([
+            warmPromise.then(function () { return true; }, function () { return false; }),
+            new Promise(function (resolve) { setTimeout(function () { resolve(false); }, 3000); }),
+          ]);
+          if (!ready || !warmPool.length) {
+            stats.skipped += 1;
+            stats.last = ready ? "skipped (warm-up failed)" : "skipped (core not ready in 3s)";
+            return original(constraints);
+          }
+        } else {
+          stats.skipped += 1;
+          stats.last = "skipped (no warm-up)";
+          return original(constraints);
+        }
       }
 
       return original(L.rawAudioConstraints(constraints)).then(
@@ -223,17 +275,21 @@
           return attachProcessor(stream, video).then(
             function (processed) {
               stats.processed += 1;
+              stats.last = "processed ok";
               return processed;
             },
             function (e) {
               stats.failed += 1;
+              stats.last = "processing failed: " + (e && (e.name || e.message) ? (e.name ? e.name + " " : "") + (e.message || "") : String(e)).slice(0, 90);
               log("falling back to browser audio:", e && e.message ? e.message : e);
               return stream;
             },
           );
         },
-        function () {
+        function (err) {
           /* Some browsers reject unsupported constraint values; retry as asked. */
+          stats.retried += 1;
+          stats.last = "raw request rejected: " + String((err && (err.name + " " + err.message)) || err).slice(0, 90);
           return original(constraints);
         },
       );
@@ -395,6 +451,34 @@
     } catch (e) {
       /* warming up is best-effort */
     }
+  }
+
+  /* Opt-in on-screen counters: https://call.plotina.cc/room?plotina-debug=1 */
+  if (/[?&]plotina-debug=1\b/.test(location.search)) {
+    var badge = document.createElement("div");
+    badge.style.cssText = [
+      "position:fixed", "left:8px", "bottom:8px", "z-index:2147483647",
+      "background:rgba(0,0,0,.78)", "color:#fff", "font:12px/1.35 monospace",
+      "padding:6px 8px", "border-radius:6px", "pointer-events:none",
+      "white-space:pre",
+    ].join(";");
+    document.documentElement.appendChild(badge);
+    setInterval(function () {
+      var st = window.__plotinaNoiseStats || {};
+      var state = (window.__plotinaNoiseCoreReady || warmPool.length)
+        ? "ready"
+        : (warmError ? "error: " + warmError : (warmStarted ? "warming" : "not started"));
+      badge.textContent = [
+        "DFN " + state,
+        "calls " + (st.callRequests || 0),
+        "processed " + (st.processed || 0),
+        "skipped " + (st.skipped || 0),
+        "retried " + (st.retried || 0),
+        "failed " + (st.failed || 0),
+        "pool " + warmPool.length + "/" + WARM_TARGET,
+        "last: " + (st.last || "-"),
+      ].join("\n");
+    }, 1000);
   }
 
   window.__plotinaNoise = {
