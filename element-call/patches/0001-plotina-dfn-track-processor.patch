@@ -1,9 +1,9 @@
 diff --git a/src/plotina/dfn.ts b/src/plotina/dfn.ts
 new file mode 100644
-index 0000000..0472041
+index 0000000..8e12d78
 --- /dev/null
 +++ b/src/plotina/dfn.ts
-@@ -0,0 +1,152 @@
+@@ -0,0 +1,170 @@
 +/*
 +Copyright 2026 New Vector Ltd.
 +
@@ -96,10 +96,21 @@ index 0000000..0472041
 +  return DEFAULT_LEVEL;
 +}
 +
++/** Called from the publish hook so the badge can tell "event never fired" from
++ * "event fired but carried no track". */
++export function notePlotinaEvent(source: string, hasTrack: boolean): void {
++  state.status = "attaching";
++  state.error = undefined;
++  state.track = "event " + source + (hasTrack ? " (track)" : " (no track)");
++  renderBadge();
++}
++
 +type TrackWithProcessor = {
 +  setProcessor?: (processor: unknown) => Promise<void>;
 +  kind?: string;
 +};
++
++const attachedTracks = new WeakSet<object>();
 +
 +export async function attachPlotinaDfn(track: unknown): Promise<void> {
 +  const level = readLevel();
@@ -114,6 +125,12 @@ index 0000000..0472041
 +  if (!candidate || typeof candidate.setProcessor !== "function") {
 +    state.status = "error";
 +    state.error = "track has no setProcessor";
++    renderBadge();
++    return;
++  }
++
++  if (attachedTracks.has(candidate as object)) {
++    state.status = "attached";
 +    renderBadge();
 +    return;
 +  }
@@ -142,6 +159,7 @@ index 0000000..0472041
 +      assetConfig: { cdnUrl: `${base}/dfn` },
 +    });
 +    await candidate.setProcessor(filter);
++    attachedTracks.add(candidate as object);
 +    state.status = "attached";
 +    state.track = candidate.kind ?? "audio";
 +    renderBadge();
@@ -157,7 +175,7 @@ index 0000000..0472041
 +  }
 +}
 diff --git a/src/state/CallViewModel/localMember/Publisher.ts b/src/state/CallViewModel/localMember/Publisher.ts
-index 5353a98..822d699 100644
+index 5353a98..11f1b78 100644
 --- a/src/state/CallViewModel/localMember/Publisher.ts
 +++ b/src/state/CallViewModel/localMember/Publisher.ts
 @@ -13,6 +13,8 @@ import {
@@ -165,20 +183,45 @@ index 5353a98..822d699 100644
    Track,
  } from "livekit-client";
 +
-+import { attachPlotinaDfn } from "../../../plotina/dfn";
++import { attachPlotinaDfn, notePlotinaEvent } from "../../../plotina/dfn";
  import {
    map,
    NEVER,
-@@ -120,6 +122,12 @@ export class Publisher {
+@@ -120,6 +122,20 @@ export class Publisher {
        });
      }
      if (localTrackPublication.source === Track.Source.Microphone) {
 +      // Plotina: attach DeepFilterNet3 where LiveKit publishes the microphone.
 +      // Doing it here covers every path that creates a track (toggle, join,
 +      // device change) and never touches the pre-join preview.
-+      if (localTrackPublication.track) {
-+        void attachPlotinaDfn(localTrackPublication.track);
++      {
++        const publishedTrack =
++          localTrackPublication.track ??
++          (localTrackPublication as unknown as { audioTrack?: LocalTrackPublication["track"] }).audioTrack ??
++          lkRoom.localParticipant.getTrackPublication(Track.Source.Microphone)
++            ?.track;
++        notePlotinaEvent(String(localTrackPublication.source), !!publishedTrack);
++        if (publishedTrack) {
++          void attachPlotinaDfn(publishedTrack);
++        }
 +      }
        const muteState = this.muteStates.audio;
        // skip this if a sync is in progress: enabled$ still reflects the old
        // state while the handler is mid-flight, so the handler itself will apply
+@@ -265,6 +281,16 @@ export class Publisher {
+     } catch (e) {
+       this.logger.error(`Failed to resume upstreams`, e);
+     }
++
++    // Plotina: the publish event may have fired before the room started
++    // publishing, so try once more when the call actually starts.
++    const micTrack = lkRoom.localParticipant.getTrackPublication(
++      Track.Source.Microphone,
++    )?.track;
++    if (micTrack) {
++      notePlotinaEvent("startPublishing", true);
++      void attachPlotinaDfn(micTrack);
++    }
+   }
+ 
+   public async stopPublishing(): Promise<void> {
