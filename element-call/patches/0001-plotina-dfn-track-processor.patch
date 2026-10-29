@@ -1,9 +1,9 @@
 diff --git a/src/plotina/dfn.ts b/src/plotina/dfn.ts
 new file mode 100644
-index 0000000..f5340af
+index 0000000..0472041
 --- /dev/null
 +++ b/src/plotina/dfn.ts
-@@ -0,0 +1,150 @@
+@@ -0,0 +1,152 @@
 +/*
 +Copyright 2026 New Vector Ltd.
 +
@@ -58,7 +58,9 @@ index 0000000..f5340af
 +        "padding:6px 8px",
 +        "border-radius:6px",
 +        "pointer-events:none",
-+        "white-space:pre",
++        "white-space:pre-wrap",
++        "overflow-wrap:anywhere",
++        "max-width:min(92vw, 560px)",
 +      ].join(";");
 +      document.documentElement.appendChild(badge);
 +    }
