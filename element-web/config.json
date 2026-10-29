@@ -9,6 +9,10 @@
   "disable_guests": true,
   "show_labs_settings": false,
   "features": {},
+  "sentry": {
+    "dsn": "https://3f9c1d7a5b2e4c6d8f0a1b3c5d7e9f2a@sentry.plotina.cc/relay/1",
+    "environment": "production"
+  },
   "branding": {
     "logo_link_url": "https://plotina.cc"
   },
