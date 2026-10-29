@@ -59,7 +59,7 @@ code of ours; the build only feeds it a DSN, a release name and an environment.
 
 | | |
 | :-- | :-- |
-| DSN | GitHub **variable** `SENTRY_DSN` → `ELEMENT_ANDROID_SENTRY_DSN` at build time → `BuildConfig.SENTRY_DSN`. The path must be the relay's: `https://<key>@sentry.plotina.cc/relay` — the SDK appends `/api/1/envelope/` itself, and anything after `/relay` (a project id, for instance) lands on the relay's 404 |
+| DSN | GitHub **variable** `SENTRY_DSN` → `ELEMENT_ANDROID_SENTRY_DSN` at build time → `BuildConfig.SENTRY_DSN`, in the relay's project form: `https://<key>@sentry.plotina.cc/relay/<project-id>`. Sentry's SDK splits a DSN into a base and a project id — the last path segment is the project id — and posts to `<base>/api/<project-id>/envelope/`, so `…/relay/1` becomes `POST /relay/1/api/1/envelope/` |
 | Release | `element-x@<version+tag>`, e.g. `element-x@26.10.1-plotina-x.14`: the git tag, stamped as `io.sentry.release` manifest meta-data from `PLOTINA_SENTRY_RELEASE` (patch `0008`) |
 | Environment | `production` for release builds (`SentryConfig.ENV_RELEASE`, patch `0008`); upstream's `DEBUG`/`NIGHTLY` values are untouched |
 | Native crashes | sentry-native ships inside `sentry-android` (the NDK integration is on by default); the AAR packages `libsentry*.so` per ABI |
@@ -74,6 +74,10 @@ so loudly — that APK would never report anything.
 
 Not wired yet:
 
+- **Envelope delivery is blocked on the relay's path handling.** Caddy strips `/relay` and hands the
+  relay `/1/api/1/envelope/`, while the relay only routes `/api/1/envelope/`, so the app's POST gets
+  `404 {"error":"unknown path"}`. The relay (or Caddy's prefix) has to drop the project-id segment;
+  until then the SDK initialises, builds the envelope and retries it, and nothing lands in GlitchTip.
 - **Symbolication.** `sentry-cli upload` needs `/api/0/*` on the relay, which still answers `403`
   (only `/relay/*` is public). Until that opens, native frames and R8-renamed Java frames arrive
   unsymbolicated; the events themselves are unaffected.
