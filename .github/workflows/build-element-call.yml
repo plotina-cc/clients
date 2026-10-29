@@ -41,7 +41,14 @@ jobs:
           set -euo pipefail
           . element-call/pins.env
           {
-            echo "mode=${REQUESTED_MODE:-release}"
+            if [ -n "${REQUESTED_MODE:-}" ]; then
+              mode="$REQUESTED_MODE"
+            elif compgen -G "element-call/patches/*.patch" > /dev/null; then
+              mode=source
+            else
+              mode=release
+            fi
+            echo "mode=$mode"
             echo "node=$NODE_VERSION"
             echo "pnpm=$PNPM_VERSION"
             echo "ec_tag=$EC_TAG"
