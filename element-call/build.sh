@@ -136,10 +136,10 @@ build_from_source() {
   )
 
   [ -f "$WORK/src/dist/index.html" ] || die "the build produced no dist/index.html"
-  # The processor module itself is loaded at runtime from /noise/vendor, so the
-  # bundle can only be checked for our glue code.
-  grep -rq "DeepFilterNet3 attached to the microphone track" "$WORK/src/dist/assets" \
-    || die "the Plotina track-processor glue is not in the bundle"
+  # The processor and its badge live in /noise/plotina-dfn.js; the bundle only
+  # has the bridge that calls window.__plotinaAttach.
+  grep -rq "__plotinaAttach" "$WORK/src/dist/assets" \
+    || die "the Plotina track-processor bridge is not in the bundle"
   mv "$WORK/src/dist" "$WORK/dist"
 }
 
