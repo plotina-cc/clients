@@ -1,9 +1,9 @@
 diff --git a/src/plotina/dfn.ts b/src/plotina/dfn.ts
 new file mode 100644
-index 0000000..f4e7631
+index 0000000..c89628f
 --- /dev/null
 +++ b/src/plotina/dfn.ts
-@@ -0,0 +1,72 @@
+@@ -0,0 +1,146 @@
 +/*
 +Copyright 2026 New Vector Ltd.
 +
@@ -24,9 +24,58 @@ index 0000000..f4e7631
 +const LEVEL_KEY = "plotina.noise.level";
 +const DEFAULT_LEVEL = 70;
 +
++type PlotinaState = {
++  status: "idle" | "attaching" | "attached" | "error" | "skipped";
++  level?: number;
++  error?: string;
++  track?: string;
++};
++
++const state: PlotinaState = { status: "idle" };
++(window as unknown as { __plotinaDfn?: PlotinaState }).__plotinaDfn = state;
++
++function renderBadge(): void {
++  try {
++    const debug =
++      new URLSearchParams(window.location.search).get("plotina-debug") === "1";
++    if (!debug) return;
++    let badge = document.getElementById("plotina-dfn-badge");
++    if (!badge) {
++      badge = document.createElement("div");
++      badge.id = "plotina-dfn-badge";
++      badge.style.cssText = [
++        "position:fixed",
++        "left:8px",
++        "bottom:8px",
++        "z-index:2147483647",
++        "background:rgba(0,0,0,.78)",
++        "color:#fff",
++        "font:12px/1.35 monospace",
++        "padding:6px 8px",
++        "border-radius:6px",
++        "pointer-events:none",
++        "white-space:pre",
++      ].join(";");
++      document.documentElement.appendChild(badge);
++    }
++    badge.textContent = [
++      "DFN " + state.status,
++      "level " + (state.level ?? "-"),
++      state.track ? "track " + state.track : "",
++      state.error ? "error " + state.error : "",
++    ]
++      .filter(Boolean)
++      .join("\n");
++  } catch {
++    // the badge is diagnostics only
++  }
++}
++
 +function readLevel(): number {
 +  const clamp = (value: number): number =>
-+    Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : DEFAULT_LEVEL;
++    Number.isFinite(value)
++      ? Math.max(0, Math.min(100, Math.round(value)))
++      : DEFAULT_LEVEL;
 +
 +  try {
 +    const params = new URLSearchParams(window.location.search);
@@ -43,14 +92,28 @@ index 0000000..f4e7631
 +
 +type TrackWithProcessor = {
 +  setProcessor?: (processor: unknown) => Promise<void>;
++  kind?: string;
 +};
 +
 +export async function attachPlotinaDfn(track: unknown): Promise<void> {
 +  const level = readLevel();
-+  if (level === 0) return;
++  state.level = level;
++  if (level === 0) {
++    state.status = "skipped";
++    renderBadge();
++    return;
++  }
 +
 +  const candidate = track as TrackWithProcessor;
-+  if (!candidate || typeof candidate.setProcessor !== "function") return;
++  if (!candidate || typeof candidate.setProcessor !== "function") {
++    state.status = "error";
++    state.error = "track has no setProcessor";
++    renderBadge();
++    return;
++  }
++
++  state.status = "attaching";
++  renderBadge();
 +
 +  const base = new URL("noise/", window.location.href).href.replace(/\/$/, "");
 +  try {
@@ -60,7 +123,9 @@ index 0000000..f4e7631
 +    };
 +    const Processor = mod.DeepFilterNoiseFilterProcessor;
 +    if (!Processor) {
-+      console.warn("[plotina] DeepFilterNoiseFilterProcessor is missing");
++      state.status = "error";
++      state.error = "processor class missing";
++      renderBadge();
 +      return;
 +    }
 +
@@ -71,9 +136,18 @@ index 0000000..f4e7631
 +      assetConfig: { cdnUrl: `${base}/dfn` },
 +    });
 +    await candidate.setProcessor(filter);
-+    console.info("[plotina] DeepFilterNet3 attached to the microphone track", level);
++    state.status = "attached";
++    state.track = candidate.kind ?? "audio";
++    renderBadge();
++    console.info(
++      "[plotina] DeepFilterNet3 attached to the microphone track",
++      level,
++    );
 +  } catch (e) {
-+    console.warn("[plotina] DeepFilterNet3 could not attach to the microphone", e);
++    state.status = "error";
++    state.error = String((e as Error)?.message ?? e).slice(0, 120);
++    renderBadge();
++    console.warn("[plotina] DeepFilterNet3 could not attach", e);
 +  }
 +}
 diff --git a/src/state/CallViewModel/localMember/Publisher.ts b/src/state/CallViewModel/localMember/Publisher.ts
