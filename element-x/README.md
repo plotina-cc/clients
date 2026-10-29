@@ -51,6 +51,33 @@ the widget query (`widgetId`, `roomId`, `parentUrl`, `userId`, …) and loads th
 Only the base changes, so the call is still a widget call over the same driver; it just runs on our
 origin instead of Element's asset loader.
 
+## Crash and error reporting (Sentry → GlitchTip)
+
+This uses **upstream's own Sentry integration** — `services/analyticsproviders/sentry`, with
+`io.sentry:sentry-android:8.59.0`, initialised by its `SentryAnalyticsProvider`. There is no init
+code of ours; the build only feeds it a DSN, a release name and an environment.
+
+| | |
+| :-- | :-- |
+| DSN | GitHub **variable** `SENTRY_DSN` → `ELEMENT_ANDROID_SENTRY_DSN` at build time → `BuildConfig.SENTRY_DSN`. The path must be the relay's: `https://<key>@sentry.plotina.cc/relay` — the SDK appends `/api/1/envelope/` itself, and anything after `/relay` (a project id, for instance) lands on the relay's 404 |
+| Release | `element-x@<version+tag>`, e.g. `element-x@26.10.1-plotina-x.14`: the git tag, stamped as `io.sentry.release` manifest meta-data from `PLOTINA_SENTRY_RELEASE` (patch `0008`) |
+| Environment | `production` for release builds (`SentryConfig.ENV_RELEASE`, patch `0008`); upstream's `DEBUG`/`NIGHTLY` values are untouched |
+| Native crashes | sentry-native ships inside `sentry-android` (the NDK integration is on by default); the AAR packages `libsentry*.so` per ABI |
+| When it reports | only after the user opts into analytics — upstream's provider is initialised by `DefaultAnalyticsService` on consent, and `Sentry.capture*` is gated by the same flag |
+| Rust SDK | `ELEMENT_SDK_SENTRY_DSN` is set to the same DSN: matrix-rust-sdk has its own Sentry client and reports Rust panics/errors; its events carry the SDK's release name (the app version), because that config has no release field |
+| Bundled Element Call | `ELEMENT_CALL_SENTRY_DSN` is **unset**: the app passes that DSN to whichever call page it loads, our own `call.plotina.cc` included, and that deployment already reports under `element-call@<tag>` (the `sentry` block in `config.json` is the second-init trap). The embedded bundle is a fallback that only loads when our origin is unreachable under the default URL |
+
+The workflow sets the release from the tag (`element-x@26.10.1-plotina-x.14`) and checks the APK
+afterwards: the DSN host must be in `classes*.dex`, `io.sentry.release` must be in the merged
+manifest, and `libsentry*.so` must be packaged. Without `SENTRY_DSN` the build still runs, but says
+so loudly — that APK would never report anything.
+
+Not wired yet:
+
+- **Symbolication.** `sentry-cli upload` needs `/api/0/*` on the relay, which still answers `403`
+  (only `/relay/*` is public). Until that opens, native frames and R8-renamed Java frames arrive
+  unsymbolicated; the events themselves are unaffected.
+
 ## Overriding it
 
 A user can still point the app somewhere else, and that is deliberately preserved:
@@ -116,8 +143,9 @@ CI only (`.github/workflows/build-element-x.yml`); nothing is built on golova.
   build's dependency graph at all.
 - The build fails rather than shipping a wrong APK if `assets/element-call/index.html` is missing
   (the fallback must stay), if `https://call.plotina.cc/room` is not in `classes*.dex`, if the APK
-  has no `com/google/firebase` entries, if `project_id` is not `plotina-push`, or if
-  `https://push.plotina.cc/_matrix/push/v1/notify` is not in the dex.
+  has no `com/google/firebase` entries, if `project_id` is not `plotina-push`, if
+  `https://push.plotina.cc/_matrix/push/v1/notify` is not in the dex, or — when `SENTRY_DSN` is set
+  — if the DSN is missing from the dex or `io.sentry.release` is not the tag in the manifest.
 - Pull requests touching `element-x/**` run the patch check only.
 
 Locally, by hand:
@@ -129,10 +157,14 @@ git apply /path/to/clients/element-x/patches/0002-element-x-android-plotina-sign
           /path/to/clients/element-x/patches/0004-element-x-android-plotina-call-url.patch \
           /path/to/clients/element-x/patches/0005-element-x-android-plotina-app-link.patch \
           /path/to/clients/element-x/patches/0006-element-x-android-plotina-account-provider.patch \
-          /path/to/clients/element-x/patches/0007-element-x-android-plotina-push-gateway.patch
+          /path/to/clients/element-x/patches/0007-element-x-android-plotina-push-gateway.patch \
+          /path/to/clients/element-x/patches/0008-element-x-android-plotina-sentry.patch
 base64 -d /path/to/google-services.json.b64 > app/google-services.json
 python3 /path/to/clients/element-x/scripts/firebase-resources.py \
         app/google-services.json app/src/gplay/res
+# Sentry: the DSN goes in at configuration time, the release name is read from the manifest.
+export ELEMENT_ANDROID_SENTRY_DSN="$(gh variable get SENTRY_DSN -R plotina-cc/clients)"
+export PLOTINA_SENTRY_RELEASE="element-x@26.10.1-plotina-x.14"
 ./gradlew -PplotinaSingleApk assembleGplayDebug
 ```
 
@@ -185,3 +217,16 @@ ever wanted at once, note that `0003` sends calls to the native stack and `0004`
 5. Hang up, call again: the WebView must reload our URL, not the bundled one.
 6. Settings → Developer options → Custom Element Call base URL: setting it to the `appassets` URL must
    bring back the bundled Element Call (proves the override still works).
+
+Crash reporting, on a device (the APK has to be built with `SENTRY_DSN` set):
+
+1. Opt into analytics (the FTUE screen, or Settings → Privacy → Analytics). Nothing is sent before
+   that — upstream gates the provider on the same flag.
+2. `adb logcat -s Sentry` should say `Initializing SDK with DSN: 'https://…@sentry.plotina.cc/relay'`
+   and then, on a send, no `Envelope submission failed`.
+3. Crash the app (`adb shell am crash io.element.android.x`, or kill it with `SIGSEGV` from a root
+   shell) and reopen it. GlitchTip → project → Issues should show the crash under release
+   `element-x@<tag>` and environment `production`; the release also shows up under Releases even
+   without a crash, because session envelopes carry the same name.
+4. A native crash is captured by sentry-native, not by the Java handler: its stack trace stays
+   unsymbolicated until `/api/0` accepts `sentry-cli upload`, but the event itself must arrive.

@@ -98,6 +98,7 @@ jobs:
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0005-element-x-android-plotina-app-link.patch"
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0006-element-x-android-plotina-account-provider.patch"
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0007-element-x-android-plotina-push-gateway.patch"
+          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0008-element-x-android-plotina-sentry.patch"
 
   build:
     needs: patches
@@ -185,6 +186,11 @@ jobs:
           # 0007: the Firebase pusher registers against https://push.plotina.cc instead of
           # matrix.org's gateway, which would reject a token from our Firebase project.
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0007-element-x-android-plotina-push-gateway.patch"
+          # 0008: the Sentry release is element-x@<version+tag> (stamped as io.sentry.release in the
+          # manifest, from PLOTINA_SENTRY_RELEASE) and release builds report environment
+          # "production" instead of upstream's "RELEASE". No init code: the app-side SDK is upstream's
+          # services/analyticsproviders/sentry, initialised by its own SentryAnalyticsProvider.
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0008-element-x-android-plotina-sentry.patch"
 
       - name: Write the Firebase project into the gplay flavour
         env:
@@ -238,8 +244,34 @@ jobs:
             echo "::warning::ANDROID_KEYSTORE_BASE64 is not set: building a debug APK, which cannot be installed over a release build"
           fi
 
+      - name: Name the Sentry release
+        # Sentry's Android SDK takes the release from manifest meta-data (io.sentry.release, added by
+        # patch 0008), so it has to be stamped before Gradle runs. The tag is the only name that says
+        # which APK a crash came from: element-x@26.10.1-plotina-x.14. A branch build has no tag and
+        # gets the upstream pin plus the commit instead, which still separates one run from another.
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            release="element-x@${GITHUB_REF_NAME#v}"
+          else
+            release="element-x@${ELEMENT_X_TAG}-${GITHUB_SHA:0:7}"
+          fi
+          echo "PLOTINA_SENTRY_RELEASE=$release" >> "$GITHUB_ENV"
+          echo "Sentry release: $release"
+
       - name: Assemble
         working-directory: upstream/element-x
+        env:
+          # The app-side Sentry DSN. Upstream's services/analyticsproviders/sentry reads exactly this
+          # variable at configuration time and puts it in BuildConfig.SENTRY_DSN; its own
+          # SentryAnalyticsProvider initialises the SDK from it, so there is no init code of ours.
+          # `vars`, not `secrets`: a DSN is a write-only ingest URL, and GlitchTip prints it in the
+          # browser. Blank means the APK builds and never reports a crash, hence the check below.
+          ELEMENT_ANDROID_SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+          # The Rust SDK's own Sentry client (matrix-rust-sdk tracing), same project. Its events
+          # carry the SDK's release name (the app version), not element-x@<tag>: the Rust config has
+          # no release field. ELEMENT_CALL_SENTRY_DSN is deliberately unset - see the README, the app
+          # passes it to whatever call page it loads, including our own call.plotina.cc.
+          ELEMENT_SDK_SENTRY_DSN: ${{ vars.SENTRY_DSN }}
         run: |
           # A kill in this step only ever surfaces as "The runner has received a shutdown signal",
           # with no word on what ran out first. Sample the machine every minute: the last monitor
@@ -251,6 +283,13 @@ jobs:
             done
           ) &
           monitor=$!
+          # The DSN is compiled into BuildConfig, so this log line is the only place that says
+          # whether the artifact can report anything at all. Never print the DSN itself.
+          if [ -n "${ELEMENT_ANDROID_SENTRY_DSN:-}" ]; then
+            echo "Sentry DSN: set (${#ELEMENT_ANDROID_SENTRY_DSN} chars)"
+          else
+            echo "::warning::ELEMENT_ANDROID_SENTRY_DSN is empty: this APK will not report crashes"
+          fi
           # Per-ABI splits, not one universal APK: a single release APK with four ABIs is 400 MB,
           # while arm64 alone is what almost every phone needs. `-PplotinaSingleApk` exists in the
           # patch and turns the splits off, but it is not used here on purpose.
@@ -366,6 +405,51 @@ jobs:
           }
 
           for apk in Plotina-ElementX*.apk; do check_app_link "$apk"; done
+
+      - name: Check Sentry is wired into the APK
+        env:
+          ELEMENT_ANDROID_SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          apk=Plotina-ElementX.apk
+          if [ -z "${ELEMENT_ANDROID_SENTRY_DSN:-}" ]; then
+            echo "::warning::SENTRY_DSN is not set: this APK has no crash reporting"
+            exit 0
+          fi
+
+          # 1. The DSN is a BuildConfig string, so it is in the dex string pool. If it is not there,
+          #    the app compiles, installs, runs and silently reports nothing - the failure mode this
+          #    check exists for.
+          if unzip -p "$apk" "classes*.dex" | strings | grep -qF "sentry.plotina.cc"; then
+            echo "OK: the Sentry DSN host is in classes*.dex"
+          else
+            echo "::error file=$apk::$apk carries no Sentry DSN: nothing will be reported"
+            exit 1
+          fi
+
+          # 2. The release is manifest meta-data (io.sentry.release), which is where the SDK reads it
+          #    from at init. Missing or wrong here means every crash lands as "unknown release".
+          AAPT2=$(ls "$SDK"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1)
+          if [ -n "$AAPT2" ]; then
+            "$AAPT2" dump xmltree --file AndroidManifest.xml "$apk" > "$RUNNER_TEMP/manifest-sentry.txt"
+            grep -A3 'io.sentry.release' "$RUNNER_TEMP/manifest-sentry.txt" | head -8
+            grep -qF "$PLOTINA_SENTRY_RELEASE" "$RUNNER_TEMP/manifest-sentry.txt" \
+              || { echo "::error file=$apk::io.sentry.release is not '$PLOTINA_SENTRY_RELEASE' in the merged manifest"; exit 1; }
+            echo "OK: io.sentry.release is $PLOTINA_SENTRY_RELEASE"
+          else
+            echo "::warning::no aapt2: cannot check io.sentry.release in the manifest"
+          fi
+
+          # 3. Native crashes need the NDK integration, which ships sentry-native as libsentry*.so.
+          #    Upstream's services/analyticsproviders/sentry depends on io.sentry:sentry-android, and
+          #    that pulls sentry-android-ndk; this prints what actually got packaged.
+          unzip -l "$apk" | grep -E 'lib/[^/]+/libsentry[^/]*\.so' | head -5 || true
+          if unzip -l "$apk" | grep -qE 'lib/[^/]+/libsentry[^/]*\.so'; then
+            echo "OK: sentry-native is packaged (native crash handler available)"
+          else
+            echo "::warning::no libsentry*.so in the APK: native crashes will not be captured"
+          fi
 
       - name: Check the APK carries Firebase and our push project
         run: |

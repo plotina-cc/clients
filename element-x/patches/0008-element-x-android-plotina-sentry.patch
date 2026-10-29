@@ -1,0 +1,46 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 706a82f0..ebcc6642 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -45,6 +45,13 @@ android {
+     defaultConfig {
+         applicationId = BuildTimeConfig.APPLICATION_ID
+         targetSdk = Versions.TARGET_SDK
++
++        // Sentry release name: element-x@<version+tag>. Sentry's Android SDK reads it from the
++        // application manifest (io.sentry.release), so the build stamps it here as a placeholder.
++        // CI passes the git tag; a local build without the variable falls back to the app version.
++        manifestPlaceholders["plotinaSentryRelease"] = System.getenv("PLOTINA_SENTRY_RELEASE")
++            ?.takeIf { it.isNotBlank() }
++            ?: "element-x@${Versions.VERSION_NAME}"
+         versionCode = Versions.VERSION_CODE
+         versionName = Versions.VERSION_NAME
+ 
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 9193c6de..561b4122 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -29,6 +29,12 @@
+             android:name="com.google.android.gms.car.application"
+             android:resource="@xml/automotive_app_desc" />
+ 
++        <!-- Sentry: the release this APK was built from, so a crash in GlitchTip names the tag.
++             Read by io.sentry.android.core.ManifestMetadataReader at SDK init. -->
++        <meta-data
++            android:name="io.sentry.release"
++            android:value="${plotinaSentryRelease}" />
++
+         <provider
+             android:name="androidx.startup.InitializationProvider"
+             android:authorities="${applicationId}.androidx-startup"
+diff --git a/services/analyticsproviders/sentry/src/main/kotlin/io/element/android/services/analyticsproviders/sentry/SentryConfig.kt b/services/analyticsproviders/sentry/src/main/kotlin/io/element/android/services/analyticsproviders/sentry/SentryConfig.kt
+index 993823a8..76ebd50f 100644
+--- a/services/analyticsproviders/sentry/src/main/kotlin/io/element/android/services/analyticsproviders/sentry/SentryConfig.kt
++++ b/services/analyticsproviders/sentry/src/main/kotlin/io/element/android/services/analyticsproviders/sentry/SentryConfig.kt
+@@ -14,5 +14,5 @@ object SentryConfig {
+     const val SDK_DSN = BuildConfig.SDK_SENTRY_DSN
+     const val ENV_DEBUG = "DEBUG"
+     const val ENV_NIGHTLY = "NIGHTLY"
+-    const val ENV_RELEASE = "RELEASE"
++    const val ENV_RELEASE = "production"
+ }
