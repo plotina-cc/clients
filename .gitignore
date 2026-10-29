@@ -8,3 +8,8 @@ __pycache__/
 element-desktop/.build/
 element-desktop/noise/
 element-desktop/dist-stable/
+
+# E2E harness
+node_modules/
+e2e/test-results/
+e2e/playwright-report/
