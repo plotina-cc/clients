@@ -1,9 +1,9 @@
 diff --git a/src/plotina/dfn.ts b/src/plotina/dfn.ts
 new file mode 100644
-index 0000000..f203cc2
+index 0000000..c23c78d
 --- /dev/null
 +++ b/src/plotina/dfn.ts
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,47 @@
 +/*
 +Copyright 2026 New Vector Ltd.
 +
@@ -22,10 +22,12 @@ index 0000000..f203cc2
 +
 +type AttachFn = (track: unknown) => void;
 +type EventFn = (source: string, hasTrack: boolean) => void;
++type ReportFn = (kind: string, extra?: Record<string, string>) => void;
 +
 +const w = window as unknown as {
 +  __plotinaAttach?: AttachFn;
 +  __plotinaEvent?: EventFn;
++  __plotinaReport?: ReportFn;
 +};
 +
 +export function attachPlotinaDfn(track: unknown): void {
@@ -41,20 +43,50 @@ index 0000000..f203cc2
 +    w.__plotinaEvent(source, hasTrack);
 +  }
 +}
++
++/** Free-form beacon for the hook itself, before any track exists. */
++export function reportPlotina(
++  kind: string,
++  extra?: Record<string, string>,
++): void {
++  if (typeof w.__plotinaReport === "function") w.__plotinaReport(kind, extra);
++}
 diff --git a/src/state/CallViewModel/localMember/Publisher.ts b/src/state/CallViewModel/localMember/Publisher.ts
-index 5353a98..11f1b78 100644
+index 5353a98..13fae58 100644
 --- a/src/state/CallViewModel/localMember/Publisher.ts
 +++ b/src/state/CallViewModel/localMember/Publisher.ts
-@@ -13,6 +13,8 @@ import {
+@@ -13,6 +13,12 @@ import {
    type Room as LivekitRoom,
    Track,
  } from "livekit-client";
 +
-+import { attachPlotinaDfn, notePlotinaEvent } from "../../../plotina/dfn";
++import {
++  attachPlotinaDfn,
++  notePlotinaEvent,
++  reportPlotina,
++} from "../../../plotina/dfn";
  import {
    map,
    NEVER,
-@@ -120,6 +122,20 @@ export class Publisher {
+@@ -84,6 +90,9 @@ export class Publisher {
+       ParticipantEvent.LocalTrackPublished,
+       this.onLocalTrackPublished.bind(this),
+     );
++
++    // Plotina: proof that the publisher exists, before any track is published.
++    reportPlotina("publisher-created", { event: room.name || "no-room" });
+   }
+ 
+   public async destroy(): Promise<void> {
+@@ -112,6 +121,7 @@ export class Publisher {
+     localTrackPublication: LocalTrackPublication,
+   ): void {
+     this.logger.info("Local track published", localTrackPublication);
++    reportPlotina("published", { event: String(localTrackPublication.source) });
+     const lkRoom = this.connection.livekitRoom;
+     if (!this.shouldPublish) {
+       this.logger.debug("Not publishing, pausing upstream");
+@@ -120,6 +130,20 @@ export class Publisher {
        });
      }
      if (localTrackPublication.source === Track.Source.Microphone) {
@@ -75,7 +107,7 @@ index 5353a98..11f1b78 100644
        const muteState = this.muteStates.audio;
        // skip this if a sync is in progress: enabled$ still reflects the old
        // state while the handler is mid-flight, so the handler itself will apply
-@@ -265,6 +281,16 @@ export class Publisher {
+@@ -265,6 +289,16 @@ export class Publisher {
      } catch (e) {
        this.logger.error(`Failed to resume upstreams`, e);
      }

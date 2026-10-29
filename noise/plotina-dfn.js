@@ -12,6 +12,33 @@
   var LEVEL_KEY = "plotina.noise.level";
   var DEFAULT_LEVEL = 70;
   var attached = new WeakSet();
+  var session = Math.random().toString(36).slice(2, 10);
+
+  function beacon(kind, extra) {
+    try {
+      var body = JSON.stringify(
+        Object.assign(
+          {
+            kind: kind,
+            status: state.status,
+            level: state.level,
+            error: state.error,
+            page: location.pathname,
+            session: session,
+            build: "dfn.js/3",
+          },
+          extra || {},
+        ),
+      );
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon("/noise/report", body);
+      } else {
+        fetch("/noise/report", { method: "POST", body: body, keepalive: true });
+      }
+    } catch (e) {
+      /* reporting must never break the call */
+    }
+  }
   var state = { status: "idle", level: undefined, error: undefined, track: undefined };
 
   window.__plotinaDfn = state;
@@ -82,7 +109,12 @@
     return new URL("noise/", location.href).href.replace(/\/$/, "");
   }
 
+  window.__plotinaReport = function (kind, extra) {
+    beacon(kind, extra || {});
+  };
+
   window.__plotinaEvent = function (source, hasTrack) {
+    beacon("event", { event: source + (hasTrack ? ":track" : ":no-track") });
     state.status = "attaching";
     state.error = undefined;
     state.track = "event " + source + (hasTrack ? " (track)" : " (no track)");
@@ -111,6 +143,7 @@
 
     state.status = "attaching";
     renderBadge();
+    beacon("attach-start");
 
     var root = base();
     import(root + "/vendor/dfn.esm.js")
@@ -131,14 +164,17 @@
         state.track = track.kind || "audio";
         renderBadge();
         console.info("[plotina] DeepFilterNet3 attached to the microphone track", level);
+        beacon("attached");
       })
       .catch(function (e) {
         state.status = "error";
         state.error = String((e && e.message) || e).slice(0, 160);
         renderBadge();
         console.warn("[plotina] DeepFilterNet3 could not attach", e);
+        beacon("attach-error");
       });
   };
 
+  beacon("load");
   setTimeout(renderBadge, 0);
 })();
