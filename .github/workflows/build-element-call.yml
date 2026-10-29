@@ -35,10 +35,12 @@ jobs:
       # A repository variable can override it without touching this file.
       VITE_SENTRY_DSN: ${{ vars.SENTRY_DSN || 'https://7b413746-284e-483f-95e7-1a426596b77b@sentry.plotina.cc/1' }}
       VITE_SENTRY_RELEASE: element-call@${{ github.ref_name }}
-      SENTRY_URL: https://sentry.plotina.cc
-      SENTRY_ORG: plotina
-      SENTRY_PROJECT: web-clients
       SENTRY_CLI_VERSION: 2.42.2
+      # Gives the build step the right to fetch sentry-cli. SENTRY_URL, ORG and
+      # PROJECT are deliberately absent here: upstream's vite.config.ts enables
+      # @sentry/vite-plugin when all four exist, and that plugin would upload
+      # the maps a second time under VITE_APP_VERSION ("0.26.1") instead of the
+      # release name below. They are set on the upload step only.
       SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
@@ -94,6 +96,10 @@ jobs:
 
       - name: Upload source maps to GlitchTip
         if: ${{ env.SENTRY_AUTH_TOKEN != '' }}
+        env:
+          SENTRY_URL: https://sentry.plotina.cc
+          SENTRY_ORG: plotina
+          SENTRY_PROJECT: web-clients
         run: |
           set -euo pipefail
           if [ ! -d dist/sourcemaps ]; then
