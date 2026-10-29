@@ -99,7 +99,11 @@ jobs:
         run: |
           rm -rf "$SRC/apps/desktop/webapp"
           mkdir -p "$SRC/apps/desktop/webapp"
-          tar xzf "$RUNNER_TEMP/webapp/webapp.tar.gz" -C "$SRC/apps/desktop/webapp"
+          # Windows runners use D:\... paths, and GNU tar reads "D:" as a remote
+          # host ("Cannot connect to D: resolve failed"). Hand it a POSIX path
+          # and keep colons literal.
+          ARTIFACT="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")/webapp/webapp.tar.gz"
+          tar xzf --force-local "$ARTIFACT" -C "$SRC/apps/desktop/webapp"
           cd "$SRC/apps/desktop"
           pnpm run asar-webapp
           pnpm exec asar list webapp.asar | grep -q '^/noise/dfn/v3/pkg/df_bg.wasm$'
