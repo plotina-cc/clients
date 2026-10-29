@@ -59,8 +59,10 @@
   }
 
   /* Element Call marks its page: the microphone there is processed by the
-     LiveKit track processor, and a second wrapper would process it twice. */
+     LiveKit track processor, so the wrapper must not touch it at all — no
+     capture, no warm pool, no debug badge. */
   var CALL_APP = window.__plotinaEc === true;
+  if (CALL_APP) return;
 
   var level = readLevel();
   // ?plotina-level=0..100 overrides the stored level for this page load.
@@ -235,7 +237,6 @@
     var stats = { callRequests: 0, otherAudioRequests: 0, processed: 0, failed: 0, skipped: 0, retried: 0, last: "-" };
 
     md.getUserMedia = async function (constraints) {
-      if (CALL_APP) return original(constraints);
       var audio = constraints && constraints.audio;
       if (audio && typeof audio === "object" && typeof audio.noiseSuppression !== "boolean") {
         /* Voice messages and anything else that is not Element Call. Counted so

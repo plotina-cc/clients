@@ -1,9 +1,9 @@
 diff --git a/src/plotina/dfn.ts b/src/plotina/dfn.ts
 new file mode 100644
-index 0000000..c89628f
+index 0000000..f5340af
 --- /dev/null
 +++ b/src/plotina/dfn.ts
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,150 @@
 +/*
 +Copyright 2026 New Vector Ltd.
 +
@@ -33,6 +33,10 @@ index 0000000..c89628f
 +
 +const state: PlotinaState = { status: "idle" };
 +(window as unknown as { __plotinaDfn?: PlotinaState }).__plotinaDfn = state;
++
++// Show "idle" immediately with ?plotina-debug=1: that distinguishes a hook that
++// never fired from a processor that failed later.
++setTimeout(renderBadge, 0);
 +
 +function renderBadge(): void {
 +  try {
