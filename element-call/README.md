@@ -73,7 +73,9 @@ maps from the bundle, so the published tarball never ships the TypeScript source
 with its map. The workflow does the upload (`releases new`, then `sourcemaps upload --url-prefix
 "~/assets" dist/sourcemaps/assets`) and skips it with a notice when `SENTRY_AUTH_TOKEN` is not set.
 Source maps for `v0.26.1-plotina-call.10` are in the `web-clients` project; releases are listed under
-`element-call@<tag>` in the GlitchTip UI.
+`element-call@<tag>` in the GlitchTip UI. Do **not** also add a `sentry` block to `config.json`:
+upstream's initializer would then call `Sentry.init` a second time, with `tracesSampleRate: 1`, and
+replace the client this module set up.
 
 ## How the wrapper gets in
 
