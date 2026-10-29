@@ -192,6 +192,7 @@
   /* ------------------------------------------------------------------- ui */
 
   var LABELS = ["Подавление шума", "Noise suppression"];
+  var SECTIONS = ["Обработка звука", "Audio processing"];
   var ROW_ID = "plotina-noise-row";
 
   function exactTextNode(label) {
@@ -206,14 +207,34 @@
     return null;
   }
 
+  // Element renders settings toggles as input[type=checkbox] in some builds and as
+  // a div[role=switch] in others; look for either.
+  var TOGGLE_SELECTOR = 'input[type=checkbox], [role="switch"], [class*="toggle" i] input';
+
   function findAnchor() {
     for (var i = 0; i < LABELS.length; i++) {
       var el = exactTextNode(LABELS[i]);
       if (!el) continue;
       var row = el;
       for (var depth = 0; depth < 8 && row.parentElement; depth++) {
-        if (row.querySelector && row.querySelector("input[type=checkbox]")) return row;
+        if (row.querySelector && row.querySelector(TOGGLE_SELECTOR)) return row;
         row = row.parentElement;
+      }
+    }
+    return null;
+  }
+
+  // Fallback for layouts where the row cannot be recognised: put the slider at the
+  // end of the "Audio processing" section, right before the next heading.
+  function findSectionAnchor() {
+    for (var i = 0; i < SECTIONS.length; i++) {
+      var heading = exactTextNode(SECTIONS[i]);
+      if (!heading) continue;
+      var section = heading.parentElement;
+      for (var depth = 0; depth < 4 && section && section.parentElement; depth++) {
+        var toggles = section.querySelectorAll(TOGGLE_SELECTOR);
+        if (toggles.length) return toggles[toggles.length - 1].closest("div");
+        section = section.parentElement;
       }
     }
     return null;
@@ -275,8 +296,11 @@
       if (existing.isConnected) return;
       existing.remove();
     }
-    var anchor = findAnchor();
-    if (!anchor) return;
+    var anchor = findAnchor() || findSectionAnchor();
+    if (!anchor) {
+      log("no anchor for the settings row");
+      return;
+    }
     anchor.insertAdjacentElement("afterend", buildRow());
     prefetchAssets();
   }
