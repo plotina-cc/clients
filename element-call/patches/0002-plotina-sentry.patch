@@ -1,0 +1,95 @@
+diff --git a/src/main.tsx b/src/main.tsx
+index b2f79f3..773055c 100644
+--- a/src/main.tsx
++++ b/src/main.tsx
+@@ -17,12 +17,17 @@ import "./index.css";
+ import { logger } from "matrix-js-sdk/lib/logger";
+ 
+ import { App } from "./App";
++import { initPlotinaSentry } from "./plotina/sentry";
+ import { init as initRageshake } from "./settings/rageshake";
+ import { Initializer } from "./initializer";
+ import { AppViewModel } from "./state/AppViewModel";
+ import { globalScope } from "./state/ObservableScope";
+ import { getUrlParams } from "./UrlParams";
+ 
++// Before anything else renders, so that a failure while loading config.json or
++// in the first render is reported. A no-op when the build has no DSN.
++initPlotinaSentry();
++
+ initRageshake().catch((e) => {
+   logger.error("Failed to initialize rageshake", e);
+ });
+diff --git a/src/plotina/sentry.ts b/src/plotina/sentry.ts
+new file mode 100644
+index 0000000..8c68d60
+--- /dev/null
++++ b/src/plotina/sentry.ts
+@@ -0,0 +1,51 @@
++/*
++Copyright 2026 Element Creations Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE in the repository root for full details.
++*/
++
++import * as Sentry from "@sentry/react";
++
++/**
++ * Plotina: early error reporting for the Element Call we serve at
++ * call.plotina.cc.
++ *
++ * Upstream initialises Sentry from the runtime config (config.json -> sentry)
++ * only once config.json has loaded, in initializer.tsx. That is too late for
++ * the failures we care about most: a crash in the first render, a failed
++ * config fetch, a broken widget handshake. This module initialises from the
++ * build environment instead and is called from src/main.tsx before anything
++ * renders.
++ *
++ * The DSN comes from VITE_SENTRY_DSN at build time, the release from
++ * VITE_SENTRY_RELEASE (the tag CI built from). Both are optional: an empty DSN
++ * is the normal case for `pnpm dev` and for a plain fork, and turns reporting
++ * off without touching anything else. Nothing here throws without a DSN.
++ */
++
++const dsn = String(import.meta.env.VITE_SENTRY_DSN ?? "").trim();
++
++/** True when this build was given a DSN. */
++export const plotinaSentryEnabled = dsn !== "";
++
++export function initPlotinaSentry(): void {
++  if (!plotinaSentryEnabled) return;
++
++  const release =
++    String(import.meta.env.VITE_SENTRY_RELEASE ?? "").trim() ||
++    `element-call@${import.meta.env.VITE_APP_VERSION || "dev"}`;
++
++  Sentry.init({
++    dsn,
++    release,
++    environment: "production",
++    // Errors only: this host is small and the call UI has no backend tracing
++    // worth paying for.
++    tracesSampleRate: 0,
++    sendDefaultPii: false,
++    initialScope: {
++      tags: { client: "element-call" },
++    },
++  });
++}
+diff --git a/vite.config.ts b/vite.config.ts
+index 678a86f..5d8afc2 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -134,7 +134,10 @@ export default ({
+     },
+     build: {
+       minify: mode === "production" ? true : false,
+-      sourcemap: true,
++      // Hidden maps: CI uploads them to GlitchTip and drops them from the
++      // published bundle, so the served JavaScript carries no sourceMappingURL
++      // pointing at a file that is not there.
++      sourcemap: "hidden",
+       rollupOptions: {
+         output: {
+           assetFileNames: ({ originalFileNames }): string => {

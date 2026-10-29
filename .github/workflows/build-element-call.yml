@@ -30,6 +30,16 @@ jobs:
     name: build ${{ github.ref_name }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      # The DSN is public by design: it is embedded in every bundle we serve.
+      # A repository variable can override it without touching this file.
+      VITE_SENTRY_DSN: ${{ vars.SENTRY_DSN || 'https://7b413746-284e-483f-95e7-1a426596b77b@sentry.plotina.cc/1' }}
+      VITE_SENTRY_RELEASE: element-call@${{ github.ref_name }}
+      SENTRY_URL: https://sentry.plotina.cc
+      SENTRY_ORG: plotina
+      SENTRY_PROJECT: web-clients
+      SENTRY_CLI_VERSION: 2.42.2
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -68,7 +78,38 @@ jobs:
 
       - name: Build the bundle
         run: |
-          bash element-call/build.sh --mode "${{ steps.pins.outputs.mode }}" --out dist
+          set -euo pipefail
+          # Debug ids must be injected into the exact files we ship, so the
+          # CLI is fetched before the build and handed to build.sh. Without a
+          # token the build is unchanged: no ids, no upload.
+          cli=()
+          if [ -n "${SENTRY_AUTH_TOKEN:-}" ]; then
+            curl -fsSL -o /tmp/sentry-cli \
+              "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION}/sentry-cli-Linux-x86_64"
+            chmod +x /tmp/sentry-cli
+            cli=(--sentry-cli /tmp/sentry-cli)
+          fi
+          bash element-call/build.sh --mode "${{ steps.pins.outputs.mode }}" --out dist \
+            --maps-out dist/sourcemaps ${cli[@]+"${cli[@]}"}
+
+      - name: Upload source maps to GlitchTip
+        if: ${{ env.SENTRY_AUTH_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          if [ ! -d dist/sourcemaps ]; then
+            echo "::notice::this build produced no source maps; nothing to upload"
+            exit 0
+          fi
+          release="$(cat dist/sentry-release.txt)"
+          echo "uploading symbols for $release"
+          /tmp/sentry-cli releases new "$release"
+          /tmp/sentry-cli sourcemaps upload --release "$release" \
+            --url-prefix "~/assets" dist/sourcemaps
+
+      - name: Skip the source map upload
+        if: ${{ env.SENTRY_AUTH_TOKEN == '' }}
+        run: |
+          echo "::notice::SENTRY_AUTH_TOKEN is not set: no debug ids and no symbol upload; the build still ships and reports errors."
 
       # build.sh already asserted the stage directory; this proves the tarball.
       - name: Unpack and verify the artifact
@@ -83,6 +124,14 @@ jobs:
           test -s check/element-call-plotina/noise/vendor/dfn.esm.js
           test -s check/element-call-plotina/noise/dfn/v3/pkg/df_bg.wasm
           test -s check/element-call-plotina/noise/dfn/v3/models/DeepFilterNet3_onnx.tar.gz
+          # The Sentry SDK must be in the bundle even though it is a no-op
+          # without a DSN; "sentry.javascript" is the SDK name every envelope
+          # carries. Source maps, by contrast, must not be served.
+          grep -Rqs 'sentry.javascript' check/element-call-plotina/assets
+          if find check/element-call-plotina -name '*.map' | grep -q .; then
+            echo "source maps leaked into the artifact" >&2
+            exit 1
+          fi
           echo "--- index.html head ---"
           head -c 400 check/element-call-plotina/index.html; echo
           du -sh check/element-call-plotina

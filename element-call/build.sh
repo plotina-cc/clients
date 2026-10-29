@@ -21,6 +21,13 @@
 #   --dfn-dir DIR           existing noise/dfn tree (v3/pkg, v3/models) instead
 #                           of downloading the two assets
 #   --config FILE           default: element-call/config.json
+#   --maps-out DIR          copy each source map and its script to DIR, then
+#                           drop the maps from the bundle (CI uploads DIR to
+#                           GlitchTip; the served JS keeps working because the
+#                           SDK talks to the server, not to the .map file)
+#   --sentry-cli FILE       sentry-cli binary: inject debug ids into the build
+#                           before --maps-out copies it elsewhere. Optional;
+#                           without it maps are still split out, just unlabelled
 #   --keep                  keep the work directory for inspection
 #
 # Output: $OUT/plotina-element-call.tar.gz containing element-call-plotina/.
@@ -39,6 +46,8 @@ OUT="$REPO/dist"
 NOISE="$REPO/noise"
 DFN_DIR=""
 CONFIG="$HERE/config.json"
+MAPS_OUT=""
+SENTRY_CLI=""
 KEEP=0
 
 say() { printf '==> %s\n' "$*"; }
@@ -54,6 +63,8 @@ while (($#)); do
     --noise)   NOISE="${2:?--noise needs a value}"; shift 2 ;;
     --dfn-dir) DFN_DIR="${2:?--dfn-dir needs a value}"; shift 2 ;;
     --config)  CONFIG="${2:?--config needs a value}"; shift 2 ;;
+    --maps-out) MAPS_OUT="${2:?--maps-out needs a value}"; shift 2 ;;
+    --sentry-cli) SENTRY_CLI="${2:?--sentry-cli needs a value}"; shift 2 ;;
     --keep)    KEEP=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1 (try --help)" ;;
@@ -64,6 +75,10 @@ case "$MODE" in
   release|source) ;;
   *) die "--mode must be release or source, not '$MODE'" ;;
 esac
+
+# The name events are grouped under in GlitchTip. build.sh writes it to
+# $OUT/sentry-release.txt so the upload step cannot drift from the build.
+RELEASE="${VITE_SENTRY_RELEASE:-element-call@$TAG}"
 
 for f in "$NOISE/logic.js" "$NOISE/boot.js" "$NOISE/vendor/dfn.esm.js" "$CONFIG"; do
   [ -f "$f" ] || die "missing input: $f"
@@ -132,7 +147,11 @@ build_from_source() {
   (
     cd "$WORK/src"
     pnpm install --frozen-lockfile
-    pnpm build:full
+    # VITE_APP_VERSION is the console/rageshake version; the release is what
+    # groups events in GlitchTip and must equal dist/sentry-release.txt.
+    VITE_APP_VERSION="${VITE_APP_VERSION:-${TAG#v}}" \
+      VITE_SENTRY_RELEASE="$RELEASE" \
+      pnpm build:full
   )
 
   [ -f "$WORK/src/dist/index.html" ] || die "the build produced no dist/index.html"
@@ -149,6 +168,39 @@ case "$MODE" in
 esac
 
 DIST="$WORK/dist"
+
+# --- source maps ---------------------------------------------------------
+# The published bundle must not ship the whole TypeScript source, so each map
+# is copied out together with the script it describes and then removed. CI
+# uploads the copy to GlitchTip. Debug ids are injected first (when a CLI is
+# given), so the uploaded script and the served one agree on line numbers.
+if [ -n "$MAPS_OUT" ]; then
+  if [ -n "$SENTRY_CLI" ]; then
+    say "injecting debug ids into the source maps"
+    "$SENTRY_CLI" sourcemaps inject "$DIST/assets"
+  fi
+
+  say "copying source maps to $MAPS_OUT"
+  maps=0
+  while IFS= read -r -d '' map; do
+    rel="${map#"$DIST"/}"
+    mkdir -p "$MAPS_OUT/$(dirname "$rel")"
+    cp "$map" "$MAPS_OUT/$rel"
+    if [ -f "${map%.map}" ]; then
+      cp "${map%.map}" "$MAPS_OUT/${rel%.map}"
+    fi
+    rm -f "$map"
+    maps=$((maps + 1))
+  done < <(find "$DIST" -type f -name '*.map' -print0)
+
+  [ "$maps" -gt 0 ] || say "warning: the build produced no source maps"
+  if find "$DIST" -type f -name '*.map' -print | grep -q .; then
+    die "source maps are still in the bundle"
+  fi
+
+  mkdir -p "$OUT"
+  printf '%s\n' "$RELEASE" > "$OUT/sentry-release.txt"
+fi
 
 # --- noise ---------------------------------------------------------------
 
