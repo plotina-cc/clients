@@ -9,6 +9,11 @@ name: build-fluffychat
 # Triggered by tags of the form v<upstream>-plotina-fluffy.<n>, e.g.
 # v2.11.3-plotina-fluffy.1. The client-specific part keeps this workflow from
 # firing for tags that release the other clients in this repository.
+#
+# Crash reports go to GlitchTip at sentry.plotina.cc through sentry_flutter.
+# The DSN is the SENTRY_DSN repository variable (public by design, it is
+# compiled into the APK) and the release is fluffy@<version>+<tag>; the
+# mapping files and Dart symbols are uploaded to the same release.
 
 on:
   workflow_dispatch:
@@ -27,6 +32,13 @@ env:
   PLUGIN_DIR: fluffychat/plotina_dfn
   APK_NAME: Plotina-FluffyChat.apk
   APK_NAME_ARMV7: Plotina-FluffyChat-armv7.apk
+  # GlitchTip. The DSN is public by design and ends up inside libapp.so; an
+  # empty value simply builds without reporting (Sentry stays a no-op).
+  SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+  SENTRY_URL: https://sentry.plotina.cc
+  SENTRY_ORG: plotina
+  SENTRY_PROJECT: web-clients
+  SENTRY_CLI_VERSION: 2.42.2
 
 jobs:
   apk:
@@ -50,6 +62,36 @@ jobs:
           done
           grep -q '^  plotina_dfn:' upstream/pubspec.yaml
           echo "plugin registered in upstream/pubspec.yaml"
+
+      # One name for the release, the Dart define and the symbol upload. The
+      # pubspec version is what upstream calls 2.11.3+3574; the build number is
+      # upstream's own and would repeat across our tags, so the tag is the dist.
+      - name: Work out the Sentry release
+        id: sentry
+        working-directory: fluffychat/upstream
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^version: \([0-9][0-9.]*\)+.*/\1/p' pubspec.yaml)"
+          if [ -z "$VERSION" ]; then
+            echo "::error::cannot read the version from pubspec.yaml"
+            exit 1
+          fi
+          RELEASE="fluffy@${VERSION}+${GITHUB_REF_NAME}"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          echo "sentry release: $RELEASE"
+
+      # runner.temp is not available in workflow-level env, so the path is
+      # decided here and exported for the upload step.
+      - name: Fetch sentry-cli
+        if: ${{ env.SENTRY_DSN != '' }}
+        run: |
+          set -euo pipefail
+          cli="$RUNNER_TEMP/sentry-cli"
+          curl -fsSL -o "$cli" \
+            "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION}/sentry-cli-Linux-x86_64"
+          chmod +x "$cli"
+          echo "SENTRY_CLI=$cli" >> "$GITHUB_ENV"
+          "$cli" --version
 
       - name: Read Flutter version
         id: flutter_version
@@ -226,6 +268,8 @@ jobs:
 
       - name: Build APK
         working-directory: fluffychat/upstream
+        env:
+          SENTRY_RELEASE: ${{ steps.sentry.outputs.release }}
         run: |
           set -euo pipefail
           VARIANT="${{ steps.signing.outputs.variant }}"
@@ -235,8 +279,18 @@ jobs:
           # libraries and is roughly twice the size of the arm64 one, which is
           # what every phone from the last several years needs. x86_64 is left
           # to emulators and is not published.
+          #
+          # --split-debug-info keeps the Dart symbol files that make a release
+          # stack trace readable; CI uploads them to GlitchTip with the release.
+          # --obfuscate is deliberately not used: it would rename symbols in the
+          # whole app for little gain, and FluffyChat is not shipped to an
+          # untrusted store.
           flutter build apk --split-per-abi "--$VARIANT" \
-            --build-number "$GITHUB_RUN_NUMBER"
+            --build-number "$GITHUB_RUN_NUMBER" \
+            --dart-define=SENTRY_DSN="${SENTRY_DSN:-}" \
+            --dart-define=SENTRY_RELEASE="$SENTRY_RELEASE" \
+            --dart-define=SENTRY_DIST="$GITHUB_RUN_NUMBER" \
+            --split-debug-info=build/app/outputs/symbols
           arm64="build/app/outputs/flutter-apk/app-arm64-v8a-$VARIANT.apk"
           armv7="build/app/outputs/flutter-apk/app-armeabi-v7a-$VARIANT.apk"
           [ -f "$arm64" ] || { echo "::error::no arm64-v8a APK"; ls build/app/outputs/flutter-apk; exit 1; }
@@ -396,6 +450,65 @@ jobs:
               sys.exit(1)
           print("both APKs carry the denoiser, the model, firebase classes and the plotina-push project id")
           PY
+
+      # Mapping files and Dart symbols for the release that the APKs report as.
+      # Known blocker (2026-10-30): sentry.plotina.cc's relay forwards only the
+      # ingest endpoints (/api/1/envelope); /api/0/* is answered with Caddy's
+      # 403, and sentry-cli needs /api/0 for releases and debug files. Opening
+      # that path is a separate task on the relay/Caddy side. Until then this
+      # step warns and skips instead of failing a good build; once the relay
+      # answers, the same commands run unchanged.
+      - name: Upload mapping files and symbols to GlitchTip
+        if: ${{ env.SENTRY_DSN != '' }}
+        continue-on-error: true
+        working-directory: fluffychat/upstream
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          RELEASE: ${{ steps.sentry.outputs.release }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SENTRY_AUTH_TOKEN:-}" ]; then
+            echo "::warning title=No symbol upload::SENTRY_AUTH_TOKEN is not set; the release ships without symbols."
+            exit 0
+          fi
+          code="$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+            "$SENTRY_URL/api/0/organizations/$SENTRY_ORG/")"
+          if [ "$code" != "200" ]; then
+            echo "::warning title=Symbol upload skipped::$SENTRY_URL/api/0 answered $code (the relay only exposes ingest today); $RELEASE ships without symbols."
+            exit 0
+          fi
+          echo "uploading symbols for $RELEASE"
+          "$SENTRY_CLI" releases new "$RELEASE"
+          # Dart: the files --split-debug-info wrote, one per ABI.
+          "$SENTRY_CLI" debug-files upload --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
+            build/app/outputs/symbols
+          # Java/Kotlin: R8 names in every stack trace from the APK.
+          mapping="build/app/outputs/mapping/${{ steps.signing.outputs.variant }}/mapping.txt"
+          if [ -f "$mapping" ]; then
+            "$SENTRY_CLI" debug-files upload --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
+              "$mapping"
+          else
+            echo "::warning title=No mapping.txt::no $mapping; Java frames stay obfuscated."
+          fi
+          # Native: the unstripped libraries, including libplotina_dfn.so.
+          native="$(ls -d build/app/intermediates/merged_native_libs/*/merge*NativeLibs/out/lib 2>/dev/null | head -1 || true)"
+          if [ -n "$native" ] && [ -d "$native" ]; then
+            "$SENTRY_CLI" debug-files upload --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
+              "$native"
+          else
+            echo "::notice::no merged native libraries to upload"
+          fi
+
+      # Kept as an artifact as well: while the relay's /api/0 is closed these
+      # files are the only way to symbolise a trace by hand (flutter symbolize).
+      - name: Upload Dart symbols
+        if: ${{ env.SENTRY_DSN != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Plotina-FluffyChat-symbols
+          path: fluffychat/upstream/build/app/outputs/symbols
+          if-no-files-found: warn
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')

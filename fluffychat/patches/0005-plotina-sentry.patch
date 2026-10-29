@@ -1,0 +1,134 @@
+diff --git a/lib/main.dart b/lib/main.dart
+index c3691ce..0806894 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -13,6 +13,7 @@ import 'package:fluffychat/utils/client_manager.dart';
+ import 'package:fluffychat/utils/error_reporter.dart';
+ import 'package:fluffychat/utils/notification_background_handler.dart';
+ import 'package:fluffychat/utils/platform_infos.dart';
++import 'package:fluffychat/utils/plotina_sentry.dart';
+ import 'package:fluffychat/utils/start_push_foreground_service.dart';
+ import 'package:flutter/foundation.dart';
+ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+@@ -34,6 +35,10 @@ bool _vodozemacInitialized = false;
+ bool isIntegrationTest = false;
+ 
+ void main(List<String> args) => runZonedGuarded(() async {
++  // plotina.cc: crash reporting to our GlitchTip. Must run before anything
++  // else so an early failure is reported; a no-op without SENTRY_DSN.
++  await initPlotinaSentry();
++
+   // Forward Flutter errors to global error reporter
+   FlutterError.onError = (details) => Zone.current.handleUncaughtError(
+     details.exception,
+@@ -111,7 +116,10 @@ void main(List<String> args) => runZonedGuarded(() async {
+     '${AppSettings.applicationName.value} started in foreground mode. Rendering GUI...',
+   );
+   await startGui(clients, store);
+-}, ErrorReporter.onFlutterError);
++}, (error, stackTrace) {
++  plotinaCaptureError(error, stackTrace);
++  ErrorReporter.onFlutterError(error, stackTrace);
++});
+ 
+ /// Fetch the pincode for the applock and start the flutter engine.
+ Future<void> startGui(List<Client> clients, SharedPreferences store) async {
+diff --git a/lib/utils/plotina_sentry.dart b/lib/utils/plotina_sentry.dart
+new file mode 100644
+index 0000000..d09826d
+--- /dev/null
++++ b/lib/utils/plotina_sentry.dart
+@@ -0,0 +1,78 @@
++// SPDX-FileCopyrightText: 2026 Plotina
++// SPDX-License-Identifier: AGPL-3.0-or-later
++
++import 'package:flutter/widgets.dart';
++import 'package:sentry_flutter/sentry_flutter.dart';
++
++/// Plotina: crash reporting to the GlitchTip instance at sentry.plotina.cc.
++///
++/// Everything here is driven by --dart-define, so an upstream build and a
++/// plain `flutter run` are untouched: without SENTRY_DSN the SDK is never
++/// initialized and every function below is a no-op.
++///
++/// CI passes, from the client build workflow:
++///   SENTRY_DSN      repository variable; public by design, it ships in the APK
++///   SENTRY_RELEASE  `fluffy@<version>+<tag>`, e.g.
++///                   `fluffy@2.11.3+v2.11.3-plotina-fluffy.11`
++///   SENTRY_DIST     Android version code of the build
++///
++/// PLOTINA_SENTRY_TEST_EVENT=true sends one message at startup, which is how a
++/// build is checked end to end. It is off unless explicitly requested.
++const String _dsn = String.fromEnvironment('SENTRY_DSN');
++const String _release = String.fromEnvironment(
++  'SENTRY_RELEASE',
++  defaultValue: 'fluffy@dev',
++);
++const String _dist = String.fromEnvironment('SENTRY_DIST');
++const bool _sendTestEvent = bool.fromEnvironment(
++  'PLOTINA_SENTRY_TEST_EVENT',
++);
++
++/// True when this build was compiled with a DSN.
++bool get plotinaSentryEnabled => _dsn.isNotEmpty;
++
++/// Initializes Sentry before the rest of `main()` runs. A no-op without a DSN.
++Future<void> initPlotinaSentry() async {
++  if (!plotinaSentryEnabled) return;
++  // The SDK talks to the platform channels during init, and FluffyChat only
++  // calls this later in main().
++  WidgetsFlutterBinding.ensureInitialized();
++
++  await SentryFlutter.init((options) {
++    options
++      ..dsn = _dsn
++      ..release = _release
++      ..environment = 'production'
++      // A chat client: message bodies, room and user ids, file paths and the
++      // address book are all personal data. Report the error, not the person.
++      // sendDefaultPii=false also keeps IP addresses, cookies and request
++      // bodies of the automatic breadcrumbs out of events.
++      ..sendDefaultPii = false
++      // Screenshots and the widget tree of a chat window are message content.
++      ..attachScreenshot = false
++      ..attachViewHierarchy = false
++      // Errors only. Tracing a mobile chat client would multiply the volume
++      // without answering a question we have.
++      ..tracesSampleRate = 0.0
++      ..enableAutoPerformanceTracing = false;
++    if (_dist.isNotEmpty) options.dist = _dist;
++  });
++
++  if (_sendTestEvent) {
++    debugPrint('plotina sentry: sending the smoke-test event ($_release)');
++    await Sentry.captureMessage(
++      'Plotina Sentry smoke test',
++      level: SentryLevel.info,
++    );
++    // The transport sends in the background, so a smoke build has to stay open
++    // for a few seconds for the event to leave the device. sentry 10 dropped
++    // Sentry.flush(); Sentry.close() would also switch reporting off for the
++    // rest of the session.
++  }
++}
++
++/// Reports an uncaught Dart error, if this build has a DSN.
++void plotinaCaptureError(Object error, StackTrace stackTrace) {
++  if (!plotinaSentryEnabled) return;
++  Sentry.captureException(error, stackTrace: stackTrace);
++}
+diff --git a/pubspec.yaml b/pubspec.yaml
+index 0927017..899be1b 100644
+--- a/pubspec.yaml
++++ b/pubspec.yaml
+@@ -85,6 +85,10 @@ dependencies:
+   receive_sharing_intent: ^1.9.0
+   record: ^7.1.2
+   scroll_to_index: ^3.0.1
++  # plotina.cc: error reporting to our self-hosted GlitchTip. The DSN is
++  # compiled in with --dart-define; without one the SDK stays a no-op.
++  # 9.x: 10.x requires minSdk 26 and FluffyChat supports Android 7 (24).
++  sentry_flutter: ^9.30.1
+   share_plus: ^13.3.1
+   shared_preferences: ^2.5.6
+   slugify: ^2.0.0

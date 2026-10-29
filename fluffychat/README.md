@@ -90,6 +90,7 @@ patches/0001-pubspec-add-plotina-dfn.patch
 patches/0002-plotina-default-homeserver.patch
 patches/0003-plotina-push-gateway.patch
 patches/0004-split-per-abi-vs-abi-filters.patch
+patches/0005-plotina-sentry.patch
 plotina_dfn/                       Flutter plugin (Android only)
   lib/plotina_dfn.dart             isAvailable / setEnabled / frameLength / status
   android/…/PlotinaDfnPlugin.kt    attaches to flutter_webrtc, extracts the model
@@ -238,6 +239,52 @@ without the secrets would fail rather than produce an unsigned APK.
 
 Locally: `fluffychat/scripts/build-android.sh` (needs Flutter 3.47.8, Rust with
 Android targets, `cargo-ndk`, SDK+NDK, JDK 17).
+
+## Crash reporting (GlitchTip)
+
+Upstream v2.11.3 has no Sentry: the `sentry` switch that FluffyChat carried in
+the 0.x era is gone from `pubspec.yaml` and `main.dart`, so this is our own
+integration, kept as small as possible.
+
+`0005` adds `sentry_flutter: ^9.30.1` and one file, `lib/utils/plotina_sentry.dart`;
+`lib/main.dart` gains the import, an `await initPlotinaSentry()` as the first
+statement of `main()`, and a wrapper around the `runZonedGuarded` error handler
+that forwards to Sentry *and* to FluffyChat's own `ErrorReporter`.
+
+| Setting | Value |
+|---|---|
+| DSN | `--dart-define=SENTRY_DSN=…`, from the `SENTRY_DSN` repository variable |
+| Release | `fluffy@<version>+<tag>`, e.g. `fluffy@2.11.3+v2.11.3-plotina-fluffy.11` |
+| dist | `GITHUB_RUN_NUMBER` (the Android build number) |
+| environment | `production` |
+| `sendDefaultPii` | `false` |
+| Screenshots, view hierarchy | off (a chat window is message content) |
+| Tracing | off (`tracesSampleRate = 0`) |
+
+sentry_flutter is pinned to 9.x on purpose: 10.x declares `minSdkVersion 26`
+and FluffyChat still supports Android 7 (API 24). The 9.x API used here is
+identical for our purposes.
+
+Without a DSN the SDK is never initialized, so `flutter run` and an upstream
+build behave exactly as before.
+
+**Symbols.** The build passes `--split-debug-info=build/app/outputs/symbols`, and
+CI uploads those files, R8's `mapping.txt` and the unstripped native libraries
+to the same release with `sentry-cli 2.42.2` when `SENTRY_AUTH_TOKEN` is set.
+`--obfuscate` is not used. The symbols are also kept as the
+`Plotina-FluffyChat-symbols` artifact, which is what `flutter symbolize` needs.
+
+**Known blocker.** The relay in front of GlitchTip forwards only the ingest
+endpoints (`/api/1/envelope/`); `sentry-cli` talks to `/api/0/*`, which Caddy
+answers with 403 until the relay is extended (separate task). The upload step
+checks `/api/0/organizations/plotina/` first, prints a warning and skips while
+it is closed, so a release is not blocked. It uploads unchanged once the relay
+answers 200.
+
+**Smoke test.** Build with
+`--dart-define=PLOTINA_SENTRY_TEST_EVENT=true`; the app sends one message at
+startup and waits for it to flush. The release of that build tells you whether
+it arrived.
 
 ## First build checklist
 
