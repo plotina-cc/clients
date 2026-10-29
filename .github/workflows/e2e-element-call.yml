@@ -1,0 +1,104 @@
+name: e2e-element-call
+
+# Browser checks for the DeepFilterNet3 integration on call.plotina.cc.
+#
+# They need a browser with a fake microphone and ~16 GB of patience: run them
+# here, on a GitHub runner, or on a workstation — never on the hosts that serve
+# the call (a Chromium run on one of them has already rebooted it).
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - "e2e-*"
+    paths:
+      - "e2e/**"
+      - ".github/workflows/e2e-element-call.yml"
+
+concurrency:
+  # Two runs joining the same test room at once make a failure harder to
+  # attribute, and the room only has one QA account.
+  group: e2e-element-call
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  playwright:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Check for the QA credentials
+        id: credentials
+        env:
+          QA_NOISE_USER: ${{ secrets.QA_NOISE_USER }}
+          QA_NOISE_PASSWORD: ${{ secrets.QA_NOISE_PASSWORD }}
+        run: |
+          if [ -z "$QA_NOISE_USER" ] || [ -z "$QA_NOISE_PASSWORD" ]; then
+            echo "::notice title=E2E skipped::QA_NOISE_USER / QA_NOISE_PASSWORD are not configured; the Element Call checks did not run."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        if: steps.credentials.outputs.ready == 'true'
+        working-directory: e2e
+        run: npm ci
+
+      - name: Install Chromium
+        if: steps.credentials.outputs.ready == 'true'
+        working-directory: e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run the Element Call checks against production
+        if: steps.credentials.outputs.ready == 'true'
+        working-directory: e2e
+        env:
+          QA_NOISE_USER: ${{ secrets.QA_NOISE_USER }}
+          QA_NOISE_PASSWORD: ${{ secrets.QA_NOISE_PASSWORD }}
+          E2E_ROOM_ID: ${{ vars.E2E_ROOM_ID || secrets.E2E_ROOM_ID }}
+          E2E_DEVICE_ID: E2EPW-ci
+          E2E_BASE_URL: https://call.plotina.cc
+        run: npx playwright test
+
+      - name: Report where to look
+        if: always() && steps.credentials.outputs.ready == 'true'
+        run: |
+          {
+            echo "### Element Call E2E"
+            echo
+            echo "Job: **${{ job.status }}** — run [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+            echo
+            echo "Artifacts: \`playwright-report\` (HTML) and \`e2e-results\` (traces, \`attach-failure.json\`, \`results.json\`)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload traces and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-results
+          path: e2e/test-results
+          if-no-files-found: ignore
+          retention-days: 14
