@@ -1,0 +1,16 @@
+{
+  "name": "plotina-element-call-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser end-to-end checks for the Plotina DeepFilterNet3 integration on call.plotina.cc",
+  "scripts": {
+    "test": "playwright test",
+    "test:attach": "playwright test tests/noise-attach.spec.ts",
+    "test:effect": "playwright test tests/noise-effect.spec.ts",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
+  }
+}
