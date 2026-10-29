@@ -206,8 +206,10 @@ class PlotinaDfnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         /** Size of the pinned tarball; see scripts/fetch-model.sh. */
         const val MODEL_BYTES = 7_983_136L
 
-        /** Maximum attenuation in dB; 60 matches the web default, 100 = unlimited. */
-        const val ATTEN_LIM_DB = 60f
+        // Maximum attenuation in dB. 60 is DeepFilterNet's usual ceiling and
+        // gates hard enough that quiet speech sounds chopped on a phone; 30 keeps
+        // the noise down without that pumping. 100 = unlimited.
+        const val ATTEN_LIM_DB = 30f
 
         const val FAST_MS = 200L
         const val FAST_ATTEMPTS = 50 // 10 s of fast polling after engine attach
