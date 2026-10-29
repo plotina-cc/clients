@@ -47,6 +47,10 @@
       audio[key] = constraints.audio[key];
     });
     audio.noiseSuppression = false;
+    // Android Chrome also exposes voiceIsolation; leaving it on means the OS
+    // processes the capture before DeepFilterNet sees it, which the desktop
+    // path never does. DeepFilterNet is the only processor here.
+    if ("voiceIsolation" in audio) audio.voiceIsolation = false;
     out.audio = audio;
     return out;
   }
