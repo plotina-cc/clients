@@ -203,11 +203,13 @@ jobs:
           # next to the tarball wherever it is unpacked.
           ( cd dist && sha256sum plotina-cinny-web.tar.gz > plotina-cinny-web.tar.gz.sha256 )
           cat dist/plotina-cinny-web.tar.gz.sha256
+          cinny_commit="$(git -C cinny/upstream/cinny rev-parse HEAD)"
           jq -n --arg release "$SENTRY_RELEASE" \
                 --arg tag "$(cat cinny/UPSTREAM_TAG)" \
-                --arg sha "$GITHUB_SHA" \
+                --arg repo_commit "$GITHUB_SHA" \
+                --arg cinny_commit "$cinny_commit" \
                 --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
-            '{release:$release, upstream_tag:$tag, upstream_commit:$sha, run:$run}' \
+            '{release:$release, upstream_tag:$tag, repo_commit:$repo_commit, cinny_commit:$cinny_commit, run:$run}' \
             > dist/build-info.json
           cat dist/build-info.json
           du -h dist/plotina-cinny-web.tar.gz

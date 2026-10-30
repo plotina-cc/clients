@@ -29,7 +29,7 @@ Static files on the edge (`/srv/cinny`), built by
 workflow takes the tag from `UPSTREAM_TAG`, applies the Sentry patch, embeds
 `noise/` (models fetched and verified against `noise.lock.json`) and uploads
 `plotina-cinny-web.tar.gz` with `build-info.json` next to it (release, upstream
-commit, run).
+tag, the repository commit and the Cinny commit, run).
 
 ```bash
 sha256sum -c plotina-cinny-web.tar.gz.sha256
