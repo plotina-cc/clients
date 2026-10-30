@@ -92,8 +92,13 @@ Deploying a DSN change is one file: copy the published
 `element-web-config.json` to `/srv/plotina/element/config.json` on the host
 (the file `plotina-infra` also keeps under `/opt/plotina-infra/config/element/`)
 and reload the page. Element Web fetches the config at startup, so no image
-rebuild. Note that `element-desktop` copies this same file into its webapp, so
-desktop builds report too, under the same release.
+rebuild. Note that `element-desktop` renders its webapp `config.json` from this
+same file, substituting `SENTRY_DSN` when the variable is set, so a desktop
+build reports too and needs a rebuild to pick up a rotated DSN. The desktop
+shell's own events are labelled `Plotina-Element@<version>` by
+`@sentry/electron` (it derives the release from the app name and version), not
+with the web bundle's `1.12.32`; the native crash dumps it sends are minidumps,
+so the web source maps do not apply to them.
 
 ## Assumptions that upstream can break
 

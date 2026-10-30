@@ -5,6 +5,9 @@
 #
 # Expects: node 24 with pnpm, python3, git, curl, and network access for
 # `pnpm install` and the Element Web release tarball (53 MB, cached in .build/).
+# SENTRY_DSN overrides the GlitchTip DSN committed in element-web/config.json
+# (CI passes the repository variable so a rotation needs no commit). The build
+# fails if the resulting config has no usable DSN.
 # macOS is not built: our builds are unsigned and the arm64 runner would only
 # cover Apple Silicon.
 set -euo pipefail
@@ -39,6 +42,19 @@ rm -rf webapp webapp.asar
 cp -a "$WORK/webapp" webapp
 pnpm run asar-webapp
 pnpm exec asar list webapp.asar | grep -q '^/noise/boot.js$'
+pnpm exec asar list webapp.asar | grep -q '^/config.json$'
+# Check the packed file, not the directory it came from: the whole point is
+# that the Sentry block ends up inside the artifact users install.
+node -e '
+const { extractFile } = require("@electron/asar");
+const c = JSON.parse(extractFile("webapp.asar", "config.json"));
+const s = c.sentry || {};
+if (!s.dsn || s.environment !== "production" || !/\/relay\//.test(s.dsn)) {
+  console.error("webapp.asar config.json has no usable sentry block:", s);
+  process.exit(1);
+}
+console.log("asar config.json sentry:", s.dsn.replace(/\/\/[^@]+@/, "//<key>@"), s.environment);
+'
 
 echo "==> variant"
 cp "$ROOT/build.plotina.json" variant.json
