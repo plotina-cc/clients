@@ -19,11 +19,26 @@ class PlotinaDfn {
   static Future<void> setEnabled(bool enabled) =>
       _channel.invokeMethod<void>('setEnabled', enabled);
 
+  /// Maximum attenuation in dB, 0–100. 0 bypasses the denoiser (and keeps the
+  /// model unloaded at startup); 100 means no limit. Takes effect on the next
+  /// 10 ms audio frame, without restarting the call. Android only: elsewhere
+  /// the channel is missing and the call is a no-op.
+  static Future<void> setAttenLim(int db) async {
+    try {
+      await _channel.invokeMethod<void>('setAttenLim', db.clamp(0, 100));
+    } on MissingPluginException {
+      // No native side on this platform.
+    } on PlatformException {
+      // A missing .so must not break the settings page.
+    }
+  }
+
   /// DeepFilterNet hop size in samples (480 at 48 kHz = 10 ms), 0 if not ready.
   static Future<int> frameLength() async =>
       (await _channel.invokeMethod<int>('frameLength')) ?? 0;
 
-  /// Diagnostic snapshot: {available, enabled, attached, frameLength, error}.
+  /// Diagnostic snapshot: {available, enabled, attenLimDb, attached,
+  /// frameLength, error}.
   static Future<Map<String, Object?>> status() async =>
       (await _channel.invokeMethod<Map<Object?, Object?>>('status'))
           ?.cast<String, Object?>() ??
