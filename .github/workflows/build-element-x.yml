@@ -19,10 +19,9 @@
 # keep list that AGP 9.3's default resource shrinking needs) into app/src/gplay/res. That overlay
 # outranks the library module, so the APK talks to the plotina-push project.
 #
-# The native Rust/JNI denoiser path (element-x/native/plotina-dfn, patches 0001 and 0003) is kept in
-# this repository as a reserve but is deliberately NOT part of this build: nothing here compiles
-# Rust, installs the NDK, or publishes element-call-android to mavenLocal. The WebView call reaches
-# noise suppression through our own Element Call deployment instead.
+# Calls run in the WebView against our own Element Call deployment; nothing here compiles Rust,
+# installs the NDK or publishes element-call-android. The native-call experiment was removed from
+# the tree and survives only in git history.
 #
 # Nothing is built on golova; this workflow is the build machine. It needs no macOS runner: the
 # Android target is all we ship (see element-x/README.md, "Limitations").

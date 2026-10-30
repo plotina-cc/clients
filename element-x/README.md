@@ -177,24 +177,13 @@ splits into one APK, and is not required for a debug build either. The Firebase 
 the `gplay` build able to talk to our project: skip it and the APK builds, installs, and never gets
 a token.
 
-## The native path, kept as a reserve
+## The native call path
 
-`native/plotina-dfn/` (a Rust JNI shim around DeepFilterNet3), `patches/0001` (element-call-android:
-denoise each 10 ms capture frame before it is published) and `patches/0003`
-(`FeatureFlags.NativeCall` default `true`) are still in this repository and still documented in git
-history. **They are not applied by the workflow and not part of this APK.** Reasons, in order:
-
-- At `v26.10.1` native calls are `isFinished = false`, `FeatureFlags.NativeCall` defaults to false,
-  and the stack is an `0.1.0-rc.8` library. Turning it on to get a denoiser was always the heavier
-  trade.
-- The WebView path reaches noise suppression through *our* deployment instead, with one constant and
-  no native code.
-- The native path costs Rust cross-compilation, an NDK, an ~8 MB model in the APK, a patched
-  element-call-android published to mavenLocal, and arm64-v8a only.
-
-To revive it: put back the cargo-ndk + `publishToMavenLocal` steps at the parent commit of the
-`element-x` branch, apply `0001`/`0003`, and build with `-PelementCallLocalVersion`. If both paths are
-ever wanted at once, note that `0003` sends calls to the native stack and `0004` is then dead code.
+An earlier experiment ran DeepFilterNet3 inside a native-call build (a Rust JNI shim plus
+`FeatureFlags.NativeCall`). It was never enabled in CI: at `v26.10.1` native calls are unfinished,
+and the WebView path reaches noise suppression through our own Element Call deployment with one
+constant and no native code. The files were removed from the tree; git history still has them if
+the native stack ever becomes worth the Rust cross-compilation, the NDK and the extra ~8 MB.
 
 ## Limitations
 
