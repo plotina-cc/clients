@@ -24,22 +24,25 @@ windows/             our NSIS installer: installer.nsi + build-installer.sh
 
 ## Cinny Web
 
-Static files on the edge (`/srv/cinny`), no build step.
+Static files on the edge (`/srv/cinny`), built by
+`.github/workflows/build-cinny-web.yml` and unpacked there unchanged: the
+workflow takes the tag from `UPSTREAM_TAG`, applies the Sentry patch, embeds
+`noise/` (models fetched and verified against `noise.lock.json`) and uploads
+`plotina-cinny-web.tar.gz` with `build-info.json` next to it (release, upstream
+commit, run).
 
-1. Copy `../noise/` to `/srv/cinny/noise` so `/noise/logic.js` resolves on the
-   same origin.
-2. Insert the tags into two documents:
-   - `index.html` — the app shell, gets
-     `<script src="/noise/logic.js"></script><script src="/noise/cinny-ui.js" defer></script>`
-     which renders the level slider in Settings → General;
-   - `public/element-call/index.html` — the embedded Element Call page, the only
-     document that actually calls `getUserMedia`, gets
-     `<script src="/noise/logic.js"></script><script src="/noise/boot.js" defer></script>`.
-3. Cache headers on the edge: `/noise/dfn/*` for 30 days, `/noise/*.js` as
-   `no-cache`, so a fix reaches browsers without a hard reload.
+```bash
+sha256sum -c plotina-cinny-web.tar.gz.sha256
+sudo mkdir -p /srv/cinny.new && sudo tar -xzf plotina-cinny-web.tar.gz -C /srv/cinny.new
+sudo chown -R bob3r:bob3r /srv/cinny.new
+sudo sh -c 'mv /srv/cinny /srv/cinny.bak-$(date +%Y%m%d-%H%M%S) && mv /srv/cinny.new /srv/cinny'
+```
 
-Edits are idempotent: the marker is checked before inserting, and each patched
-document keeps a `.bak-plotina` copy.
+Caddy reads the directory per request and needs no reload; the previous tree
+stays as `/srv/cinny.bak-<timestamp>` and rolling back is renaming the two back.
+Cache headers are the part Caddy does own: `/noise/dfn/*` for 30 days,
+`/noise/*.js` as `no-cache`, and `index.html` as `no-cache` so a new shell with
+new asset hashes is picked up.
 
 **Why two documents.** Cinny renders calls in an iframe pointing at
 `public/element-call/index.html`; that iframe has its own `window`, so wrapping
@@ -71,17 +74,20 @@ HTTP context, because a Matrix client's console output and URLs carry room, user
 and event identifiers.
 
 ```bash
-VITE_SENTRY_DSN="https://<key>@sentry.plotina.cc/1" \
-VITE_SENTRY_RELEASE="cinny@v4.12.8-plotina-cinny.4" \
+VITE_SENTRY_DSN="https://<key>@sentry.plotina.cc/relay/1" \
+VITE_SENTRY_RELEASE="cinny@4.12.8" \
   scripts/build.sh
 ```
 
-The release is `cinny@<version+tag>` (`cinny@v4.12.8-plotina-cinny.4`);
-`build.sh` takes the checked-out tag and falls back to
-`cinny@<upstream tag>-local`. Events land in the `web-clients` project with
-environment `production` and the tag `client: cinny`. The web bundle on the edge
-must be built with the same `VITE_SENTRY_RELEASE` as the tag, otherwise its
-events will not match the uploaded maps.
+The release is `cinny@<version>` — `cinny@4.12.8` for upstream tag v4.12.8 —
+and a tag of this repository is used as is (`cinny@v4.12.8-plotina-cinny.4`),
+which is the string the desktop build reports. `build.sh` falls back to
+`cinny@<upstream tag>-local` on a checkout that is not at a tag. Events land in
+the `web-clients` project with environment `production` and the tag
+`client: cinny`. The web bundle on the edge must be built with the same
+`VITE_SENTRY_RELEASE` as the maps, otherwise its events will not match them —
+that is why the web build takes the release from `UPSTREAM_TAG` and never from
+a branch name.
 
 `scripts/sentry-sourcemaps.py` copies the app bundle's maps — everything under
 `dist/assets` plus the root service worker — and the scripts they describe to
@@ -96,10 +102,12 @@ sentry-cli releases new "$release"
 sentry-cli sourcemaps upload --release "$release" --url-prefix "~" "$maps"
 ```
 
-The upload currently answers 403: `https://sentry.plotina.cc` exposes only
-`/relay/1`, and `/api/0/*` has to be proxied by the relay (separate change), so
-the workflow step is non-fatal. Events themselves already reach GlitchTip
-through the relay.
+`https://sentry.plotina.cc/api/0/*` is a token-gated proxy in the relay
+(`Authorization: Bearer` from `/etc/plotina-sentry-relay/api-token`), so the
+upload runs in CI with `SENTRY_AUTH_TOKEN` and a rejection is a real failure,
+not the old 403. `build-cinny-web.yml` uploads the maps for `cinny@4.12.8` and
+the artifact records the debug ids, which is what pairs an event with its map;
+the release and the tag `client: cinny` are visible in every event.
 
 Do **not** also inject a shell-level Sentry script (such as a vendored
 `/noise/vendor/sentry-global.js`) into `index.html`: the bundle reports for

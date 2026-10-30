@@ -199,7 +199,10 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           tar -C cinny/upstream/cinny/dist -czf dist/plotina-cinny-web.tar.gz .
-          sha256sum dist/plotina-cinny-web.tar.gz | tee dist/plotina-cinny-web.tar.gz.sha256
+          # The checksum names the file without a directory, so it verifies
+          # next to the tarball wherever it is unpacked.
+          ( cd dist && sha256sum plotina-cinny-web.tar.gz > plotina-cinny-web.tar.gz.sha256 )
+          cat dist/plotina-cinny-web.tar.gz.sha256
           jq -n --arg release "$SENTRY_RELEASE" \
                 --arg tag "$(cat cinny/UPSTREAM_TAG)" \
                 --arg sha "$GITHUB_SHA" \
