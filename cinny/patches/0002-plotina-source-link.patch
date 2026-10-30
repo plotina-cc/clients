@@ -1,0 +1,45 @@
+diff --git a/src/app/features/settings/about/About.tsx b/src/app/features/settings/about/About.tsx
+index d3dcde9..a3b663e 100644
+--- a/src/app/features/settings/about/About.tsx
++++ b/src/app/features/settings/about/About.tsx
+@@ -81,6 +81,20 @@ export function About({ requestClose }: AboutProps) {
+                   </Box>
+                 </Box>
+               </Box>
++              <Box direction="Column" gap="100">
++                <Text size="L400">Plotina build</Text>
++                <Text size="T300">
++                  Исходный код этой сборки:{' '}
++                  <a
++                    href="https://github.com/plotina-cc/clients"
++                    rel="noreferrer noopener"
++                    target="_blank"
++                  >
++                    github.com/plotina-cc/clients
++                  </a>
++                  .
++                </Text>
++              </Box>
+               <Box direction="Column" gap="100">
+                 <Text size="L400">Options</Text>
+                 <SequenceCard
+diff --git a/src/app/pages/auth/AuthFooter.tsx b/src/app/pages/auth/AuthFooter.tsx
+index b0b9431..1f92449 100644
+--- a/src/app/pages/auth/AuthFooter.tsx
++++ b/src/app/pages/auth/AuthFooter.tsx
+@@ -17,6 +17,15 @@ export function AuthFooter() {
+       >
+         v4.12.8
+       </Text>
++      <Text
++        as="a"
++        size="T300"
++        href="https://github.com/plotina-cc/clients"
++        target="_blank"
++        rel="noreferrer"
++      >
++        Исходный код
++      </Text>
+       <Text as="a" size="T300" href="https://twitter.com/cinnyapp" target="_blank" rel="noreferrer">
+         Twitter
+       </Text>

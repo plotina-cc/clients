@@ -175,3 +175,4 @@ jobs:
             а в консоли есть строка `[plotina-noise]`.
 
             Исходники этой сборки — upstream-тег плюс этот репозиторий (AGPL-3.0).
+            Полный набор и шаги пересборки: https://github.com/plotina-cc/clients/blob/main/SOURCE.md

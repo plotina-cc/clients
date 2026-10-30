@@ -525,7 +525,7 @@ jobs:
           - Push notifications go through FCM and our own push gateway (push.plotina.cc), no ntfy app needed.
           - Signed with the Plotina key: installs over our previous builds.
           - Two APKs: arm64-v8a (most phones) and armeabi-v7a (older devices).
-          - Source: this repository at this tag (AGPL-3.0).
+          - Source: `https://github.com/plotina-cc/clients` at this tag plus upstream `krille-chan/fluffychat` at the tag in `fluffychat/UPSTREAM_TAG`. Full set and rebuild steps: `SOURCE.md` (AGPL-3.0-or-later upstream, AGPL-3.0 patch layer).
           EOF
           gh release view "$TAG" > /dev/null 2>&1 ||
             gh release create "$TAG" --title "FluffyChat $TAG" --notes-file "$BODY"

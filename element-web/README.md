@@ -5,7 +5,7 @@ audio for **Element Call** through DeepFilterNet3 and adds a level slider to
 Settings → Voice & Video.
 
 Nothing in Element's own code is patched: the image contains the stock build with
-one extra `<script>` tag in `index.html` and a `/noise/` directory. That keeps the
+two extra `<script>` tags in `index.html` and a `/noise/` directory. That keeps the
 overlay cheap to rebase onto a new upstream release — see "Bumping upstream".
 
 ## Layout
@@ -83,6 +83,16 @@ DSN.
 The desktop shell reports under its own label, `Plotina-Element@<version>`
 (`@sentry/electron` derives it from the app name and version), and sends
 minidumps for native crashes, so the web source maps do not apply to those.
+
+## Licence and source
+
+The image is AGPL-3.0. The Dockerfile copies `LICENSE-AGPL-3.0` and `NOTICE`
+into `/app`, so the served app has the licence text at `/LICENSE-AGPL-3.0` and
+the copyright/modification notice at `/NOTICE`. `config.json` adds
+an "Исходный код" link to the sign-in footer through
+`branding.auth_footer_links`; it points at
+<https://github.com/plotina-cc/clients>. The upstream tag plus this repository
+is the source pair, with the exact rebuild steps in `../SOURCE.md`.
 
 ## Tests
 

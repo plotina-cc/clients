@@ -9,6 +9,15 @@ build compiles the dist into a Tauri binary.
 No source fork is needed: Cinny is taken at a pinned tag, the **built web dist**
 is patched before packaging, and the installers are built with our own config.
 
+## Source and licence
+
+The web app and the desktop build are Cinny `v4.12.8` plus `patches/` and
+`apply-noise.py`. The source pair — upstream tag plus this repository — is in
+`../SOURCE.md`. Patch `0002-plotina-source-link.patch` adds the "Исходный код"
+link to the auth footer and to Settings → About; both point at
+<https://github.com/plotina-cc/clients>. `apply-noise.py` also copies
+`../LICENSE` and `../NOTICE` into the dist as `LICENSE-AGPL-3.0` and `NOTICE`.
+
 ## What is here
 
 ```
@@ -26,10 +35,11 @@ windows/             our NSIS installer: installer.nsi + build-installer.sh
 
 Static files on the edge (`/srv/cinny`), built by
 `.github/workflows/build-cinny-web.yml` and unpacked there unchanged: the
-workflow takes the tag from `UPSTREAM_TAG`, applies the Sentry patch, embeds
-`noise/` (models fetched and verified against `noise.lock.json`) and uploads
-`plotina-cinny-web.tar.gz` with `build-info.json` next to it (release, upstream
-tag, the repository commit and the Cinny commit, run).
+workflow takes the tag from `UPSTREAM_TAG`, applies the patches in `patches/`
+(Sentry and the source link), embeds `noise/` (models fetched and verified
+against `noise.lock.json`) and uploads `plotina-cinny-web.tar.gz` with
+`build-info.json` next to it (release, upstream tag, the repository commit and
+the Cinny commit, run).
 
 ```bash
 sha256sum -c plotina-cinny-web.tar.gz.sha256

@@ -554,7 +554,8 @@ jobs:
             - `Plotina-ElementX.apk` is the arm64-v8a build (every phone from the last several
               years); `Plotina-ElementX-armv7.apk` covers older 32-bit devices. There is no universal
               APK on purpose: one file for all four ABIs is 400 MB.
-            - Source: this repository at this tag plus the upstream tag pinned in `element-x/pins.env`.
+            - Source: this repository at this tag plus the upstream tag pinned in `element-x/pins.env`. The full set and rebuild steps are in
+              https://github.com/plotina-cc/clients/blob/main/SOURCE.md (AGPL-3.0-or-later upstream, AGPL-3.0 patch layer).
 
             If the call page cannot be reached, the copy of Element Call bundled in the APK is used
             instead.

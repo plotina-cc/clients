@@ -12,6 +12,13 @@ patched so calls run on our own Element Call instead of the bundle inside the AP
 - **Sign-in** is prefilled with `plotina.cc`.
 - **Crash reports** go to GlitchTip under release `element-x@<tag>`, environment `production`.
 
+## Source
+
+The APK is built from `element-hq/element-x-android` at `v26.10.1` plus the
+patches in `element-x/patches/`. The upstream tag, the patch order and the
+`./gradlew` command are in `../SOURCE.md`; the release notes repeat the offer.
+Upstream is AGPL-3.0-or-later; the patch layer here is AGPL-3.0.
+
 ## Installing and signing
 
 Release builds are signed with the Plotina key. Repository secrets, all four required:

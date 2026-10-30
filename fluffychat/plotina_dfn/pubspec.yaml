@@ -19,3 +19,5 @@ flutter:
         pluginClass: PlotinaDfnPlugin
   assets:
     - assets/DeepFilterNet3_onnx.tar.gz
+    - assets/LICENSE-MIT
+    - assets/LICENSE-APACHE

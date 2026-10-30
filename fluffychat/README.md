@@ -159,4 +159,9 @@ Smoke test: build with `--dart-define=PLOTINA_SENTRY_TEST_EVENT=true`.
 
 Our code: AGPL-3.0-or-later, like upstream. DeepFilterNet (`deep_filter`
 crate and the model) is MIT/Apache-2.0; the model is redistributed unchanged
-from the upstream release.
+from the upstream release. Its licence texts are in `plotina_dfn/assets/` and
+are declared as Flutter assets, so they travel inside the APK.
+
+The APK is built from `krille-chan/fluffychat` at `v2.11.3` plus `patches/` and
+`plotina_dfn/`. The release notes and `../SOURCE.md` name the upstream tag and
+the rebuild command; the same repository and tag are the corresponding source.

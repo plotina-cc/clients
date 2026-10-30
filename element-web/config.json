@@ -14,7 +14,13 @@
     "environment": "production"
   },
   "branding": {
-    "logo_link_url": "https://plotina.cc"
+    "logo_link_url": "https://plotina.cc",
+    "auth_footer_links": [
+      {
+        "text": "Исходный код",
+        "url": "https://github.com/plotina-cc/clients"
+      }
+    ]
   },
   "setting_defaults": {
     "language": "ru",

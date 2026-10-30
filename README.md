@@ -69,6 +69,43 @@ signing certificate.
 
 ## Licence
 
-AGPL-3.0 (see `LICENSE`), matching the upstream projects we derive from: Element
-Web, Cinny and Cinny Desktop. Vendored third-party licences are kept next to the
-code in `noise/vendor/`.
+The patch layer in this repository — build scripts, patches, configuration and
+the noise wrapper — is AGPL-3.0 (see `LICENSE`). It follows the upstream licence
+of the client it applies to: AGPL-3.0-or-later for Element Web, Element Desktop,
+Element Call, Element X and FluffyChat; AGPL-3.0-only for Cinny and Cinny
+Desktop. Copyright (C) 2026 Plotina contributors. The upstream copyright
+notices remain with their authors.
+
+The builds we serve and ship combine an upstream release with this repository:
+
+| Client | Licence | Upstream source |
+| --- | --- | --- |
+| Element Web | AGPL-3.0-or-later | [element-hq/element-web @ v1.12.32](https://github.com/element-hq/element-web/tree/v1.12.32) |
+| Element Desktop | AGPL-3.0-or-later | [element-hq/element-web @ v1.12.32](https://github.com/element-hq/element-web/tree/v1.12.32) |
+| Element Call | AGPL-3.0-or-later | [element-hq/element-call @ v0.26.1](https://github.com/element-hq/element-call/tree/v0.26.1) |
+| Cinny | AGPL-3.0-only | [cinnyapp/cinny @ v4.12.8](https://github.com/cinnyapp/cinny/tree/v4.12.8) |
+| Cinny Desktop | AGPL-3.0-only | [cinnyapp/cinny-desktop @ v4.12.8](https://github.com/cinnyapp/cinny-desktop/tree/v4.12.8) |
+| FluffyChat | AGPL-3.0-or-later | [krille-chan/fluffychat @ v2.11.3](https://github.com/krille-chan/fluffychat/tree/v2.11.3) |
+| Element X | AGPL-3.0-or-later | [element-hq/element-x-android @ v26.10.1](https://github.com/element-hq/element-x-android/tree/v26.10.1) |
+
+Element Web and Element Desktop are also offered by Element under
+GPL-3.0-or-later or a commercial licence; Element Call and Element X under a
+commercial licence. All four are used here under the AGPL option. Cinny and
+Cinny Desktop are AGPL-3.0-only.
+
+Third-party components keep their own licences: DeepFilterNet and the vendored
+`mezon-noise-suppression` wrapper are MIT OR Apache-2.0 (`noise/vendor/`);
+GlitchTip and the Sentry SDKs are MIT. `CREDITS.md` lists them.
+
+### Where to get the source
+
+The repository is public: <https://github.com/plotina-cc/clients>. For a release,
+the Corresponding Source is the upstream tag pinned for that client plus this
+repository at the release tag; `SOURCE.md` has the exact tags, overlay
+directories and rebuild commands. GitHub's automatic "Source code" archives for a
+tag contain only this patch layer, not the upstream tree, so fetch both.
+
+Element Web, Cinny and Element Call link to this repository from their footer;
+Element Call's link is on its sign-in view, the only footer that app has. The
+release notes of the Android APKs and the desktop installers name this
+repository as the source; `SOURCE.md` gives the upstream tag that goes with it.

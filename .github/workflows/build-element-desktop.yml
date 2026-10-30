@@ -201,3 +201,4 @@ jobs:
             macOS не собирается.
 
             Исходники этой сборки — в этом репозитории (AGPL-3.0): upstream-тег element-web из element-desktop/UPSTREAM_TAG плюс оверлей element-desktop/.
+            Полный набор: https://github.com/plotina-cc/clients/blob/main/SOURCE.md

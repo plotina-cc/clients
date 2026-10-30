@@ -108,11 +108,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Adds src/plotina/sentry.ts, calls it from src/index.tsx before the
-          # first render, and switches Vite to hidden source maps. Fails loudly
-          # if a future upstream tag moves either anchor.
-          git -C upstream/cinny apply --check "$PWD/patches/0001-plotina-sentry.patch"
-          git -C upstream/cinny apply "$PWD/patches/0001-plotina-sentry.patch"
+          # Apply every patch in cinny/patches in name order. 0001 adds Sentry;
+          # 0002 adds the Plotina source link to the auth footer and About page.
+          # Fails loudly if a future upstream tag moves an anchor.
+          for patch in "$PWD"/patches/*.patch; do
+            git -C upstream/cinny apply --check "$patch"
+            git -C upstream/cinny apply "$patch"
+          done
 
       - name: Build Cinny web
         working-directory: cinny/upstream/cinny
@@ -182,6 +184,8 @@ jobs:
           test -f "$dist/noise/dfn/v3/pkg/df_bg.wasm"
           test -f "$dist/noise/vendor/dfn.esm.js"
           test -f "$dist/config.json"
+          test -s "$dist/LICENSE-AGPL-3.0"
+          test -s "$dist/NOTICE"
           # The SDK is in the bundle; both build-time values survive minification.
           grep -Raqs 'sentry.javascript' "$dist/assets"
           grep -RaqsF "$VITE_SENTRY_DSN" "$dist/assets"

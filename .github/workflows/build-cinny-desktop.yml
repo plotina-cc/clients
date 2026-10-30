@@ -107,11 +107,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Same patch as scripts/build.sh: adds src/plotina/sentry.ts, calls it
-          # from src/index.tsx and hides the source maps. Fails loudly if a
-          # future upstream tag moves either anchor.
-          git -C upstream/cinny apply --check "$PWD/patches/0001-plotina-sentry.patch"
-          git -C upstream/cinny apply "$PWD/patches/0001-plotina-sentry.patch"
+          # Same patches as scripts/build.sh: 0001 adds Sentry, 0002 adds the
+          # Plotina source link to the auth footer and About page. Fails loudly
+          # if a future upstream tag moves an anchor.
+          for patch in "$PWD"/patches/*.patch; do
+            git -C upstream/cinny apply --check "$patch"
+            git -C upstream/cinny apply "$patch"
+          done
 
       - name: Build Cinny web
         working-directory: cinny/upstream/cinny
@@ -195,6 +197,8 @@ jobs:
           grep -q 'noise/boot.js' upstream/cinny/dist/public/element-call/index.html
           test -f upstream/cinny/dist/noise/dfn/v3/pkg/df_bg.wasm
           test -f upstream/cinny/dist/noise/vendor/dfn.esm.js
+          test -s upstream/cinny/dist/LICENSE-AGPL-3.0
+          test -s upstream/cinny/dist/NOTICE
           # The Sentry SDK must be in the bundle even though it is a no-op
           # without a DSN; "sentry.javascript" is the SDK name every envelope
           # carries. Source maps of the app bundle, by contrast, must not be
@@ -262,4 +266,5 @@ jobs:
             Windows: установщик не подписан, SmartScreen попросит подтверждение.
             Linux: AppImage, deb (Debian/Ubuntu) или rpm (Fedora/openSUSE).
 
-            Исходники этой сборки — в этом репозитории (AGPL-3.0).
+            Исходники этой сборки — в этом репозитории (AGPL-3.0): upstream-тег cinny-desktop из cinny/UPSTREAM_TAG и его submodule cinny плюс оверлей cinny/.
+            Полный набор: https://github.com/plotina-cc/clients/blob/main/SOURCE.md

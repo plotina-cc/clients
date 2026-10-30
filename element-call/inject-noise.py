@@ -22,6 +22,7 @@ TAGS = (
     '<script src="/noise/logic.js"></script>'
     '<script src="/noise/plotina-dfn.js"></script>'
     '<script src="/noise/boot.js"></script>'
+    '<script src="/noise/source-link.js" defer></script>'
 )
 
 

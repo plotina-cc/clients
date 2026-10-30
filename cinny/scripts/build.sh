@@ -33,17 +33,19 @@ SENTRY_RELEASE="${VITE_SENTRY_RELEASE:-cinny@$(git -C "$ROOT" describe --tags --
 echo "==> noise assets"
 python3 "$ROOT/scripts/fetch-noise.py"
 
-echo "==> sentry patch ($SENTRY_RELEASE)"
+echo "==> plotina patches ($SENTRY_RELEASE)"
 cd cinny
-PATCH="$ROOT/patches/0001-plotina-sentry.patch"
-if git apply --check "$PATCH" 2>/dev/null; then
-  git apply "$PATCH"
-elif git apply -R --check "$PATCH" 2>/dev/null; then
-  echo "already applied"
-else
-  echo "build.sh: $PATCH does not apply; upstream src/index.tsx or vite.config.js changed" >&2
-  exit 1
-fi
+for PATCH in "$ROOT"/patches/*.patch; do
+  if git apply --check "$PATCH" 2>/dev/null; then
+    git apply "$PATCH"
+    echo "applied: $(basename "$PATCH")"
+  elif git apply -R --check "$PATCH" 2>/dev/null; then
+    echo "already applied: $(basename "$PATCH")"
+  else
+    echo "build.sh: $PATCH does not apply; upstream source changed" >&2
+    exit 1
+  fi
+done
 
 echo "==> web build"
 [ -d node_modules ] || npm ci

@@ -112,5 +112,8 @@ be installed side by side.
 
 Element Web and Element Desktop are AGPL-3.0. We distribute modified binaries, so
 the corresponding source is this repository plus the pinned upstream tag; keep
-the upstream copyright notices. Third-party licences for the vendored denoiser
-are in `../noise/vendor/`.
+the upstream copyright notices. `prepare-webapp.sh` copies `../LICENSE` and
+`../NOTICE` into the webapp as `LICENSE-AGPL-3.0` and `NOTICE`, so they travel
+inside `webapp.asar`, and the sign-in footer carries the same "Исходный код" link
+as the web client. The exact tag and rebuild steps are in `../SOURCE.md`.
+Third-party licences for the vendored denoiser are in `../noise/vendor/`.

@@ -66,6 +66,20 @@ def main() -> None:
 
     patch_html(dist / "index.html", CINNY_TAG, "/noise/cinny-ui.js")
     patch_html(dist / "public" / "element-call" / "index.html", CALL_TAG, "/noise/boot.js")
+
+    # The dist is what the web server hands out and what goes into the Tauri
+    # bundle; AGPL-3.0 requires the licence text and the modification notice to
+    # travel with it. The copies are byte-identical to ../LICENSE and ../NOTICE.
+    repo_root = Path(__file__).resolve().parent.parent
+    for src, dst in (
+        (repo_root / "LICENSE", dist / "LICENSE-AGPL-3.0"),
+        (repo_root / "NOTICE", dist / "NOTICE"),
+    ):
+        if not src.is_file():
+            sys.exit(f"apply-noise: missing {src}")
+        shutil.copyfile(src, dst)
+    print(f"licence: {dist / 'LICENSE-AGPL-3.0'}; notice: {dist / 'NOTICE'}")
+
     print(f"ok: {noise_dst} ({sum(p.stat().st_size for p in noise_dst.rglob('*') if p.is_file()) // 1_000_000} MB)")
 
 

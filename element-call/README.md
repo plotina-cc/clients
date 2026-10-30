@@ -42,9 +42,11 @@ element-call-plotina/
 ├── favicon.png
 ├── config.json                # ours (upstream ships none)
 ├── LICENSE-AGPL-3.0           # upstream ships none either
+├── NOTICE                     # copyright and modification notice
 ├── assets/…                   # hashed Vite output, referenced as /assets/…
 └── noise/
     ├── logic.js  boot.js      # the shared wrapper
+    ├── source-link.js         # "Исходный код" in the sign-in footer
     ├── vendor/dfn.esm.js      # + its two licences
     └── dfn/v3/pkg/df_bg.wasm  # 16.4 MB, sha256 from pins.env
         dfn/v3/models/DeepFilterNet3_onnx.tar.gz   # 8.0 MB
@@ -166,3 +168,9 @@ the files in this repository, so the source offer for what we serve is this repo
 pinned tag. The tarball ships no licence files of its own, so `build.sh` copies our `LICENSE` in as
 `LICENSE-AGPL-3.0` — it is byte-identical to upstream's, verified at v0.26.1. `noise/vendor/` keeps
 its own MIT/Apache-2.0 notices.
+
+Element Call v0.26.1 has no configurable site footer. The unauthenticated view renders the only
+`<footer>`; `source-link.js` is copied into `/noise/` and injected into `index.html`, and appends
+"Исходный код" to that footer. The call and lobby views have no `<footer>` (their controls use
+`data-testid="footer-container"`), so the link does not appear over the call UI. The source pair is
+also named in this README, the release notes and `../SOURCE.md`.

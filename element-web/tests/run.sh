@@ -10,6 +10,12 @@ REL="${HERE#"$ROOT"/}"
 PORT="${PORT:-8097}"
 CHROME="${CHROME:-chromium}"
 
+# The Element Web Docker build context is element-web/, so the licence and
+# notice texts are duplicated there. Keep them byte-identical to the repository
+# copies.
+cmp "$ROOT/LICENSE" "$ROOT/element-web/LICENSE-AGPL-3.0"
+cmp "$ROOT/NOTICE" "$ROOT/element-web/NOTICE"
+
 python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$ROOT" >/tmp/plotina-noise-tests.log 2>&1 &
 SERVER_PID=$!
 trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT

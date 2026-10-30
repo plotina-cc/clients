@@ -210,7 +210,7 @@ python3 "$HERE/inject-noise.py" --check "$DIST/index.html"
 
 say "copying noise/ into the bundle"
 mkdir -p "$DIST/noise/vendor"
-install -m 0644 "$NOISE/logic.js" "$NOISE/boot.js" "$NOISE/plotina-dfn.js" "$DIST/noise/"
+install -m 0644 "$NOISE/logic.js" "$NOISE/boot.js" "$NOISE/plotina-dfn.js" "$HERE/source-link.js" "$DIST/noise/"
 install -m 0644 "$NOISE/vendor/dfn.esm.js" "$DIST/noise/vendor/"
 # The vendored module is third-party; its licences travel with it.
 for lic in "$NOISE"/vendor/LICENSE-*; do
@@ -255,15 +255,19 @@ PY
 # Upstream's LICENSE-AGPL-3.0 is byte-identical to our repository LICENSE, and
 # the release tarball ships no licence files at all, so carry it in the bundle.
 install -m 0644 "$REPO/LICENSE" "$DIST/LICENSE-AGPL-3.0"
+install -m 0644 "$REPO/NOTICE" "$DIST/NOTICE"
 
 # --- assertions ----------------------------------------------------------
 
 say "checking the bundle"
 python3 "$HERE/inject-noise.py" --check "$DIST/index.html" >/dev/null
 grep -q '/noise/logic.js' "$DIST/index.html" || die "logic.js tag missing from index.html"
+grep -q '/noise/source-link.js' "$DIST/index.html" || die "source-link.js tag missing from index.html"
+[ -s "$DIST/noise/source-link.js" ] || die "source-link.js is missing from the bundle"
 grep -q 'assets/' "$DIST/index.html" || die "no asset references in index.html; wrong tarball?"
 compgen -G "$DIST/assets/index-*.js" >/dev/null || die "no hashed app bundle under assets/"
 [ -s "$DIST/config.json" ] || die "config.json is empty"
+[ -s "$DIST/NOTICE" ] || die "NOTICE is empty"
 
 wasm_size="$(file_size "$DIST/noise/dfn/v3/pkg/df_bg.wasm")"
 model_size="$(file_size "$DIST/noise/dfn/v3/models/DeepFilterNet3_onnx.tar.gz")"

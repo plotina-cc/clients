@@ -91,9 +91,18 @@ echo "==> overlay"
 "$PYTHON" "$ROOT/apply-noise.py" --webapp "$DEST" --noise "$NOISE" \
   --config "$CONFIG"
 
+# The webapp directory becomes webapp.asar inside the installer; the licence
+# text and the modification notice have to travel with it. Byte-identical to
+# ../LICENSE and ../NOTICE.
+echo "==> licence"
+install -m 0644 "$REPO_ROOT/LICENSE" "$DEST/LICENSE-AGPL-3.0"
+install -m 0644 "$REPO_ROOT/NOTICE" "$DEST/NOTICE"
+
 echo "==> verify"
 grep -q 'noise/boot.js' "$DEST/index.html"
 grep -q 'noise/logic.js' "$DEST/index.html"
+test -s "$DEST/LICENSE-AGPL-3.0"
+test -s "$DEST/NOTICE"
 test -f "$DEST/noise/vendor/dfn.esm.js"
 test -f "$DEST/noise/dfn/v3/pkg/df_bg.wasm"
 test -f "$DEST/noise/dfn/v3/models/DeepFilterNet3_onnx.tar.gz"

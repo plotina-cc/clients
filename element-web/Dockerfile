@@ -2,10 +2,16 @@
 #
 # Built on top of the pinned upstream image: the only additions are a small
 # wrapper script, a vendored DFN module and the model assets. Upstream files are
-# untouched apart from one <script> tag appended to /app/index.html.
+# untouched apart from the two noise <script> tags appended to /app/index.html.
 FROM vectorim/element-web:v1.12.32@sha256:f8700633d4336258af7a05b53865a4f479e0d628cf2d9ca83d28b5939314d4ce
 
 USER root
+
+# The upstream image ships no licence or notice file at /app. AGPL-3.0 requires
+# the text and a modification notice to travel with the served app, so carry
+# both; these copies are byte-identical to ../LICENSE and ../NOTICE.
+COPY LICENSE-AGPL-3.0 /app/LICENSE-AGPL-3.0
+COPY NOTICE /app/NOTICE
 
 ARG DFN_BASE=https://cdn.mezon.ai/AI/models/datas/noise_suppression/deepfilternet3/v3
 ARG DFN_WASM_SHA256=440b5d12b6ea7d95008736f844221d7874ee15de5cb10d3015002470fdba0432
@@ -27,7 +33,10 @@ COPY noise/boot.js /app/noise/boot.js
 COPY noise/vendor/ /app/noise/vendor/
 
 RUN set -eux; \
+    chmod 0644 /app/LICENSE-AGPL-3.0 /app/NOTICE; \
     grep -q '</head>' /app/index.html; \
+    test -s /app/LICENSE-AGPL-3.0; \
+    test -s /app/NOTICE; \
     test -f /etc/nginx/templates/default.conf.template; \
     echo "upstream layout ok"
 

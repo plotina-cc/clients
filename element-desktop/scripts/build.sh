@@ -43,6 +43,8 @@ cp -a "$WORK/webapp" webapp
 pnpm run asar-webapp
 pnpm exec asar list webapp.asar | grep -q '^/noise/boot.js$'
 pnpm exec asar list webapp.asar | grep -q '^/config.json$'
+pnpm exec asar list webapp.asar | grep -q '^/LICENSE-AGPL-3.0$'
+pnpm exec asar list webapp.asar | grep -q '^/NOTICE$'
 # Check the packed file, not the directory it came from: the whole point is
 # that the Sentry block ends up inside the artifact users install.
 node -e '

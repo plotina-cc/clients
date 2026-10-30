@@ -1,0 +1,17 @@
+Plotina clients
+Copyright (C) 2026 Plotina contributors
+
+The original code in this repository (build scripts, patches, configuration and
+the noise wrapper) is licensed under the GNU Affero General Public License,
+version 3; the full text is in the repository's LICENSE and in the
+LICENSE-AGPL-3.0 file shipped with the binaries. The combined builds are
+distributed under the licence of the upstream client they are built from.
+`CREDITS.md` and `SOURCE.md` in the source repository name each upstream, its
+licence and the exact pins.
+
+Third-party components keep their own copyright and licence notices. The
+vendored DeepFilterNet wrapper carries the MIT and Apache-2.0 texts in
+noise/vendor/LICENSE-MIT and noise/vendor/LICENSE-APACHE.
+
+Upstream copyright notices are retained in the upstream sources; this notice
+does not replace them.
