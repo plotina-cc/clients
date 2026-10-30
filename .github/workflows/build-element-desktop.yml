@@ -109,7 +109,10 @@ jobs:
           # host ("Cannot connect to D: resolve failed"). Hand it a POSIX path
           # and keep colons literal.
           ARTIFACT="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")/webapp/webapp.tar.gz"
-          tar xzf --force-local "$ARTIFACT" -C "$SRC/apps/desktop/webapp"
+          # --force-local must come before the bundled xzf: with xzf tar takes
+          # the next argument as the archive name, so a trailing --force-local
+          # is read as a file to extract ("Cannot open: No such file").
+          tar --force-local -xzf "$ARTIFACT" -C "$SRC/apps/desktop/webapp"
           cd "$SRC/apps/desktop"
           pnpm run asar-webapp
           pnpm exec asar list webapp.asar | grep -q '^/noise/dfn/v3/pkg/df_bg.wasm$'
