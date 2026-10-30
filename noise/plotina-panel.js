@@ -60,7 +60,13 @@
 
   var forced = fromUrl("plotina-panel");
   var ua = navigator.userAgent || "";
-  var elementX = !/^Mozilla\//i.test(ua) && /Android/i.test(ua);
+  var android = /Android/i.test(ua);
+  // Element X sets its own UA ("Element X/<version> (…; Android …)"), which is
+  // how it is told apart from a desktop browser. If a WebView build reports the
+  // stock Mozilla UA instead, the widget parameters in the fragment still say
+  // that this is an app host, not a browser tab.
+  var widget = /[#?&]widgetId=/.test(location.hash || "");
+  var elementX = android && (widget || !/^Mozilla\//i.test(ua));
   var embedded = true;
   try {
     embedded = window.self !== window.top;

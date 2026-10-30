@@ -128,7 +128,9 @@ toggled off and on) keeps it.
 The panel is drawn only in the room view, and only when the page is embedded
 (`window.self !== window.top`) or the user agent is Element X's WebView, which
 sets its own UA (`Element X/<version> (…; Android …)`) instead of a Mozilla one.
-A top-level desktop tab at `call.plotina.cc` stays clean. `?plotina-panel=1` and
+An Android WebView that reports the stock UA still counts, because the widget
+parameters in the fragment (`#?widgetId=…`) identify an app host. A top-level
+desktop tab at `call.plotina.cc` stays clean. `?plotina-panel=1` and
 `?plotina-panel=0` override the decision for support and for tests.
 
 Element Web and Cinny embed Element Call in an iframe, so they do get the panel;
