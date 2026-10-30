@@ -1,0 +1,168 @@
+diff --git a/call/impl/build.gradle.kts b/call/impl/build.gradle.kts
+index 66ec92b..48b2110 100644
+--- a/call/impl/build.gradle.kts
++++ b/call/impl/build.gradle.kts
+@@ -41,6 +41,9 @@ dependencies {
+     implementation(variantOf(libs.jna) { artifactType("aar") })
+ 
+     implementation(libs.androidx.corektx)
++    // Plotina: @Keep on the class that owns the JNI symbols, so R8 cannot rename it out from
++    // under the native library in a release build.
++    implementation(libs.androidx.annotationjvm)
+     // For ElementCallPictureInPicture, which binds to the host's Activity. `activity`, never `activity-compose`.
+     implementation(libs.androidx.activity.activity)
+     implementation(libs.androidx.lifecycle.runtime)
+diff --git a/call/impl/src/main/kotlin/io/element/android/call/impl/rtc/media/AudioCapture.kt b/call/impl/src/main/kotlin/io/element/android/call/impl/rtc/media/AudioCapture.kt
+index 83aac96..8eed510 100644
+--- a/call/impl/src/main/kotlin/io/element/android/call/impl/rtc/media/AudioCapture.kt
++++ b/call/impl/src/main/kotlin/io/element/android/call/impl/rtc/media/AudioCapture.kt
+@@ -43,6 +43,12 @@ internal class AudioCapture(
+     private var recorder: Recorder? = null
+     private val meter = AudioLevelMeter(label = "out", onLevel = onLevel)
+ 
++    /**
++     * Plotina: DeepFilterNet3 over every frame that is about to be published. Loaded on first use
++     * and released with the recorder; a no-op if the native library is absent for this ABI.
++     */
++    private val denoiser = PlotinaDfn()
++
+     /** Phase of the test tone, carried across frames so the sine does not click at frame edges. */
+     private var tonePhase = 0.0
+ 
+@@ -97,6 +103,9 @@ internal class AudioCapture(
+         // of the problem - the record buffer holds 100 ms - but it is the same loop on the same pool.
+         val dispatcher = audioDispatcher("MatrixRtcAudioIn")
+         val newJob = scope.launch(dispatcher) {
++            // Plotina: the model loads here, on the capture thread, before the first read - so it
++            // costs no caller a pause and no captured frame is dropped while it loads.
++            denoiser.prepare()
+             // One frame of PCM16, held as the bytes the FFI takes. The short view is over the same
+             // memory, so metering and the test tone cost no conversion and the frame crosses the
+             // boundary without being copied or boxed.
+@@ -140,6 +149,9 @@ internal class AudioCapture(
+                 meter.onFrame(frame)
+                 if (muted.get()) continue
+ 
++                // Plotina: denoise in place, upstream of the encoder and of media encryption.
++                denoiser.process(frame)
++
+                 track.captureAudio(
+                     FfiAudioFrame(
+                         data = frame,
+@@ -175,6 +187,9 @@ internal class AudioCapture(
+     fun stop() {
+         recorder?.release()
+         recorder = null
++        // Plotina: the denoiser holds tens of megabytes of model state; a call that has ended
++        // should not keep them.
++        denoiser.close()
+     }
+ 
+     /**
+diff --git a/call/impl/src/main/kotlin/io/element/android/call/impl/rtc/media/PlotinaDfn.kt b/call/impl/src/main/kotlin/io/element/android/call/impl/rtc/media/PlotinaDfn.kt
+new file mode 100644
+index 0000000..9690d1d
+--- /dev/null
++++ b/call/impl/src/main/kotlin/io/element/android/call/impl/rtc/media/PlotinaDfn.kt
+@@ -0,0 +1,101 @@
++/*
++ * Copyright (c) 2026 Element Creations Ltd.
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial.
++ * Please see LICENSE files in the repository root for full details.
++ */
++
++package io.element.android.call.impl.rtc.media
++
++import androidx.annotation.Keep
++import timber.log.Timber
++
++/**
++ * Plotina: DeepFilterNet3 noise suppression for the microphone.
++ *
++ * Sits between `AudioRecord` and `FfiLocalTrack.captureAudio`, so it sees exactly what the RTC
++ * stack would otherwise encode: 48 kHz mono little-endian PCM16, 480 samples (10 ms) per frame.
++ * That is the frame size and hop the model was exported at (`hop_size = 480`, `fft_size = 960`,
++ * `sr = 48000` in the model's `config.ini`), so nothing is resampled or re-framed on the way in
++ * or out, and the DSP only ever looks at samples: it cannot reach the media encryption, which
++ * happens further down on the encoded frames.
++ *
++ * The native side is a small cdylib around the `deep_filter` crate (libDF) with the DFN3 ONNX
++ * model embedded; it keeps 5 frames of spectral history and 2 frames of lookahead, so it adds
++ * ~20 ms of algorithmic delay to the uplink on top of the time the model itself takes per frame.
++ *
++ * Everything here degrades to "no denoising" rather than to a broken call: if the library is
++ * missing for this ABI, or the model fails to load, [process] becomes a no-op and the microphone
++ * is published exactly as captured.
++ *
++ * `@Keep` because the JNI symbol is derived from this class name and R8 would otherwise rename it
++ * in a release build, turning every call into an `UnsatisfiedLinkError` (and therefore silent
++ * fallback to raw capture).
++ */
++@Keep
++internal class PlotinaDfn {
++    private var handle: Long = 0L
++    private var loadFailed = false
++
++    /**
++     * Loads the model. Called once per call, on the capture thread, before the first read, so the
++     * model load costs neither the caller's thread nor a captured frame. Idempotent.
++     */
++    fun prepare() {
++        if (handle != 0L || loadFailed) return
++        handle = try {
++            System.loadLibrary(LIBRARY_NAME)
++            nativeCreate(AudioFormat.SAMPLE_RATE, AudioFormat.CHANNEL_COUNT)
++        } catch (throwable: Throwable) {
++            // NoSuchElementException for an ABI we do not ship, UnsatisfiedLinkError for a bad
++            // symbol, and anything the model loader throws on the way up. All of them mean the
++            // same thing here: publish the microphone unprocessed.
++            loadFailed = true
++            Timber.w(throwable, "Plotina: DeepFilterNet3 unavailable, publishing raw microphone")
++            0L
++        }
++        if (handle == 0L) {
++            loadFailed = true
++        } else {
++            Timber.i("Plotina: DeepFilterNet3 ready at ${AudioFormat.SAMPLE_RATE} Hz")
++        }
++    }
++
++    /**
++     * Denoises one frame in place. A no-op until [prepare] has succeeded, and never throws: a
++     * failure mid-call disables denoising for the rest of the call rather than ending capture.
++     */
++    fun process(frame: ByteArray) {
++        if (handle == 0L) return
++        try {
++            nativeProcess(handle, frame)
++        } catch (throwable: Throwable) {
++            Timber.w(throwable, "Plotina: denoising failed, publishing raw microphone")
++            close()
++            loadFailed = true
++        }
++    }
++
++    /** Releases the native state; the next [prepare] loads the model again. */
++    fun close() {
++        val current = handle
++        handle = 0L
++        if (current != 0L) {
++            try {
++                nativeDestroy(current)
++            } catch (throwable: Throwable) {
++                Timber.w(throwable, "Plotina: could not release the denoiser")
++            }
++        }
++    }
++
++    private external fun nativeCreate(sampleRate: Int, channels: Int): Long
++
++    private external fun nativeProcess(handle: Long, frame: ByteArray)
++
++    private external fun nativeDestroy(handle: Long)
++
++    private companion object {
++        const val LIBRARY_NAME = "plotina_dfn"
++    }
++}

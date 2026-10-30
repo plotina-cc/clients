@@ -57,7 +57,8 @@ jobs:
                    0004-element-x-android-plotina-call-url \
                    0005-element-x-android-plotina-app-link \
                    0006-element-x-android-plotina-account-provider \
-                   0007-element-x-android-plotina-push-gateway; do
+                   0007-element-x-android-plotina-push-gateway \
+                   0008-element-x-android-plotina-sentry; do
             echo "==> $p"
             git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/$p.patch"
           done

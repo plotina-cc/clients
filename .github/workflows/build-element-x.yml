@@ -1,0 +1,561 @@
+# Builds Plotina's Element X Android APK: upstream element-x-android, with the call WebView pointed
+# at our own Element Call (https://call.plotina.cc/room) by default, so a call opens there without
+# anyone typing a URL into developer settings.
+#
+# It is also the app behind https://plotina.cc/app: patch 0005 registers that URL as a verified
+# app link, because mobile.element.io's assetlinks.json lists Element's certificates and not the
+# Plotina key this build is signed with, so element.io invitation links cannot reach it.
+#
+# And it is the push build: the `gplay` flavour is the only one that carries the Firebase push
+# provider (`fdroid` has no Firebase at all), and patch 0007 points it at our gateway,
+# https://push.plotina.cc/_matrix/push/v1/notify, instead of matrix.org's. Note the flavour name:
+# there is no `play` flavour in element-x-android, it is `gplay`.
+#
+# Element X does not apply the com.google.gms.google-services Gradle plugin — upstream keeps that
+# alias commented out in app/build.gradle.kts and hand-maintains the Firebase values in
+# libraries/pushproviders/firebase/src/*/res/values/firebase.xml for Element's own project. This
+# workflow therefore decodes the GOOGLE_SERVICES_JSON secret, drops it at app/google-services.json
+# and lets element-x/scripts/firebase-resources.py write our project's values (plus the resource
+# keep list that AGP 9.3's default resource shrinking needs) into app/src/gplay/res. That overlay
+# outranks the library module, so the APK talks to the plotina-push project.
+#
+# The native Rust/JNI denoiser path (element-x/native/plotina-dfn, patches 0001 and 0003) is kept in
+# this repository as a reserve but is deliberately NOT part of this build: nothing here compiles
+# Rust, installs the NDK, or publishes element-call-android to mavenLocal. The WebView call reaches
+# noise suppression through our own Element Call deployment instead.
+#
+# Nothing is built on golova; this workflow is the build machine. It needs no macOS runner: the
+# Android target is all we ship (see element-x/README.md, "Limitations").
+#
+# Secrets, all optional - without them the job builds a debug APK signed with the debug key, which
+# cannot replace an installed release:
+#   ANDROID_KEYSTORE_BASE64   base64 of the .jks/.keystore (base64 -w0 plotina.jks)
+#   ANDROID_KEYSTORE_PASSWORD store password
+#   ANDROID_KEY_ALIAS         key alias (plotina)
+#   ANDROID_KEY_PASSWORD      key password
+#
+# One secret is not optional: GOOGLE_SERVICES_JSON, the base64 google-services.json of the
+# plotina-push Firebase project (client io.element.android.x). Without it the `gplay` flavour would
+# build an APK that installs, launches and never receives a notification, so the workflow fails
+# instead. Push also needs the server side: Synapse records our gateway URL as the pusher, and
+# sygnal on push.plotina.cc holds the Firebase service account for app_id im.vector.app.android
+# (the value BuildConfig.PUSHER_APP_ID carries into the pusher registration).
+name: Build Element X (Android, Plotina)
+
+on:
+  push:
+    tags:
+      - "v*-plotina-x.*"
+  pull_request:
+    paths:
+      - "element-x/**"
+      - ".github/workflows/build-element-x.yml"
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "element-x-android tag (empty = the pin in element-x/pins.env)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-element-x-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Same heap upstream CI uses: R8 on the full app runs out of memory well before 4g. The metaspace
+  # and Kotlin-daemon caps are upstream's too — on a 16 GB hosted runner the sum matters, and two
+  # gplay runs were killed by the runner while packaging (see the monitor in the Assemble step).
+  GRADLE_OPTS: -Dorg.gradle.jvmargs=-Xmx8g -XX:MaxMetaspaceSize=512m -Dfile.encoding=UTF-8 -XX:+HeapDumpOnOutOfMemoryError -XX:+UseG1GC -Dkotlin.daemon.jvm.options=-Xmx4g -Dorg.gradle.workers.max=2
+
+jobs:
+  # Cheap and first: if the patches no longer apply to the pinned tag, nothing below is worth the
+  # machine time, and this is the check that upstream drift breaks.
+  patches:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read pins
+        # $GITHUB_ENV takes KEY=VALUE lines only: a '#' line is rejected as "Invalid format",
+        # which is how the first run of this workflow died in ten seconds.
+        run: grep -Ev '^[[:space:]]*(#|$)' element-x/pins.env >> "$GITHUB_ENV"
+      - name: Patches apply to element-x-android
+        env:
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+        run: |
+          # `inputs` is empty on push, and a value written to GITHUB_ENV is not visible to the
+          # `env` context of the same step: stay in the shell.
+          tag="${UPSTREAM_TAG:-$ELEMENT_X_TAG}"
+          echo "element-x-android: $tag"
+          # LFS holds screenshot-test blobs worth hundreds of MB; the build never reads them.
+          GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 --branch "$tag" \
+            https://github.com/element-hq/element-x-android "$RUNNER_TEMP/element-x"
+          cd "$RUNNER_TEMP/element-x"
+          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0002-element-x-android-plotina-signing.patch"
+          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0004-element-x-android-plotina-call-url.patch"
+          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0005-element-x-android-plotina-app-link.patch"
+          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0006-element-x-android-plotina-account-provider.patch"
+          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0007-element-x-android-plotina-push-gateway.patch"
+          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0008-element-x-android-plotina-sentry.patch"
+
+  build:
+    needs: patches
+    # Pull requests get the patch check only: a full build is 20-40 minutes and needs no review.
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read pins
+        run: |
+          grep -Ev '^[[:space:]]*(#|$)' element-x/pins.env >> "$GITHUB_ENV"
+          if [ -n "${UPSTREAM_TAG:-}" ]; then
+            echo "ELEMENT_X_TAG=$UPSTREAM_TAG" >> "$GITHUB_ENV"
+          fi
+        env:
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+
+      - name: Free disk space
+        # The gplay release build writes four ABI splits plus a universal APK, and R8 keeps the
+        # whole app in the intermediate tree while it does. Two runs died while packaging, with the
+        # runner logging only "The runner has received a shutdown signal" — the hosted image ships
+        # ~20 GB of toolchains this build never touches, so they go first. Nothing here removes a
+        # JDK, the Android SDK or the Gradle caches.
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL \
+                      /usr/local/share/boost /usr/local/share/powershell /opt/microsoft 2>/dev/null || true
+          sudo docker image prune -af > /dev/null 2>&1 || true
+          df -h / | tail -1
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install the SDK packages Element X compiles against
+        run: |
+          # ubuntu-latest ships the Android SDK and upstream's own CI never installs anything, so
+          # nothing here may fail just because a package is already present. Do not use
+          # android-actions/setup-android@v3: it asks the repository for the `tools` package, which
+          # no longer exists there, and the job dies before Gradle starts.
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "SDK: $SDK"
+          # Gradle finds the SDK through ANDROID_HOME; make sure the later steps have it even if the
+          # image stopped exporting it.
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          if [ -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          else
+            SDKMANAGER=$(ls -d "$SDK"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -1)
+          fi
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          # compileSdk/targetSdk 37 and build-tools 37.0.0 come from plugins/src/main/kotlin/Versions.kt
+          # at the pinned tag. The image carries "platforms;android-37.0" (the API 37 minor-version
+          # naming), the repository may not know a bare "platforms;android-37": that is not fatal,
+          # AGP downloads the SDK packages it resolves to itself once the licences are accepted.
+          "$SDKMANAGER" --install "platforms;android-37" "build-tools;37.0.0" \
+            || "$SDKMANAGER" --channel=3 --install "platforms;android-37" "build-tools;37.0.0" \
+            || {
+              echo "::warning::sdkmanager has no 'platforms;android-37'; leaving it to Gradle"
+              "$SDKMANAGER" --list_installed || true
+            }
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: element-x-android, patched
+        run: |
+          GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 --branch "$ELEMENT_X_TAG" \
+            https://github.com/element-hq/element-x-android upstream/element-x
+          cd upstream/element-x
+          # 0002: release is signed with our key instead of upstream's debug key, and
+          # `-PplotinaSingleApk` builds one APK instead of four ABI splits.
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0002-element-x-android-plotina-signing.patch"
+          # 0004: the call WebView defaults to https://call.plotina.cc/room.
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0004-element-x-android-plotina-call-url.patch"
+          # 0005: https://plotina.cc/app is a verified app link of this APK (pathPrefix only, so the
+          # rest of the site stays in the browser).
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0005-element-x-android-plotina-app-link.patch"
+          # 0006: the default account provider is plotina.cc instead of matrix.org, so sign-in opens
+          # on our homeserver without anyone typing the address.
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0006-element-x-android-plotina-account-provider.patch"
+          # 0007: the Firebase pusher registers against https://push.plotina.cc instead of
+          # matrix.org's gateway, which would reject a token from our Firebase project.
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0007-element-x-android-plotina-push-gateway.patch"
+          # 0008: the Sentry release is element-x@<version+tag> (stamped as io.sentry.release in the
+          # manifest, from PLOTINA_SENTRY_RELEASE) and release builds report environment
+          # "production" instead of upstream's "RELEASE". No init code: the app-side SDK is upstream's
+          # services/analyticsproviders/sentry, initialised by its own SentryAnalyticsProvider.
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0008-element-x-android-plotina-sentry.patch"
+
+      - name: Write the Firebase project into the gplay flavour
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          # FCM is the point of the gplay build, so a missing secret is a failure, not a warning: an
+          # APK without a Firebase project installs, launches and silently never receives anything.
+          if [ -z "$GOOGLE_SERVICES_JSON" ]; then
+            echo "::error::GOOGLE_SERVICES_JSON is not set: the gplay flavour would ship without a Firebase project"
+            exit 1
+          fi
+          # The secret is base64(google-services.json); accept a raw JSON payload as well so a
+          # hand-run does not need the extra encoding step. Neither branch may print the value.
+          if printf '%s' "$GOOGLE_SERVICES_JSON" | tr -d '\r\n' | base64 -d \
+               > upstream/element-x/app/google-services.json 2>/dev/null \
+             && python3 -c 'import json,sys; json.load(open(sys.argv[1]))' upstream/element-x/app/google-services.json 2>/dev/null; then
+            echo "google-services.json decoded from base64"
+          else
+            printf '%s' "$GOOGLE_SERVICES_JSON" > upstream/element-x/app/google-services.json
+            python3 -c 'import json,sys; json.load(open(sys.argv[1]))' upstream/element-x/app/google-services.json
+            echo "google-services.json taken as raw JSON"
+          fi
+
+          # No Google Services Gradle plugin here (see the header): the values become the string
+          # resources Firebase actually reads, in an app-module overlay for the gplay flavour only,
+          # plus the keep.xml that stops AGP 9.3's resource shrinker from deleting them.
+          python3 "$GITHUB_WORKSPACE/element-x/scripts/firebase-resources.py" \
+            upstream/element-x/app/google-services.json \
+            upstream/element-x/app/src/gplay/res
+          find upstream/element-x/app/src/gplay/res -type f -print
+
+      - name: Decode the signing key
+        id: keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/plotina.keystore"
+            {
+              echo "PLOTINA_STOREFILE=$RUNNER_TEMP/plotina.keystore"
+              echo "PLOTINA_STOREPASSWORD=$KEYSTORE_PASSWORD"
+              echo "PLOTINA_KEY_ALIAS=$KEY_ALIAS"
+              echo "PLOTINA_KEY_PASSWORD=$KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::ANDROID_KEYSTORE_BASE64 is not set: building a debug APK, which cannot be installed over a release build"
+          fi
+
+      - name: Name the Sentry release
+        # Sentry's Android SDK takes the release from manifest meta-data (io.sentry.release, added by
+        # patch 0008), so it has to be stamped before Gradle runs. The tag is the only name that says
+        # which APK a crash came from: element-x@26.10.1-plotina-x.14. A branch build has no tag and
+        # gets the upstream pin plus the commit instead, which still separates one run from another.
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            release="element-x@${GITHUB_REF_NAME#v}"
+          else
+            release="element-x@${ELEMENT_X_TAG}-${GITHUB_SHA:0:7}"
+          fi
+          echo "PLOTINA_SENTRY_RELEASE=$release" >> "$GITHUB_ENV"
+          echo "Sentry release: $release"
+
+      - name: Assemble
+        working-directory: upstream/element-x
+        env:
+          # The app-side Sentry DSN. Upstream's services/analyticsproviders/sentry reads exactly this
+          # variable at configuration time and puts it in BuildConfig.SENTRY_DSN; its own
+          # SentryAnalyticsProvider initialises the SDK from it, so there is no init code of ours.
+          # `vars`, not `secrets`: a DSN is a write-only ingest URL, and GlitchTip prints it in the
+          # browser. Blank means the APK builds and never reports a crash, hence the check below.
+          ELEMENT_ANDROID_SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+          # The Rust SDK's own Sentry client (matrix-rust-sdk tracing), same project. Its events
+          # carry the SDK's release name (the app version), not element-x@<tag>: the Rust config has
+          # no release field. ELEMENT_CALL_SENTRY_DSN is deliberately unset - see the README, the app
+          # passes it to whatever call page it loads, including our own call.plotina.cc.
+          ELEMENT_SDK_SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+        run: |
+          # A kill in this step only ever surfaces as "The runner has received a shutdown signal",
+          # with no word on what ran out first. Sample the machine every minute: the last monitor
+          # line in the log then says whether it was disk or memory.
+          (
+            while true; do
+              echo "[monitor $(date -u +%H:%M:%S)] $(df -h / | awk 'NR==2 {print "disk free " $4 " of " $2}') | $(free -m | awk 'NR==2 {print "mem available " $7 "MB of " $2 "MB"}')"
+              sleep 60
+            done
+          ) &
+          monitor=$!
+          # The DSN is compiled into BuildConfig, so this log line is the only place that says
+          # whether the artifact can report anything at all. Never print the DSN itself.
+          if [ -n "${ELEMENT_ANDROID_SENTRY_DSN:-}" ]; then
+            echo "Sentry DSN: set (${#ELEMENT_ANDROID_SENTRY_DSN} chars)"
+          else
+            echo "::warning::ELEMENT_ANDROID_SENTRY_DSN is empty: this APK will not report crashes"
+          fi
+          # Per-ABI splits, not one universal APK: a single release APK with four ABIs is 400 MB,
+          # while arm64 alone is what almost every phone needs. `-PplotinaSingleApk` exists in the
+          # patch and turns the splits off, but it is not used here on purpose.
+          #
+          # 0002 also limits the splits to arm64-v8a and armeabi-v7a and turns the universal APK
+          # off. That is not tidiness: `assembleGplayRelease` with four splits plus the universal
+          # one died in `:app:packageGplayRelease` with OutOfMemoryError: Java heap space, with the
+          # runner down to 1.5 GB of 16 GB free. Two outputs, both of which we publish, fit.
+          #
+          # `gplay`, not `play`: element-x-android's store flavours are `gplay` and `fdroid`, and
+          # only `gplay` links the Firebase push provider (see the dependencies block of
+          # app/build.gradle.kts: `gplayImplementation(projects.libraries.pushproviders.firebase)`).
+          # Asking Gradle for `assemblePlayRelease` fails with "Task not found".
+          if [ "${{ steps.keystore.outputs.signed }}" = "true" ]; then
+            ./gradlew assembleGplayRelease --stacktrace --no-configuration-cache
+            apk_dir=app/build/outputs/apk/gplay/release
+          else
+            ./gradlew assembleGplayDebug --stacktrace --no-configuration-cache
+            apk_dir=app/build/outputs/apk/gplay/debug
+          fi
+          ls -lh "$apk_dir"
+          arm64=$(find "$apk_dir" -name '*arm64-v8a*.apk' | head -1)
+          armv7=$(find "$apk_dir" -name '*armeabi-v7a*.apk' | head -1)
+          [ -n "$arm64" ] || { echo "::error::no arm64-v8a APK in $apk_dir"; exit 1; }
+          cp "$arm64" "$GITHUB_WORKSPACE/Plotina-ElementX.apk"
+          if [ -n "$armv7" ]; then cp "$armv7" "$GITHUB_WORKSPACE/Plotina-ElementX-armv7.apk"; fi
+          ls -lh "$GITHUB_WORKSPACE"/Plotina-ElementX*.apk
+          kill "$monitor" 2>/dev/null || true
+
+      # Uploaded before the checks on purpose: a failing check must still leave the APK behind to
+      # inspect, otherwise the only trace of a wrong artifact is a red step.
+      - uses: actions/upload-artifact@v4
+        if: always() && hashFiles('Plotina-ElementX.apk') != ''
+        with:
+          name: Plotina-ElementX
+          path: Plotina-ElementX*.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Check the APK carries our call URL, the bundled fallback and the plotina.cc app link
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          ls -lh Plotina-ElementX*.apk
+
+          # The bundled Element Call stays in the APK: it is the offline fallback if our host is down.
+          unzip -l Plotina-ElementX.apk | grep -E "assets/element-call/" | head -5
+          unzip -l Plotina-ElementX.apk | grep -q "assets/element-call/index.html"
+
+          # And our URL is in the code, not only in the README. This is the whole point of the build:
+          # if the next person bumps the pin and 0004 stops applying, this fails instead of shipping
+          # an APK that silently opens Element's bundle again.
+          unzip -p Plotina-ElementX.apk "classes*.dex" | strings | grep -F "https://call.plotina.cc/room"
+          unzip -p Plotina-ElementX.apk "classes*.dex" | strings | grep -qF "https://call.plotina.cc/room"
+
+          # 0006 puts our homeserver in the login screen's default account provider. That string
+          # lives in the dex, so it is checked there: if the next pin bump drops 0006 the login
+          # screen silently falls back to matrix.org, which is exactly what this fails on.
+          unzip -p Plotina-ElementX.apk "classes*.dex" | strings | grep -F "plotina.cc" | sort -u | head -5
+          unzip -p Plotina-ElementX.apk "classes*.dex" | strings | grep -qF "plotina.cc"
+
+          APKSIGNER=$(ls "$SDK"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          echo "apksigner: $APKSIGNER"
+          "$APKSIGNER" verify --print-certs Plotina-ElementX.apk | head -5
+
+          # --- the https://plotina.cc/app app link -------------------------------------------
+          # This APK is signed with the Plotina key, while mobile.element.io's assetlinks.json
+          # lists Element's own certificates: element.io invitation links can never resolve to it.
+          # The invitation page links to https://plotina.cc/app instead, and that only opens the
+          # app if the merged manifest carries our host as a *verified* filter whose only path
+          # claim is pathPrefix /app. A bare path="/" (or a filter without a path) would swallow
+          # the whole site, invitation page included, so that case has to fail here.
+
+          # aapt2 (then aapt) renders the compiled AndroidManifest.xml as a readable tree. Plain
+          # strings is the last resort: it can prove the host is in the string pool, not that the
+          # filter is shaped correctly, so the log says which method ran.
+          dump_manifest() {
+            local apk="$1" out="$2" aapt2 aapt
+            MODE=aapt2
+            aapt2=$(ls "$SDK"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1)
+            aapt=$(ls "$SDK"/build-tools/*/aapt 2>/dev/null | sort -V | tail -1)
+            if [ -n "$aapt2" ]; then
+              echo "   manifest check method: aapt2 dump xmltree ($aapt2)"
+              "$aapt2" dump xmltree --file AndroidManifest.xml "$apk" > "$out"
+            elif [ -n "$aapt" ]; then
+              MODE=aapt
+              echo "   manifest check method: aapt dump xmltree ($aapt)"
+              "$aapt" dump xmltree "$apk" AndroidManifest.xml > "$out"
+            else
+              MODE=strings
+              echo "::warning::no aapt/aapt2 in $SDK/build-tools: falling back to strings over the decompressed AndroidManifest.xml"
+              unzip -p "$apk" AndroidManifest.xml > "$out.bin"
+              { strings "$out.bin"; strings -e l "$out.bin"; } > "$out"
+            fi
+            # A dump that has no element lines is not a tree: treat it as a string scan.
+            if ! grep -qm1 'E: ' "$out"; then MODE=strings; fi
+          }
+
+          # One line on purpose: a heredoc cannot be indented inside a YAML block.
+          check_app_link() {
+            local apk="$1" out="$RUNNER_TEMP/manifest-$(basename "$apk").txt"
+            echo "   -- $apk"
+            dump_manifest "$apk" "$out"
+            echo "   plotina.cc in the manifest dump:"
+            grep -n -i "plotina\.cc" "$out" || echo "      (none)"
+            if [ "$MODE" = "strings" ]; then
+              grep -q "plotina\.cc" "$out"
+              grep -q -- "/app" "$out"
+              echo "   strings check: plotina.cc and /app are in the compiled manifest (structure NOT verified)"
+            else
+              awk -v apk="$apk" 'function close_block(){ if (inblock && block ~ /plotina\.cc/) { if (block ~ /autoVerify/ && block ~ /pathPrefix/ && block ~ /"\/app"/ && block !~ /:path\(/) { print "   OK: " apk " has a verified intent-filter for plotina.cc with pathPrefix /app at the filter level"; got=1 } else { print "   FAIL: intent-filter for plotina.cc is not autoVerify+pathPrefix /app:" block } } inblock=0; block="" } /E: intent-filter/ { close_block(); inblock=1; block=$0; next } inblock { if ($0 ~ /E: (activity|service|receiver|provider)/) { close_block(); next } block = block "\n" $0 } END { close_block(); if (!got) print "   FAIL: no intent-filter in the merged manifest claims plotina.cc"; exit (got ? 0 : 1) }' "$out"
+            fi
+          }
+
+          for apk in Plotina-ElementX*.apk; do check_app_link "$apk"; done
+
+      - name: Check Sentry is wired into the APK
+        env:
+          ELEMENT_ANDROID_SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          apk=Plotina-ElementX.apk
+          if [ -z "${ELEMENT_ANDROID_SENTRY_DSN:-}" ]; then
+            echo "::warning::SENTRY_DSN is not set: this APK has no crash reporting"
+            exit 0
+          fi
+
+          # 1. The DSN is a BuildConfig string, so it is in the dex string pool. If it is not there,
+          #    the app compiles, installs, runs and silently reports nothing - the failure mode this
+          #    check exists for.
+          if unzip -p "$apk" "classes*.dex" | strings | grep -qF "sentry.plotina.cc"; then
+            echo "OK: the Sentry DSN host is in classes*.dex"
+          else
+            echo "::error file=$apk::$apk carries no Sentry DSN: nothing will be reported"
+            exit 1
+          fi
+
+          # 2. The release is manifest meta-data (io.sentry.release), which is where the SDK reads it
+          #    from at init. Missing or wrong here means every crash lands as "unknown release".
+          AAPT2=$(ls "$SDK"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1)
+          if [ -n "$AAPT2" ]; then
+            "$AAPT2" dump xmltree --file AndroidManifest.xml "$apk" > "$RUNNER_TEMP/manifest-sentry.txt"
+            grep -A3 'io.sentry.release' "$RUNNER_TEMP/manifest-sentry.txt" | head -8
+            grep -qF "$PLOTINA_SENTRY_RELEASE" "$RUNNER_TEMP/manifest-sentry.txt" \
+              || { echo "::error file=$apk::io.sentry.release is not '$PLOTINA_SENTRY_RELEASE' in the merged manifest"; exit 1; }
+            echo "OK: io.sentry.release is $PLOTINA_SENTRY_RELEASE"
+          else
+            echo "::warning::no aapt2: cannot check io.sentry.release in the manifest"
+          fi
+
+          # 3. Native crashes need the NDK integration, which ships sentry-native as libsentry*.so.
+          #    Upstream's services/analyticsproviders/sentry depends on io.sentry:sentry-android, and
+          #    that pulls sentry-android-ndk; this prints what actually got packaged.
+          unzip -l "$apk" | grep -E 'lib/[^/]+/libsentry[^/]*\.so' | head -5 || true
+          if unzip -l "$apk" | grep -qE 'lib/[^/]+/libsentry[^/]*\.so'; then
+            echo "OK: sentry-native is packaged (native crash handler available)"
+          else
+            echo "::warning::no libsentry*.so in the APK: native crashes will not be captured"
+          fi
+
+      - name: Check the APK carries Firebase and our push project
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          AAPT2=$(ls "$SDK"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1)
+          echo "aapt2: ${AAPT2:-none}"
+          failed=0
+          for apk in Plotina-ElementX*.apk; do
+            echo "-- $apk"
+
+            # 1. The library itself. Two notes on the command: `unzip -l | grep -c
+            #    'com/google/firebase'` lists *zip entries*, and Firebase's classes are inside
+            #    classes*.dex rather than separate entries, so that count is 0 even in a correct
+            #    APK. It is printed for the record; the gate is the same measurement against the
+            #    places the classes actually live — the dex string pool and the merged manifest
+            #    (FirebaseInitProvider / FirebaseMessagingService are manifest components).
+            echo "   zip entries matching com/google/firebase: $(unzip -l "$apk" | grep -c 'com/google/firebase' || true)"
+            dex_hits=$(unzip -p "$apk" "classes*.dex" | strings | grep -c 'com/google/firebase' || true)
+            manifest_hits=$({ unzip -p "$apk" AndroidManifest.xml | strings -a; unzip -p "$apk" AndroidManifest.xml | strings -a -e l; } | grep -c 'com\.google\.firebase' || true)
+            echo "   com/google/firebase strings: $dex_hits in classes*.dex, $manifest_hits in the manifest"
+            if [ "${dex_hits:-0}" -eq 0 ] && [ "${manifest_hits:-0}" -eq 0 ]; then
+              echo "::error file=$apk::$apk contains no Firebase: the gplay flavour's push provider is missing"
+              failed=1
+              continue
+            fi
+
+            # 2. The Firebase project. project_id is a string resource, not a dex constant, so it
+            #    lives in resources.arsc — this is the check that GOOGLE_SERVICES_JSON reached the
+            #    build and that it is our project rather than Element's vector-alpha.
+            #
+            #    `aapt2 dump resources` prints the resource on one line and each configuration's
+            #    value on the lines *after* it ("(default) \"...\""), so the value has to be read
+            #    with context: `grep 'string/project_id' | head -1` finds the name and never the
+            #    value, which is how the first version of this check failed a correct APK.
+            if [ -n "$AAPT2" ]; then
+              section=$("$AAPT2" dump resources "$apk" | grep -A3 'string/project_id' || true)
+              echo "   aapt2 dump resources, project_id:"
+              printf '%s\n' "${section:-<no string/project_id>}" | sed 's/^/      /'
+              if printf '%s' "$section" | grep -qF 'plotina-push'; then
+                echo "   OK: project_id is plotina-push"
+              else
+                echo "::error file=$apk::$apk does not carry the plotina-push project id: the Firebase overlay did not reach the build"
+                failed=1
+              fi
+              # Same question for the app id: without it FirebaseApp cannot initialise at all.
+              appid=$("$AAPT2" dump resources "$apk" | grep -A3 'string/google_app_id' || true)
+              echo "   aapt2 dump resources, google_app_id:"
+              printf '%s\n' "${appid:-<no string/google_app_id>}" | sed 's/^/      /'
+              if printf '%s' "$appid" | grep -q 'android:'; then
+                echo "   OK: google_app_id is present"
+              else
+                echo "::error file=$apk::$apk has no google_app_id resource"
+                failed=1
+              fi
+            else
+              echo "   no aapt2 in $SDK/build-tools: scanning resources.arsc instead (value only, no resource name)"
+              { unzip -p "$apk" resources.arsc | strings -a; unzip -p "$apk" resources.arsc | strings -a -e l; } \
+                | grep -F 'plotina-push' | head -1 || true
+              if unzip -p "$apk" resources.arsc | strings -a | grep -qF 'plotina-push'; then
+                echo "   OK: plotina-push is in resources.arsc"
+              else
+                echo "::error file=$apk::$apk does not carry the plotina-push project id"
+                failed=1
+              fi
+            fi
+
+            # 3. And the gateway in the code. The generic `plotina.cc` check above also matches the
+            #    account provider, so this one is specific about the push URL of patch 0007.
+            unzip -p "$apk" "classes*.dex" | strings | grep -F "https://push.plotina.cc/_matrix/push/v1/notify" | head -1 || true
+            unzip -p "$apk" "classes*.dex" | strings | grep -qF "https://push.plotina.cc/_matrix/push/v1/notify" \
+              || { echo "::error file=$apk::$apk does not call https://push.plotina.cc/_matrix/push/v1/notify: patch 0007 is missing"; failed=1; }
+          done
+          exit "$failed"
+
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Plotina-ElementX*.apk
+          # Tag namespace is shared with the other clients in this repository, so generated notes
+          # would paste an unrelated changelog.
+          generate_release_notes: false
+          body: |
+            Element X for Android built from element-x-android `${{ env.ELEMENT_X_TAG }}`, with calls
+            opening on **https://call.plotina.cc/room** by default — no setting to change, no URL to
+            type. Element Call is loaded in the WebView from our origin, which is where our noise
+            suppression lives.
+
+            - The bundled Element Call stays in the APK as the offline fallback; developer settings
+              ("Custom Element Call base URL") still override the default.
+            - **https://plotina.cc/app opens this app** on Android 12 and later, once the site's
+              `assetlinks.json` lists the Plotina signing certificate. Paths outside `/app` stay in
+              the browser.
+            - The sign-in screen is prefilled with **plotina.cc** as the homeserver; another
+              address can still be typed there.
+            - **Push notifications come through FCM**, registered against our own push gateway at
+              `https://push.plotina.cc` instead of Element's. The phone needs Google Play Services
+              for that; where they are missing, the app falls back to UnifiedPush (ntfy).
+            - Signed with the Plotina key, application id `io.element.android.x`: installs over our
+              previous builds. Without signing secrets the build falls back to a debug APK with the
+              `.debug` application id, which has to be installed from scratch.
+            - `Plotina-ElementX.apk` is the arm64-v8a build (every phone from the last several
+              years); `Plotina-ElementX-armv7.apk` covers older 32-bit devices. There is no universal
+              APK on purpose: one file for all four ABIs is 400 MB.
+            - Source: this repository at this tag plus the upstream tag pinned in `element-x/pins.env`.
+
+            If the call page cannot be reached, the copy of Element Call bundled in the APK is used
+            instead.

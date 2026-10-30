@@ -1,0 +1,78 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 706a82f..88c6867 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -48,10 +48,9 @@ android {
+         versionCode = Versions.VERSION_CODE
+         versionName = Versions.VERSION_NAME
+ 
+-        // Keep abiFilter for the universalApk
+-        ndk {
+-            abiFilters += listOf("armeabi-v7a", "x86", "arm64-v8a", "x86_64")
+-        }
++        // Plotina: no ndk.abiFilters here. AGP refuses to configure the project when
++        // abiFilters is set at all while ABI splits are enabled; the filter only exists
++        // upstream to serve the universal APK, which we build without.
+ 
+         // Ref: https://developer.android.com/studio/build/configure-apk-splits.html#configure-abi-split
+         splits {
+@@ -60,7 +59,10 @@ android {
+                 val buildingAppBundle = gradle.startParameter.taskNames.any { it.contains("bundle") }
+ 
+                 // Enables building multiple APKs per ABI. This should be disabled when building an AAB.
+-                isEnable = !buildingAppBundle
++                // Plotina: `-PplotinaSingleApk` builds one APK for all ABIs instead: the denoiser's
++                // native library ships for arm64-v8a only, and four R8 runs per release cost more
++                // CI time than the split saves anyone.
++                isEnable = !buildingAppBundle && !project.hasProperty("plotinaSingleApk")
+ 
+                 // By default all ABIs are included, so use reset() and include to specify that we only
+                 // want APKs for armeabi-v7a, x86, arm64-v8a and x86_64.
+@@ -69,9 +71,14 @@ android {
+ 
+                 if (!buildingAppBundle) {
+                     // Specifies a list of ABIs that Gradle should create APKs for.
+-                    include("armeabi-v7a", "x86", "arm64-v8a", "x86_64")
++                    // Plotina: only the two ABIs we publish. The x86/x86_64 splits exist for
++                    // emulators nobody runs here, and every extra output is another APK the
++                    // packager has to build in memory on the CI runner.
++                    include("armeabi-v7a", "arm64-v8a")
+                     // Generate a universal APK that includes all ABIs, so user who installs from CI tool can use this one by default.
+-                    isUniversalApk = true
++                    // Plotina: not for us — the universal APK is 400 MB and we publish the two
++                    // splits instead. `-PplotinaSingleApk` still builds one APK for all ABIs.
++                    isUniversalApk = false
+                 }
+             }
+         }
+@@ -98,6 +105,19 @@ android {
+             )
+             storePassword = environmentOrGradleValue("ELEMENT_ANDROID_NIGHTLY_STOREPASSWORD", "signing.element.nightly.storePassword")
+         }
++        // Plotina: the key our builds are signed with. `release` is signed with `debug` upstream,
++        // which cannot be installed over a previous release of ours: the key has to stay the same
++        // for the lifetime of the app, so it comes from the CI secrets and never from the repo.
++        register("plotina") {
++            keyAlias = environmentOrGradleValue("PLOTINA_KEY_ALIAS", "signing.plotina.keyAlias")
++            keyPassword = environmentOrGradleValue("PLOTINA_KEY_PASSWORD", "signing.plotina.keyPassword")
++            storeFile = file(
++                environmentOrGradleValue("PLOTINA_STOREFILE", "signing.plotina.storeFile")
++                    ?.ifBlank { null }
++                    ?: "./signature/plotina.keystore"
++            )
++            storePassword = environmentOrGradleValue("PLOTINA_STOREPASSWORD", "signing.plotina.storePassword")
++        }
+     }
+ 
+     val baseAppName = BuildTimeConfig.APPLICATION_NAME
+@@ -124,7 +144,9 @@ android {
+                 "login_redirect_scheme",
+                 oAuthRedirectSchemeBase,
+             )
+-            signingConfig = signingConfigs.getByName("debug")
++            // Plotina: upstream signs release with the debug key, which makes an APK that can never
++            // be updated in place. Ours is signed with the plotina key instead.
++            signingConfig = signingConfigs.getByName("plotina")
+ 
+             optimization {
+                 enable = true

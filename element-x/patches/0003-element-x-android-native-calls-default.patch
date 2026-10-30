@@ -1,0 +1,17 @@
+diff --git a/libraries/featureflag/api/src/main/kotlin/io/element/android/libraries/featureflag/api/FeatureFlags.kt b/libraries/featureflag/api/src/main/kotlin/io/element/android/libraries/featureflag/api/FeatureFlags.kt
+index 18c5ea04..29d98382 100644
+--- a/libraries/featureflag/api/src/main/kotlin/io/element/android/libraries/featureflag/api/FeatureFlags.kt
++++ b/libraries/featureflag/api/src/main/kotlin/io/element/android/libraries/featureflag/api/FeatureFlags.kt
+@@ -174,7 +174,11 @@ enum class FeatureFlags(
+         key = "feature.native_call",
+         title = "Native calls (experimental)",
+         description = "Place calls with the native MatrixRTC stack instead of the Element Call WebView.",
+-        defaultValue = { false },
++        // Plotina: this build carries DeepFilterNet3 in the native capture path
++        // (element-call-android, patches/0001), and the bundled Element Call WebView cannot reach
++        // it - nor our noise layer, which is served from our own origin. So native calls are on by
++        // default here; the flag stays visible in developer options to fall back to the WebView.
++        defaultValue = { true },
+         isFinished = false,
+     ),
+     ReceiveNotificationsFromOtherSignedInAccounts(
