@@ -8,7 +8,7 @@
   "use strict";
 
   var LEVEL_KEY = "plotina.noise.level";
-  var DEFAULT_LEVEL = 70;
+  var DEFAULT_LEVEL = 40;
 
   var STRINGS = {
     ru: { section: "Звук", title: "Уровень шумоподавления", hint: "0 — выключено, 70 — по умолчанию" },

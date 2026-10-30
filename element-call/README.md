@@ -122,8 +122,8 @@ replace the client this module set up.
 
 Element Call v0.26.1 has no level control of its own — only the boolean
 `noiseSuppression` in the developer tab, which is not ours. `noise/plotina-panel.js`
-adds a pill in the bottom-right corner of the room view («Шумодав · 30 дБ», or
-"Noise · 30 dB" in a non-Russian browser) that opens a 0–100 dB slider. 0 is off:
+adds a pill in the bottom-right corner of the room view («Шумодав · 40 дБ», or
+"Noise · 40 dB" in a non-Russian browser) that opens a 0–100 dB slider. 0 is off:
 the worklet passes the microphone through; 100 is full suppression. The value is
 stored in `localStorage["plotina.noise.level"]` and applied to the running LiveKit
 track processor through `window.__plotinaSetLevel()` → `setSuppressionLevel()`,

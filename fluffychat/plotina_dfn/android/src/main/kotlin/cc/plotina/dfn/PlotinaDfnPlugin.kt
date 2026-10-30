@@ -301,7 +301,7 @@ class PlotinaDfnPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         const val MODEL_BYTES = 7_983_136L
 
         /** Default maximum attenuation in dB; also the value a fresh install gets. */
-        const val DEFAULT_ATTEN_LIM_DB = 30f
+        const val DEFAULT_ATTEN_LIM_DB = 40f
 
         /** 100 dB means no attenuation limit (libDF treats >= 100 as unlimited). */
         const val MAX_ATTEN_LIM_DB = 100f

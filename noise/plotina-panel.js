@@ -28,7 +28,7 @@
   window.__plotinaPanelLoaded = true;
 
   var LEVEL_KEY = "plotina.noise.level";
-  var DEFAULT_LEVEL = 70;
+  var DEFAULT_LEVEL = 40;
 
   function clamp(value) {
     var n = Number(value);

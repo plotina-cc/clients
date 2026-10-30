@@ -15,7 +15,7 @@
   "use strict";
 
   var LEVEL_KEY = "plotina.noise.level";
-  var DEFAULT_LEVEL = 70;
+  var DEFAULT_LEVEL = 40;
   var attached = new WeakSet();
   var pending = new WeakSet();
   var session = Math.random().toString(36).slice(2, 10);

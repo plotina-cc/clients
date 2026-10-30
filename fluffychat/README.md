@@ -54,7 +54,7 @@ file of FluffyChat is modified**.
 
 The strength is a global setting, not per call:
 
-- Settings → Chat → **Sound**: a slider from 0 to 100 dB, default **30**.
+- Settings → Chat → **Sound**: a slider from 0 to 100 dB, default **40**.
 - **100** removes the attenuation limit (`DfTract` treats >= 100 as unlimited).
 - **0** bypasses the denoiser: the channel sets `DfnProcessor.bypass`, no audio
   reaches the Rust handle, and the model is not loaded at startup.

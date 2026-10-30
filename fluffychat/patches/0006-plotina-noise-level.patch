@@ -9,7 +9,7 @@ index 8b1faa7..14862ed 100644
 +
 +  /// plotina.cc: DeepFilterNet3 attenuation limit on outgoing call audio, in
 +  /// dB. 0 = off, 100 = no limit.
-+  noiseSuppressionLevel<int>('chat.fluffy.noise_suppression_level', 30),
++  noiseSuppressionLevel<int>('chat.fluffy.noise_suppression_level', 40),
    fallbackLiveKitInstance<String>('chat.fluffy.fallback_live_kit_instance', '');
  
    final String key;
@@ -25,7 +25,7 @@ index e8fdc95..5b11115 100644
 +    },
 +    "sound": "Sound",
 +    "noiseSuppressionLevel": "Noise suppression",
-+    "noiseSuppressionLevelHint": "Maximum attenuation in dB for outgoing call audio. 0 turns it off, 100 means no limit. Default: 30."
++    "noiseSuppressionLevelHint": "Maximum attenuation in dB for outgoing call audio. 0 turns it off, 100 means no limit. Default: 40."
  }
 \ No newline at end of file
 diff --git a/lib/l10n/intl_ru.arb b/lib/l10n/intl_ru.arb
@@ -40,7 +40,7 @@ index 9b7a180..174e467 100644
 +    "sharedLocation": "Общие геометки",
 +    "sound": "Звук",
 +    "noiseSuppressionLevel": "Шумоподавление",
-+    "noiseSuppressionLevelHint": "Максимальное ослабление в дБ для исходящего звука звонка. 0 — выключено, 100 — без ограничения. По умолчанию 30."
++    "noiseSuppressionLevelHint": "Максимальное ослабление в дБ для исходящего звука звонка. 0 — выключено, 100 — без ограничения. По умолчанию 40."
  }
 diff --git a/lib/main.dart b/lib/main.dart
 index 0806894..d215770 100644
