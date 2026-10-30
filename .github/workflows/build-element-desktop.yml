@@ -94,20 +94,31 @@ jobs:
         working-directory: element-desktop/.build/element-web/apps/desktop
         run: pnpm install --frozen-lockfile --filter element-desktop
 
-      - name: Embed the webapp
+      # GNU tar reads "D:\a\_temp\..." as a remote host on Windows, so the
+      # archive is handed over as a bare filename from its own directory.
+      - name: Unpack the webapp
         shell: bash
         run: |
-          rm -rf "$SRC/apps/desktop/webapp"
-          mkdir -p "$SRC/apps/desktop/webapp"
-          # Windows runners use D:\... paths, and GNU tar reads "D:" as a remote
-          # host ("Cannot connect to D: resolve failed"). Hand it a POSIX path
-          # and keep colons literal.
-          ARTIFACT="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")/webapp/webapp.tar.gz"
-          tar xzf --force-local "$ARTIFACT" -C "$SRC/apps/desktop/webapp"
-          cd "$SRC/apps/desktop"
+          WEBAPP_DIR="$PWD/$SRC/apps/desktop/webapp"
+          rm -rf "$WEBAPP_DIR"
+          mkdir -p "$WEBAPP_DIR"
+          cd "$RUNNER_TEMP/webapp"
+          tar xzf webapp.tar.gz -C "$WEBAPP_DIR"
+
+      - name: Pack and check webapp.asar
+        working-directory: element-desktop/.build/element-web/apps/desktop
+        shell: bash
+        run: |
           pnpm run asar-webapp
-          pnpm exec asar list webapp.asar | grep -q '^/noise/dfn/v3/pkg/df_bg.wasm$'
-          pnpm exec asar list webapp.asar | grep -q '^/config.json$'
+          # asar lists entries with path.sep, so normalize before matching.
+          LIST="$(pnpm exec asar list webapp.asar | tr '\\' '/')"
+          for f in /noise/dfn/v3/pkg/df_bg.wasm /config.json; do
+            if ! printf '%s\n' "$LIST" | grep -qx "$f"; then
+              echo "missing $f in webapp.asar" >&2
+              printf '%s\n' "$LIST" | head -30
+              exit 1
+            fi
+          done
           echo "webapp.asar carries the noise overlay"
 
       - name: Build installers
@@ -160,7 +171,9 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
-          generate_release_notes: true
+          # Releases here share a tag namespace with the other clients, so the
+          # generated changelog would compare against an unrelated product.
+          generate_release_notes: false
           body: |
             Сборка Element Desktop для plotina.cc с шумоподавлением DeepFilterNet3.
 
