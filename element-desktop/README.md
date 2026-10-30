@@ -95,17 +95,6 @@ A new version is a new installer, installed over the old one. Profiles are
 separate from upstream Element (`plotina-element` as the app name), so both can
 be installed side by side.
 
-## Assumptions that upstream can break
-
-| Assumption | Where | What happens if it breaks |
-|---|---|---|
-| Desktop lives in `element-web/apps/desktop` with the `asar-webapp` script | `build.sh`, workflow | Clone/build fails loudly |
-| Release asset `element-v<tag>.tar.gz` exists and matches the lock | `prepare-webapp.sh` | Fails on 404 or sha256 |
-| `</head>` in the unpacked `index.html` | `apply-noise.py` | Fails loudly |
-| `vector://` serves only `/webapp/` | script tags, `noise/boot.js` | Calls lose the denoiser (raw audio), console shows 404s |
-| `noise/boot.js` still finds its own URL | `apply-noise.py` guard | Fails loudly |
-| `element.io/release/build.json` keys used by our variant | `build.plotina.json` | electron-builder fails |
-
 ## Verifying a build by hand
 
 - The packed config carries Sentry:

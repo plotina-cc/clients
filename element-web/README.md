@@ -26,23 +26,6 @@ config/element/
 Model assets (`df_bg.wasm`, `DeepFilterNet3_onnx.tar.gz`) are **not** in git: the
 Dockerfile downloads them at build time and verifies their SHA-256.
 
-## How it hooks in
-
-1. `index.html` loads `/noise/logic.js` and `/noise/boot.js`.
-2. `boot.js` wraps `navigator.mediaDevices.getUserMedia`.
-3. Element Call (LiveKit) asks for audio with plain booleans —
-   `{echoCancellation: true, noiseSuppression: true, autoGainControl: true}` —
-   while Element Web's voice-message recorder asks with constraint objects
-   (`{ideal: …}`). `logic.js` treats only the boolean form as a call.
-4. For call audio the browser's own noise suppression is disabled, DFN3 runs as
-   an AudioWorklet, and the cleaned track is handed back to the app.
-5. Any failure returns the untouched stream: a broken denoiser must never cost a
-   call.
-
-The stock **Noise suppression** toggle remains the master switch: when the app
-asks for `noiseSuppression: false`, the wrapper does nothing. The slider stores
-`plotina.noise.level` in `localStorage`, default 60 (DFN attenuation limit, dB).
-
 ## Error reporting (GlitchTip)
 
 Element Web has Sentry support upstream: `matrix-react-sdk`'s `initSentry()`
@@ -96,17 +79,6 @@ rebuild. Note that `element-desktop` renders its webapp `config.json` from this
 same file, substituting `SENTRY_DSN` when the variable is set, so a desktop
 build reports under the same release and needs a rebuild to pick up a rotated
 DSN.
-
-## Assumptions that upstream can break
-
-| Assumption | Where | What happens if it breaks |
-|---|---|---|
-| `/app/index.html` contains `</head>` | Dockerfile sed | Build fails loudly (`grep` guard) |
-| nginx template at `/etc/nginx/templates/default.conf.template` | Dockerfile | Build fails loudly |
-| Element Call passes boolean audio constraints | `logic.js` | Denoise silently stops; browser NS still works |
-| Settings has a visible "Подавление шума" / "Noise suppression" label | `boot.js` | Slider missing; default 60 still applies |
-| `deepfilternet3-noise-filter` exposes `DeepFilterNet3Core` and asset paths `v3/…` | `boot.js`, Dockerfile | Processing fails → falls back to raw audio |
-| The bundle contains exactly one `release:"<version>"` literal | `scripts/sourcemaps.py` | Publish fails loudly instead of uploading maps under a name events never report |
 
 ## Tests
 

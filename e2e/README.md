@@ -118,45 +118,6 @@ fails immediately with the HTTP body instead of timing out.
 published a microphone track, and the processor was constructed and attached to
 that track with the real WASM and model from `/noise/dfn/`.
 
-## The effect test and the production change it does not need
-
-`noise-effect.spec.ts` builds a deterministic white-noise `MediaStreamTrack`
-with WebAudio, hands it to `DeepFilterNoiseFilterProcessor` from
-`/noise/vendor/dfn.esm.js`, and measures the input and
-`processor.processedTrack` with `AnalyserNode`s in 300–3400 Hz. The measured
-reduction on the current deployment is ~70 dB (input −61 dB, output −132 dB,
-i.e. the model silences pure noise). The assertion is deliberately loose
-(≥ 3 dB) so it catches a no-op processor, not model tuning.
-
-The app itself does not expose the processed track: `window.__plotinaDfn`
-carries `{status, level, error, track}` and `track` is the string `"audio"`.
-Measuring the **published** track from the test would need this minimal change
-in `noise/plotina-dfn.js` (not applied — production is not modified for tests):
-
-```js
-var filter = new Processor({ /* ... */ });          // already there
-return track.setProcessor(filter).then(function () {
-  state.processedTrack = filter.processedTrack;     // <- new
-});
-```
-
-With that one property the test could attach an `AnalyserNode` to the real
-published microphone track after `attached`, instead of to a processor built by
-the test. The current spec still covers the risky part — the WASM, the model
-download and the worklet — because it runs exactly the module and assets the
-page loads.
-
-## Known issues found while building this
-
-- `POST /noise/report` answers **405** on `call.plotina.cc`: Caddy's
-  `file_server` has no such route, so every diagnostic beacon from
-  `plotina-dfn.js` is dropped. The wrapper swallows the failure, so it does not
-  affect calls; it only means there is no server-side log to correlate with a
-  failed attach.
-- One participant is enough to publish and attach, but the suite does not
-  verify that the far end receives denoised audio. That needs a second
-  participant and a recorded receiver track; neither exists yet.
-
 ## Artifacts
 
 `test-results/results.json`, `playwright-report/`, a trace per failure, and

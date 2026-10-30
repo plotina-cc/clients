@@ -133,18 +133,6 @@ then the remote page needs IPC access — that is the CVE-2024-35222 class of
 vulnerability. The web part is compiled into the app instead, and updates only
 come from our own builds.
 
-## Updates
-
-`plugins.updater.endpoints` is empty and `createUpdaterArtifacts: false`: the
-build never offers an upstream update. Once we run our own feed, the minisign
-pubkey and a `latest.json` link from our releases go here.
-
-A `v*-plotina.*` tag in this repository builds Linux and Windows and creates a
-release with the artifacts attached. macOS is out of the matrix on purpose: an
-unsigned build hits Gatekeeper, the arm64 runner only covers Apple Silicon, and
-the microphone entitlement needs a Developer ID — revisit only if someone asks
-and pays for the $99/year account.
-
 ## Licence
 
 Cinny and cinny-desktop are AGPL-3.0. We distribute modified binaries and serve
