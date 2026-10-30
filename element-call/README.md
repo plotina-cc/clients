@@ -57,6 +57,16 @@ element-call-plotina/
 The tar is written with `--sort=name --mtime=@0` on GNU tar, so a rebuild of the same inputs is
 byte-identical and comparable with the published asset.
 
+## Patches
+
+`--mode source` applies `patches/*.patch` to the tag before `pnpm build:full`, in filename order:
+
+| | |
+| :-- | :-- |
+| `0001-plotina-dfn-track-processor.patch` | the bridge that attaches the DeepFilterNet3 track processor (`src/plotina/dfn.ts`) |
+| `0002-plotina-sentry.patch` | early error reporting (`src/plotina/sentry.ts`, `src/main.tsx`) |
+| `0003-plotina-login-terms-guard.patch` | `useInteractiveRegistration`: a `/register` error without `params` (MAS) must not throw inside the `catch` |
+
 ## Error reporting
 
 `patches/0002-plotina-sentry.patch` initialises `@sentry/react` in `src/main.tsx`, before the first
