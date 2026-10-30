@@ -1,0 +1,229 @@
+name: build-cinny-web
+
+# The static web bundle served at cinny.plotina.cc. It is the same dist the
+# desktop workflow compiles into the Tauri shell, but it ships on its own
+# schedule: a change in noise/ or in the Sentry patch has to reach the browser
+# without waiting for an installer build, and the source maps must belong to
+# the exact files the edge serves.
+#
+# The artifact is what gets unpacked into /srv/cinny; the deploy itself stays
+# manual (cinny/README.md, "Cinny Web"), because only the edge host holds the
+# key that may write there.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "GlitchTip release (empty: cinny@<UPSTREAM_TAG without v>)"
+        required: false
+        default: ""
+  push:
+    branches: [main]
+    tags: ["v*-plotina-cinny.*"]
+    paths: ["cinny/**", "noise/**", ".github/workflows/build-cinny-web.yml"]
+
+permissions:
+  contents: read
+
+env:
+  UPSTREAM_REPO: https://github.com/cinnyapp/cinny-desktop.git
+  # Public by design: it is embedded in every bundle we serve.
+  VITE_SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+  SENTRY_SDK_VERSION: 10.27.0
+  SENTRY_CLI_VERSION: 2.42.2
+  SENTRY_ORG: plotina
+  SENTRY_PROJECT: web-clients
+  SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+
+concurrency:
+  group: build-cinny-web-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: web dist
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin upstream
+        working-directory: cinny
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="$(cat UPSTREAM_TAG)"
+          echo "upstream tag: $TAG"
+          git clone --depth 1 --branch "$TAG" --recurse-submodules --shallow-submodules \
+            "$UPSTREAM_REPO" upstream
+
+      # The release is what groups events in GlitchTip and must equal the name
+      # the source maps are uploaded under. Two forms only:
+      #   cinny@4.12.8                  a build of upstream tag v4.12.8
+      #   cinny@v4.12.8-plotina-cinny.4 a tag of this repository (same string
+      #                                 the desktop build reports)
+      - name: Name the release
+        shell: bash
+        env:
+          RELEASE_INPUT: ${{ inputs.release }}
+        run: |
+          set -euo pipefail
+          version="$(tr -d 'v\r\n' < cinny/UPSTREAM_TAG)"
+          if [ -n "${RELEASE_INPUT:-}" ]; then
+            release="$RELEASE_INPUT"
+          elif [ "${GITHUB_REF_TYPE}" = tag ]; then
+            release="cinny@${GITHUB_REF_NAME}"
+          else
+            release="cinny@${version}"
+          fi
+          echo "SENTRY_RELEASE=$release" >> "$GITHUB_ENV"
+          echo "release: $release"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cinny/upstream/package-lock.json
+            cinny/upstream/cinny/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The noise layer is part of the served build: the two script tags are
+      # injected into the shell, and the model comes from the pinned lock.
+      - name: Assemble the noise bundle
+        working-directory: cinny
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p noise/vendor
+          cp ../noise/logic.js ../noise/boot.js ../noise/cinny-ui.js noise/
+          cp -a ../noise/vendor/. noise/vendor/
+          python scripts/fetch-noise.py
+
+      - name: Apply the Sentry init
+        working-directory: cinny
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Adds src/plotina/sentry.ts, calls it from src/index.tsx before the
+          # first render, and switches Vite to hidden source maps. Fails loudly
+          # if a future upstream tag moves either anchor.
+          git -C upstream/cinny apply --check "$PWD/patches/0001-plotina-sentry.patch"
+          git -C upstream/cinny apply "$PWD/patches/0001-plotina-sentry.patch"
+
+      - name: Build Cinny web
+        working-directory: cinny/upstream/cinny
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          # Not in upstream's package.json on purpose: --no-save leaves both
+          # package.json and package-lock.json untouched, and letting npm read
+          # the lock keeps transitive pins like @swc/core intact.
+          npm install --no-save --no-audit --no-fund "@sentry/browser@${SENTRY_SDK_VERSION}"
+          VITE_SENTRY_RELEASE="$SENTRY_RELEASE" npm run build
+
+      # Debug ids pair an event with its map, and the maps then leave the dist:
+      # /srv/cinny must not publish the TypeScript source.
+      - name: Split the source maps
+        working-directory: cinny
+        shell: bash
+        run: |
+          set -euo pipefail
+          cli=()
+          if [ -n "${SENTRY_AUTH_TOKEN:-}" ]; then
+            curl -fsSL -o "$RUNNER_TEMP/sentry-cli" \
+              "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION}/sentry-cli-Linux-x86_64"
+            chmod +x "$RUNNER_TEMP/sentry-cli"
+            cli=(--sentry-cli "$RUNNER_TEMP/sentry-cli")
+          else
+            echo "::notice::SENTRY_AUTH_TOKEN is not set: the maps are split out unlabelled."
+          fi
+          python scripts/sentry-sourcemaps.py --dist upstream/cinny/dist \
+            --out "$RUNNER_TEMP/cinny-sourcemaps" --release "$SENTRY_RELEASE" \
+            "${cli[@]+"${cli[@]}"}"
+
+      # /api/0/* is proxied by the relay with a bearer token, so this upload is
+      # expected to work; a rejection is a real failure, not a known 403.
+      - name: Upload source maps to GlitchTip
+        if: env.SENTRY_AUTH_TOKEN != ''
+        shell: bash
+        env:
+          SENTRY_URL: https://sentry.plotina.cc
+        run: |
+          set -euo pipefail
+          cli="$RUNNER_TEMP/sentry-cli"
+          test -d "$RUNNER_TEMP/cinny-sourcemaps"
+          "$cli" releases new "$SENTRY_RELEASE"
+          "$cli" sourcemaps upload --release "$SENTRY_RELEASE" \
+            --url-prefix "~" "$RUNNER_TEMP/cinny-sourcemaps"
+
+      - name: Apply noise patch
+        working-directory: cinny
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp config.json upstream/config.json
+          cp config.json upstream/cinny/config.json
+          cp config.json upstream/cinny/dist/config.json
+          python apply-noise.py --dist upstream/cinny/dist --noise noise
+
+      - name: Verify the artifact
+        working-directory: cinny
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist=upstream/cinny/dist
+          grep -q 'noise/cinny-ui.js' "$dist/index.html"
+          grep -q 'noise/boot.js' "$dist/public/element-call/index.html"
+          test -f "$dist/noise/dfn/v3/pkg/df_bg.wasm"
+          test -f "$dist/noise/vendor/dfn.esm.js"
+          test -f "$dist/config.json"
+          # The SDK is in the bundle; both build-time values survive minification.
+          grep -Raqs 'sentry.javascript' "$dist/assets"
+          grep -RaqsF "$VITE_SENTRY_DSN" "$dist/assets"
+          grep -RaqsF "$SENTRY_RELEASE" "$dist/assets"
+          # Nothing may publish the app's TypeScript source.
+          if find "$dist/assets" -name '*.map' | grep -q . || [ -e "$dist/sw.js.map" ]; then
+            echo "source maps leaked into the artifact" >&2
+            exit 1
+          fi
+          echo "reporting enabled for $SENTRY_RELEASE"
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tar -C cinny/upstream/cinny/dist -czf dist/plotina-cinny-web.tar.gz .
+          # The checksum names the file without a directory, so it verifies
+          # next to the tarball wherever it is unpacked.
+          ( cd dist && sha256sum plotina-cinny-web.tar.gz > plotina-cinny-web.tar.gz.sha256 )
+          cat dist/plotina-cinny-web.tar.gz.sha256
+          cinny_commit="$(git -C cinny/upstream/cinny rev-parse HEAD)"
+          jq -n --arg release "$SENTRY_RELEASE" \
+                --arg tag "$(cat cinny/UPSTREAM_TAG)" \
+                --arg repo_commit "$GITHUB_SHA" \
+                --arg cinny_commit "$cinny_commit" \
+                --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{release:$release, upstream_tag:$tag, repo_commit:$repo_commit, cinny_commit:$cinny_commit, run:$run}' \
+            > dist/build-info.json
+          cat dist/build-info.json
+          du -h dist/plotina-cinny-web.tar.gz
+          {
+            echo "### cinny web $SENTRY_RELEASE"
+            echo '```'
+            cat dist/plotina-cinny-web.tar.gz.sha256
+            echo '```'
+            echo "Deploy: untar into a new directory under /srv, then swap /srv/cinny (cinny/README.md)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plotina-cinny-web
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
