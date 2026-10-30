@@ -12,6 +12,15 @@ permissions:
 
 env:
   UPSTREAM_REPO: https://github.com/cinnyapp/cinny-desktop.git
+  # The DSN is public by design: it is embedded in every bundle we serve, and
+  # the repository variable can override it without touching this file.
+  VITE_SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+  # Pinned so CI and a workstation produce the same bundle; bump deliberately.
+  SENTRY_SDK_VERSION: 10.27.0
+  SENTRY_CLI_VERSION: 2.42.2
+  # Gives the build step the right to fetch sentry-cli. It is only used by the
+  # debug-id injection and the upload below.
+  SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
 jobs:
   build:
@@ -24,9 +33,11 @@ jobs:
           - name: linux
             os: ubuntu-24.04
             bundles: appimage deb rpm
+            sentry_cli: sentry-cli-Linux-x86_64
           - name: windows
             os: windows-latest
             bundles: nsis msi
+            sentry_cli: sentry-cli-Windows-x86_64.exe
 
     steps:
       - uses: actions/checkout@v4
@@ -41,6 +52,21 @@ jobs:
           echo "upstream tag: $TAG"
           git clone --depth 1 --branch "$TAG" --recurse-submodules --shallow-submodules \
             "$UPSTREAM_REPO" upstream
+
+      # The release groups events in GlitchTip and must match the tag the
+      # source maps are uploaded under: cinny@v4.12.8-plotina-cinny.4.
+      - name: Name the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d 'v\r\n' < cinny/UPSTREAM_TAG)"
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            release="cinny@${GITHUB_REF_NAME}"
+          else
+            release="cinny@${version}+${GITHUB_REF_NAME}"
+          fi
+          echo "SENTRY_RELEASE=$release" >> "$GITHUB_ENV"
+          echo "release: $release"
 
       - uses: actions/setup-node@v4
         with:
@@ -76,11 +102,81 @@ jobs:
           cp -a ../noise/vendor/. noise/vendor/
           python scripts/fetch-noise.py
 
+      - name: Apply the Sentry init
+        working-directory: cinny
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Same patch as scripts/build.sh: adds src/plotina/sentry.ts, calls it
+          # from src/index.tsx and hides the source maps. Fails loudly if a
+          # future upstream tag moves either anchor.
+          git -C upstream/cinny apply --check "$PWD/patches/0001-plotina-sentry.patch"
+          git -C upstream/cinny apply "$PWD/patches/0001-plotina-sentry.patch"
+
       - name: Build Cinny web
         working-directory: cinny/upstream/cinny
+        shell: bash
         run: |
+          set -euo pipefail
           npm ci
-          npm run build
+          # Not in upstream's package.json on purpose: --no-save leaves both
+          # package.json and package-lock.json untouched, and letting npm read
+          # the lock keeps transitive pins like @swc/core intact (a newer
+          # @swc/core breaks vite-plugin-top-level-await).
+          npm install --no-save --no-audit --no-fund "@sentry/browser@${SENTRY_SDK_VERSION}"
+          VITE_SENTRY_RELEASE="$SENTRY_RELEASE" npm run build
+
+      # Debug ids pair an event with its map; the maps then leave the dist so
+      # neither the installers nor /srv/cinny ship the TypeScript source.
+      - name: Split the source maps
+        working-directory: cinny
+        shell: bash
+        run: |
+          set -euo pipefail
+          cli=()
+          if [ -n "${SENTRY_AUTH_TOKEN:-}" ]; then
+            # Windows will not execute a downloaded PE file without the
+            # extension, so the binary is renamed there.
+            bin="sentry-cli"
+            if [ "${RUNNER_OS}" = Windows ]; then bin="sentry-cli.exe"; fi
+            curl -fsSL -o "$RUNNER_TEMP/$bin" \
+              "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION}/${{ matrix.sentry_cli }}"
+            chmod +x "$RUNNER_TEMP/$bin"
+            cli=(--sentry-cli "$RUNNER_TEMP/$bin")
+          else
+            echo "::notice::SENTRY_AUTH_TOKEN is not set: the maps are split out unlabelled and nothing is uploaded."
+          fi
+          python scripts/sentry-sourcemaps.py --dist upstream/cinny/dist \
+            --out "$RUNNER_TEMP/cinny-sourcemaps" --release "$SENTRY_RELEASE" \
+            "${cli[@]+"${cli[@]}"}"
+
+      # GlitchTip's public host exposes /relay/1 only, so /api/0/* still
+      # answers 403 until the relay proxies it (tracked separately). A failing
+      # symbol upload must not turn a good client build red.
+      - name: Upload source maps to GlitchTip
+        if: matrix.name == 'linux' && env.SENTRY_AUTH_TOKEN != ''
+        continue-on-error: true
+        shell: bash
+        env:
+          SENTRY_URL: https://sentry.plotina.cc
+          SENTRY_ORG: plotina
+          SENTRY_PROJECT: web-clients
+        run: |
+          set -euo pipefail
+          if [ ! -d "$RUNNER_TEMP/cinny-sourcemaps" ]; then
+            echo "::notice::this build produced no source maps; nothing to upload"
+            exit 0
+          fi
+          echo "uploading symbols for $SENTRY_RELEASE"
+          # Linux only, so the binary kept its plain name in the step above.
+          cli="$RUNNER_TEMP/sentry-cli"
+          # The event already creates the release; this only makes it visible
+          # up front, so a missing project or an API quirk must not lose the
+          # symbols below.
+          "$cli" releases new "$SENTRY_RELEASE" || \
+            echo "::warning::could not create the release up front; uploading the symbols anyway"
+          "$cli" sourcemaps upload --release "$SENTRY_RELEASE" \
+            --url-prefix "~" "$RUNNER_TEMP/cinny-sourcemaps"
 
       - name: Apply noise patch
         working-directory: cinny
@@ -99,6 +195,25 @@ jobs:
           grep -q 'noise/boot.js' upstream/cinny/dist/public/element-call/index.html
           test -f upstream/cinny/dist/noise/dfn/v3/pkg/df_bg.wasm
           test -f upstream/cinny/dist/noise/vendor/dfn.esm.js
+          # The Sentry SDK must be in the bundle even though it is a no-op
+          # without a DSN; "sentry.javascript" is the SDK name every envelope
+          # carries. Source maps of the app bundle, by contrast, must not be
+          # served (dist/public is vendored and not ours to strip).
+          grep -Raqs 'sentry.javascript' upstream/cinny/dist/assets
+          if find upstream/cinny/dist/assets -name '*.map' | grep -q . || \
+             [ -e upstream/cinny/dist/sw.js.map ]; then
+            echo "source maps leaked into the artifact" >&2
+            exit 1
+          fi
+          if [ -n "${VITE_SENTRY_DSN:-}" ]; then
+            # Both values are inlined at build time: this proves init() kept
+            # them instead of being tree-shaken away.
+            grep -RaqsF "$VITE_SENTRY_DSN" upstream/cinny/dist/assets
+            grep -RaqsF "$SENTRY_RELEASE" upstream/cinny/dist/assets
+            echo "reporting enabled for $SENTRY_RELEASE"
+          else
+            echo "::notice::SENTRY_DSN is empty: the bundle carries the SDK but reports nothing"
+          fi
           echo "patch present in the dist"
 
       - name: Install Tauri CLI
