@@ -20,7 +20,7 @@ import { ensureMicrophoneOn, login } from "../helpers/login";
 test.describe("Element Call + DeepFilterNet3", () => {
   test.skip(
     !hasCredentials,
-    "QA_NOISE_USER / QA_NOISE_PASSWORD are not set — skipping the authenticated Element Call check",
+    "E2E_ACCESS_TOKEN (or QA_NOISE_USER / QA_NOISE_PASSWORD) is not set — skipping the authenticated Element Call check",
   );
   test.skip(!ROOM_ID, "E2E_ROOM_ID is not set — no room to join");
 

@@ -43,14 +43,21 @@ jobs:
       - name: Check for the QA credentials
         id: credentials
         env:
+          E2E_ACCESS_TOKEN: ${{ secrets.E2E_ACCESS_TOKEN }}
           QA_NOISE_USER: ${{ secrets.QA_NOISE_USER }}
           QA_NOISE_PASSWORD: ${{ secrets.QA_NOISE_PASSWORD }}
         run: |
-          if [ -z "$QA_NOISE_USER" ] || [ -z "$QA_NOISE_PASSWORD" ]; then
-            echo "::notice title=E2E skipped::QA_NOISE_USER / QA_NOISE_PASSWORD are not configured; the Element Call checks did not run."
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-          else
+          # A long-lived MAS compatibility token (E2E_ACCESS_TOKEN) is the
+          # normal path; password login is disabled on plotina.cc after the
+          # move to MAS. The password pair is only a fallback for deployments
+          # that still accept m.login.password.
+          if [ -n "$E2E_ACCESS_TOKEN" ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
+          elif [ -n "$QA_NOISE_USER" ] && [ -n "$QA_NOISE_PASSWORD" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice title=E2E skipped::E2E_ACCESS_TOKEN (or QA_NOISE_USER / QA_NOISE_PASSWORD) is not configured; the Element Call checks did not run."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Install dependencies
@@ -67,6 +74,7 @@ jobs:
         if: steps.credentials.outputs.ready == 'true'
         working-directory: e2e
         env:
+          E2E_ACCESS_TOKEN: ${{ secrets.E2E_ACCESS_TOKEN }}
           QA_NOISE_USER: ${{ secrets.QA_NOISE_USER }}
           QA_NOISE_PASSWORD: ${{ secrets.QA_NOISE_PASSWORD }}
           E2E_ROOM_ID: ${{ vars.E2E_ROOM_ID || secrets.E2E_ROOM_ID }}
