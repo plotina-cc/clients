@@ -80,7 +80,7 @@ esac
 # $OUT/sentry-release.txt so the upload step cannot drift from the build.
 RELEASE="${VITE_SENTRY_RELEASE:-element-call@$TAG}"
 
-for f in "$NOISE/logic.js" "$NOISE/boot.js" "$NOISE/vendor/dfn.esm.js" "$CONFIG"; do
+for f in "$NOISE/logic.js" "$NOISE/boot.js" "$NOISE/plotina-dfn.js" "$NOISE/plotina-panel.js" "$NOISE/vendor/dfn.esm.js" "$CONFIG"; do
   [ -f "$f" ] || die "missing input: $f"
 done
 
@@ -210,7 +210,7 @@ python3 "$HERE/inject-noise.py" --check "$DIST/index.html"
 
 say "copying noise/ into the bundle"
 mkdir -p "$DIST/noise/vendor"
-install -m 0644 "$NOISE/logic.js" "$NOISE/boot.js" "$NOISE/plotina-dfn.js" "$HERE/source-link.js" "$DIST/noise/"
+install -m 0644 "$NOISE/logic.js" "$NOISE/boot.js" "$NOISE/plotina-dfn.js" "$NOISE/plotina-panel.js" "$HERE/source-link.js" "$DIST/noise/"
 install -m 0644 "$NOISE/vendor/dfn.esm.js" "$DIST/noise/vendor/"
 # The vendored module is third-party; its licences travel with it.
 for lic in "$NOISE"/vendor/LICENSE-*; do
@@ -262,8 +262,10 @@ install -m 0644 "$REPO/NOTICE" "$DIST/NOTICE"
 say "checking the bundle"
 python3 "$HERE/inject-noise.py" --check "$DIST/index.html" >/dev/null
 grep -q '/noise/logic.js' "$DIST/index.html" || die "logic.js tag missing from index.html"
+grep -q '/noise/plotina-panel.js' "$DIST/index.html" || die "plotina-panel.js tag missing from index.html"
 grep -q '/noise/source-link.js' "$DIST/index.html" || die "source-link.js tag missing from index.html"
 [ -s "$DIST/noise/source-link.js" ] || die "source-link.js is missing from the bundle"
+[ -s "$DIST/noise/plotina-panel.js" ] || die "plotina-panel.js is missing from the bundle"
 grep -q 'assets/' "$DIST/index.html" || die "no asset references in index.html; wrong tarball?"
 compgen -G "$DIST/assets/index-*.js" >/dev/null || die "no hashed app bundle under assets/"
 [ -s "$DIST/config.json" ] || die "config.json is empty"

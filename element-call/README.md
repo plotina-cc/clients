@@ -46,6 +46,8 @@ element-call-plotina/
 ├── assets/…                   # hashed Vite output, referenced as /assets/…
 └── noise/
     ├── logic.js  boot.js      # the shared wrapper
+    ├── plotina-dfn.js         # the LiveKit track processor (level, live setter)
+    ├── plotina-panel.js       # the in-call level control
     ├── source-link.js         # "Исходный код" in the sign-in footer
     ├── vendor/dfn.esm.js      # + its two licences
     └── dfn/v3/pkg/df_bg.wasm  # 16.4 MB, sha256 from pins.env
@@ -105,6 +107,35 @@ replace the client this module set up.
   `index.html` (`src/config/Config.ts:48-57`). Both work with this layout.
 - Analytics keys (`posthog`, `sentry`, `rageshake`) are deliberately absent: absent means the
   consent UI and the reporting are off.
+
+## Noise level in the call
+
+Element Call v0.26.1 has no level control of its own — only the boolean
+`noiseSuppression` in the developer tab, which is not ours. `noise/plotina-panel.js`
+adds a pill in the bottom-right corner of the room view («Шумодав · 30 дБ», or
+"Noise · 30 dB" in a non-Russian browser) that opens a 0–100 dB slider. 0 is off:
+the worklet passes the microphone through; 100 is full suppression. The value is
+stored in `localStorage["plotina.noise.level"]` and applied to the running LiveKit
+track processor through `window.__plotinaSetLevel()` → `setSuppressionLevel()`,
+so moving the slider never restarts the call or re-negotiates the track.
+
+`?plotina-level=30` presets the value for one call; the widget API's fragment
+(`#?widgetId=…&plotina-level=30`) works the same way, because the Matrix widget
+parameters arrive there. Until the slider is moved, the URL wins over storage;
+after that the user's choice wins, so re-attaching a track (device change, mic
+toggled off and on) keeps it.
+
+The panel is drawn only in the room view, and only when the page is embedded
+(`window.self !== window.top`) or the user agent is Element X's WebView, which
+sets its own UA (`Element X/<version> (…; Android …)`) instead of a Mozilla one.
+A top-level desktop tab at `call.plotina.cc` stays clean. `?plotina-panel=1` and
+`?plotina-panel=0` override the decision for support and for tests.
+
+Element Web and Cinny embed Element Call in an iframe, so they do get the panel;
+their own sliders live in their settings screens and write their own origin's
+storage, so the two never appear on the same screen. What the settings sliders
+cannot do is reach a call running in this iframe — the panel is the control that
+does.
 
 ## Deploy
 

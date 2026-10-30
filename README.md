@@ -21,8 +21,8 @@ without the user touching a setting.
   default, so calls there run on our deployment too.
 - **Noise suppression.** DeepFilterNet3 is applied to the microphone before the
   track is published — in the browsers, in the desktop apps and in Element X's
-  call view. It is on by default; there is no switch to find and nothing to
-  install.
+  call view. It is on by default and there is nothing to install; the level can
+  be changed while a call is running, from the control in the call view.
 
 ## How this repository is organised
 
