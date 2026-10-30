@@ -17,7 +17,7 @@ listened to a call on a device yet.
 | Tag | `v2.11.3` (`UPSTREAM_TAG`), commit `6fc4920` |
 | Flutter | `3.47.8` (upstream `.fvmrc`) |
 | Call stack | `livekit_client` 2.13.1, `flutter_webrtc` 1.6.2+hotfix.4 (both from `pubspec.lock`) |
-| Patch | four: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters` (`patches/`) |
+| Patch | six: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level (`patches/`) |
 
 ## What is in this directory
 
@@ -28,8 +28,9 @@ patches/0002-plotina-default-homeserver.patch
 patches/0003-plotina-push-gateway.patch
 patches/0004-split-per-abi-vs-abi-filters.patch
 patches/0005-plotina-sentry.patch
+patches/0006-plotina-noise-level.patch
 plotina_dfn/                       Flutter plugin (Android only)
-  lib/plotina_dfn.dart             isAvailable / setEnabled / frameLength / status
+  lib/plotina_dfn.dart             isAvailable / setEnabled / setAttenLim / frameLength / status
   android/…/PlotinaDfnPlugin.kt    attaches to flutter_webrtc, extracts the model
   android/…/DfnProcessor.kt        the audio-thread callback
   android/…/DfnNative.kt           JNI declarations, tolerates a missing .so
@@ -48,6 +49,27 @@ The patch adds only this to `pubspec.yaml`:
 Gradle picks the Rust library up from
 `plotina_dfn/android/src/main/jniLibs/<abi>/libplotina_dfn.so`, so **no Gradle
 file of FluffyChat is modified**.
+
+## Noise suppression level
+
+The strength is a global setting, not per call:
+
+- Settings → Chat → **Sound**: a slider from 0 to 100 dB, default **30**.
+- **100** removes the attenuation limit (`DfTract` treats >= 100 as unlimited).
+- **0** bypasses the denoiser: the channel sets `DfnProcessor.bypass`, no audio
+  reaches the Rust handle, and the model is not loaded at startup.
+- Any other value is pushed into the live `DfTract` through
+  `DfTract::set_atten_lim` under the same mutex as `process()`, so a change
+  takes effect on the next 10 ms frame and does not restart the call.
+- The value is stored in `shared_preferences` as
+  `chat.fluffy.noise_suppression_level` (`AppSettings.noiseSuppressionLevel` in
+  `0006`). On Android the plugin reads the same key from
+  `FlutterSharedPreferences` in `onAttachedToEngine`, before the model load is
+  queued, because Dart's `main()` runs after that point.
+
+```dart
+await PlotinaDfn.setAttenLim(45); // dB, 0..100, no-op outside Android
+```
 
 ## Push (FCM)
 
@@ -97,8 +119,9 @@ CI step fails the build if any of that is missing.
 - The built-in NS/AGC still run before DFN3 (double processing). Cheap to tune
   later via `androidUseHardwareAudioProcessing` / APM config if it matters.
 - 48 kHz only: any other rate is passed through rather than resampled.
-- Registration is process-global and happens once; there is no per-call toggle
-  beyond `PlotinaDfn.setEnabled(false)`.
+- Registration is process-global and happens once. `PlotinaDfn.setEnabled(false)`
+  and `PlotinaDfn.setAttenLim(0)` switch processing off; the level is global
+  (Settings → Chat), not per call.
 - DFN3 adds its algorithmic lookahead (~10 ms). Irrelevant next to network
   jitter, but it is not zero.
 

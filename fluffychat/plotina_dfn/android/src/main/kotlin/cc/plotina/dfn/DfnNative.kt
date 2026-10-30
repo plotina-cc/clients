@@ -12,7 +12,7 @@ package cc.plotina.dfn
  * native method whose library failed to load throws UnsatisfiedLinkError even
  * for a null-looking handle, which would break the method channel on x86.
  *
- * The four `native…` declarations map to
+ * The five `native…` declarations map to
  * `Java_cc_plotina_dfn_DfnNative_native…` in `rust/src/lib.rs`.
  */
 object DfnNative {
@@ -27,6 +27,14 @@ object DfnNative {
     /** Returns an opaque handle, or 0 if the model could not be loaded. */
     fun create(modelPath: String, attenLimDb: Float): Long =
         if (available) nativeCreate(modelPath, attenLimDb) else 0L
+
+    /**
+     * Changes the attenuation limit of a live handle, 0–100 dB. Takes effect
+     * on the next 10 ms frame; the handle and the call stay alive.
+     * Returns false if the value was not applied.
+     */
+    fun setAttenLim(handle: Long, attenLimDb: Float): Boolean =
+        available && handle != 0L && nativeSetAttenLim(handle, attenLimDb)
 
     /** DeepFilterNet hop size in samples, 0 if [handle] is invalid. */
     fun frameLength(handle: Long): Int =
@@ -45,6 +53,8 @@ object DfnNative {
     }
 
     private external fun nativeCreate(modelPath: String, attenLimDb: Float): Long
+
+    private external fun nativeSetAttenLim(handle: Long, attenLimDb: Float): Boolean
 
     private external fun nativeFrameLength(handle: Long): Int
 

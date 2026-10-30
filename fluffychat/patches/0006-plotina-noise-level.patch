@@ -1,0 +1,142 @@
+diff --git a/lib/config/setting_keys.dart b/lib/config/setting_keys.dart
+index 8b1faa7..14862ed 100644
+--- a/lib/config/setting_keys.dart
++++ b/lib/config/setting_keys.dart
+@@ -83,6 +83,10 @@ enum AppSettings<T> {
+   knownErrorHashes<List<String>>('chat.fluffy.known_crash_hashes', []),
+   checkForUpdates<bool>('chat.fluffy.check_for_updates', true),
+   lastUpdateCheckDate<String>('chat.fluffy.last_update_check_date', ''),
++
++  /// plotina.cc: DeepFilterNet3 attenuation limit on outgoing call audio, in
++  /// dB. 0 = off, 100 = no limit.
++  noiseSuppressionLevel<int>('chat.fluffy.noise_suppression_level', 30),
+   fallbackLiveKitInstance<String>('chat.fluffy.fallback_live_kit_instance', '');
+ 
+   final String key;
+diff --git a/lib/l10n/intl_en.arb b/lib/l10n/intl_en.arb
+index e8fdc95..5b11115 100644
+--- a/lib/l10n/intl_en.arb
++++ b/lib/l10n/intl_en.arb
+@@ -2852,5 +2852,8 @@
+                 "type": "String"
+             }
+         }
+-    }
++    },
++    "sound": "Sound",
++    "noiseSuppressionLevel": "Noise suppression",
++    "noiseSuppressionLevelHint": "Maximum attenuation in dB for outgoing call audio. 0 turns it off, 100 means no limit. Default: 30."
+ }
+\ No newline at end of file
+diff --git a/lib/l10n/intl_ru.arb b/lib/l10n/intl_ru.arb
+index 9b7a180..174e467 100644
+--- a/lib/l10n/intl_ru.arb
++++ b/lib/l10n/intl_ru.arb
+@@ -2837,5 +2837,8 @@
+     },
+     "download": "Загрузить",
+     "unifiedPushDistributors": "Дистрибьюторы Unified Push:",
+-    "sharedLocation": "Общие геометки"
++    "sharedLocation": "Общие геометки",
++    "sound": "Звук",
++    "noiseSuppressionLevel": "Шумоподавление",
++    "noiseSuppressionLevelHint": "Максимальное ослабление в дБ для исходящего звука звонка. 0 — выключено, 100 — без ограничения. По умолчанию 30."
+ }
+diff --git a/lib/main.dart b/lib/main.dart
+index 0806894..d215770 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -21,6 +21,7 @@ import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
+ import 'package:just_audio_media_kit/just_audio_media_kit.dart';
+ import 'package:material_ui/material_ui.dart';
+ import 'package:matrix/matrix.dart';
++import 'package:plotina_dfn/plotina_dfn.dart';
+ import 'package:shared_preferences/shared_preferences.dart';
+ import 'package:universal_html/universal_html.dart' as web;
+ 
+@@ -74,6 +75,12 @@ void main(List<String> args) => runZonedGuarded(() async {
+ 
+   kEnableMatrixSdkBenchmarks = AppSettings.benchmarksInLogs.value;
+ 
++  // plotina.cc: the plugin loads its model before Dart runs, so the stored
++  // denoiser strength has to be pushed explicitly.
++  if (PlatformInfos.isAndroid) {
++    await PlotinaDfn.setAttenLim(AppSettings.noiseSuppressionLevel.value);
++  }
++
+   if (!_vodozemacInitialized) {
+     await vod.init(
+       wasmPath: './assets/assets/vodozemac/${AppConfig.vodozemacVersion}/',
+diff --git a/lib/pages/settings_chat/settings_chat.dart b/lib/pages/settings_chat/settings_chat.dart
+index 40d18c6..ef12b88 100644
+--- a/lib/pages/settings_chat/settings_chat.dart
++++ b/lib/pages/settings_chat/settings_chat.dart
+@@ -3,7 +3,9 @@
+ //
+ // SPDX-License-Identifier: AGPL-3.0-or-later
+ 
++import 'package:fluffychat/config/setting_keys.dart';
+ import 'package:material_ui/material_ui.dart';
++import 'package:plotina_dfn/plotina_dfn.dart';
+ 
+ import 'settings_chat_view.dart';
+ 
+@@ -17,6 +19,21 @@ class SettingsChat extends StatefulWidget {
+ class SettingsChatController extends State<SettingsChat> {
+   void updateState() => setState(() {});
+ 
++  int? _pendingNoiseLevel;
++
++  int get noiseLevel =>
++      _pendingNoiseLevel ?? AppSettings.noiseSuppressionLevel.value;
++
++  void previewNoiseLevel(double value) =>
++      setState(() => _pendingNoiseLevel = value.round());
++
++  Future<void> saveNoiseLevel(double value) async {
++    final level = value.round();
++    await AppSettings.noiseSuppressionLevel.setItem(level);
++    await PlotinaDfn.setAttenLim(level);
++    if (mounted) setState(() => _pendingNoiseLevel = null);
++  }
++
+   @override
+   Widget build(BuildContext context) => SettingsChatView(this);
+ }
+diff --git a/lib/pages/settings_chat/settings_chat_view.dart b/lib/pages/settings_chat/settings_chat_view.dart
+index b3439af..6a6aa76 100644
+--- a/lib/pages/settings_chat/settings_chat_view.dart
++++ b/lib/pages/settings_chat/settings_chat_view.dart
+@@ -135,6 +135,32 @@ class SettingsChatView extends StatelessWidget {
+                   },
+                 ),
+               Divider(color: theme.dividerColor),
++              if (PlatformInfos.isAndroid) ...[
++                ListTile(
++                  title: Text(
++                    L10n.of(context).sound,
++                    style: TextStyle(
++                      color: theme.colorScheme.secondary,
++                      fontWeight: FontWeight.bold,
++                    ),
++                  ),
++                ),
++                ListTile(
++                  title: Text(L10n.of(context).noiseSuppressionLevel),
++                  subtitle: Text(L10n.of(context).noiseSuppressionLevelHint),
++                  trailing: Text('${controller.noiseLevel} dB'),
++                ),
++                Slider.adaptive(
++                  min: 0,
++                  max: 100,
++                  divisions: 100,
++                  value: controller.noiseLevel.toDouble(),
++                  semanticFormatterCallback: (value) => '${value.round()} dB',
++                  onChanged: controller.previewNoiseLevel,
++                  onChangeEnd: controller.saveNoiseLevel,
++                ),
++                Divider(color: theme.dividerColor),
++              ],
+               ListTile(
+                 title: Text(
+                   L10n.of(context).customEmojisAndStickers,

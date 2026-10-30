@@ -3,7 +3,7 @@
 //! JNI shim that runs DeepFilterNet3 over WebRTC capture audio.
 //!
 //! The Kotlin side is `cc.plotina.dfn.DfnNative` (`android/…/DfnNative.kt`).
-//! Its four `native…` methods map to the `Java_cc_plotina_dfn_DfnNative_*`
+//! Its five `native…` methods map to the `Java_cc_plotina_dfn_DfnNative_*`
 //! symbols below; the names are resolved by the VM at call time, so the two
 //! files have to be renamed together.
 //!
@@ -135,6 +135,35 @@ pub extern "system" fn Java_cc_plotina_dfn_DfnNative_nativeProcess<'local>(
             .is_ok()
     }));
     match processed {
+        Ok(true) => JNI_TRUE,
+        _ => JNI_FALSE,
+    }
+}
+
+/// Changes the maximum attenuation of a live handle. `db` is 0–100: 0 makes
+/// `DfTract::process` copy the input through, 100 removes the limit. Runs
+/// under the same mutex as `nativeProcess`, so a frame in flight finishes
+/// before the new value takes effect and the call itself is never interrupted.
+/// Returns true when the value was applied.
+#[no_mangle]
+pub extern "system" fn Java_cc_plotina_dfn_DfnNative_nativeSetAttenLim<'local>(
+    _env: JNIEnv<'local>,
+    _this: JObject<'local>,
+    handle: jlong,
+    atten_lim_db: jfloat,
+) -> jboolean {
+    if handle == 0 || !atten_lim_db.is_finite() {
+        return JNI_FALSE;
+    }
+    let applied = catch_unwind(AssertUnwindSafe(|| -> bool {
+        let state = unsafe { &*(handle as *const Handle) };
+        let Ok(mut guard) = state.0.lock() else {
+            return false;
+        };
+        guard.tract.set_atten_lim(atten_lim_db);
+        true
+    }));
+    match applied {
         Ok(true) => JNI_TRUE,
         _ => JNI_FALSE,
     }
