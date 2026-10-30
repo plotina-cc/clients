@@ -80,6 +80,10 @@ same file, substituting `SENTRY_DSN` when the variable is set, so a desktop
 build reports under the same release and needs a rebuild to pick up a rotated
 DSN.
 
+The desktop shell reports under its own label, `Plotina-Element@<version>`
+(`@sentry/electron` derives it from the app name and version), and sends
+minidumps for native crashes, so the web source maps do not apply to those.
+
 ## Tests
 
 ```bash
