@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import NoReturn
@@ -58,6 +59,11 @@ def check(config: dict) -> dict:
     url = urlparse(dsn)
     if url.scheme != "https" or not url.hostname or not url.username:
         fail("sentry.dsn is not an https DSN with a public key")
+    # GlitchTip/Sentry public keys are 32 hex characters. A redacted or
+    # truncated DSN ("https://3f9c1d...9f2a@host/1") parses fine but the relay
+    # refuses every envelope, so a deploy carrying one reports nowhere.
+    if not re.fullmatch(r"[0-9a-f]{32}", url.username):
+        fail("sentry.dsn has no usable public key: expected 32 hex characters between https:// and @")
     if not url.path.strip("/"):
         fail("sentry.dsn has no project path")
     # The public root of sentry.plotina.cc answers 403; only /relay/* is routed.
