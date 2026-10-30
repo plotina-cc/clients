@@ -29,7 +29,13 @@ jobs:
 
       - name: Assemble the webapp
         working-directory: element-desktop
+        env:
+          SENTRY_DSN: ${{ vars.SENTRY_DSN }}
         run: scripts/prepare-webapp.sh --dest "$RUNNER_TEMP/webapp"
+
+      - name: Check the Sentry block before packing
+        working-directory: element-desktop
+        run: python3 ../element-web/scripts/render-config.py --check --config "$RUNNER_TEMP/webapp/config.json"
 
       - name: Pack it for the build jobs
         run: |
@@ -119,7 +125,19 @@ jobs:
               exit 1
             fi
           done
-          echo "webapp.asar carries the noise overlay"
+          # The shell's config.json is the only thing that turns Sentry on, so
+          # read the packed copy back instead of trusting the directory.
+          node -e '
+          const { extractFile } = require("@electron/asar");
+          const c = JSON.parse(extractFile("webapp.asar", "config.json"));
+          const s = c.sentry || {};
+          if (!s.dsn || s.environment !== "production" || !/\/relay\//.test(s.dsn)) {
+            console.error("webapp.asar config.json has no usable sentry block:", s);
+            process.exit(1);
+          }
+          console.log("asar config.json sentry:", s.dsn.replace(/\/\/[^@]+@/, "//<key>@"), s.environment);
+          '
+          echo "webapp.asar carries the noise overlay and the Sentry block"
 
       - name: Build installers
         working-directory: element-desktop/.build/element-web/apps/desktop

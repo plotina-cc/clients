@@ -13,6 +13,8 @@
 # WORK        where the tarball and the assembly live (default: .build)
 # NOISE       where the DeepFilterNet3 assets are downloaded (default: noise)
 # PYTHON      interpreter to use (default: python3, falling back to python)
+# SENTRY_DSN  GlitchTip DSN written into the webapp's config.json; required, and
+#             obtained from the SENTRY_DSN repository variable in CI
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -76,9 +78,18 @@ cp -a "$REPO_ROOT/noise/vendor/." "$NOISE/vendor/"
 echo "==> noise assets"
 "$PYTHON" "$REPO_ROOT/cinny/scripts/fetch-noise.py" --dest "$NOISE"
 
+echo "==> config"
+# The DSN is the one deployment value that may change without a commit:
+# element-web/config.json keeps the current one, SENTRY_DSN overrides it (CI
+# passes the repository variable). render-config.py fails the build if the
+# result could not report (no sentry object, empty or non-hex key, wrong
+# environment), instead of shipping an app that is silent about crashes.
+CONFIG="$WORK/element-web-config.json"
+"$PYTHON" "$REPO_ROOT/element-web/scripts/render-config.py" --out "$CONFIG"
+
 echo "==> overlay"
 "$PYTHON" "$ROOT/apply-noise.py" --webapp "$DEST" --noise "$NOISE" \
-  --config "$REPO_ROOT/element-web/config.json"
+  --config "$CONFIG"
 
 echo "==> verify"
 grep -q 'noise/boot.js' "$DEST/index.html"
@@ -87,5 +98,6 @@ test -f "$DEST/noise/vendor/dfn.esm.js"
 test -f "$DEST/noise/dfn/v3/pkg/df_bg.wasm"
 test -f "$DEST/noise/dfn/v3/models/DeepFilterNet3_onnx.tar.gz"
 test -f "$DEST/config.json"
+"$PYTHON" "$REPO_ROOT/element-web/scripts/render-config.py" --check --config "$DEST/config.json"
 
 echo "webapp ready: $DEST ($(du -sh "$DEST" | cut -f1))"

@@ -13,6 +13,10 @@ element-web/config.json plus the desktop-only web_base_url. update_base_url is
 removed on purpose -- without it the Electron shell never asks Element for an
 update.
 
+The config is expected to come from element-web/scripts/render-config.py, which
+fills sentry.dsn from SENTRY_DSN; a config without a usable sentry block fails
+the build here rather than shipping a desktop that never reports a crash.
+
 Idempotent; fails loudly if an anchor moves, so an upstream change cannot ship a
 build with the denoiser silently missing.
 """
@@ -21,6 +25,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 TAG = '<script src="noise/logic.js"></script><script src="noise/boot.js" defer></script>'
 MARKER = "noise/boot.js"
@@ -51,11 +56,15 @@ def patch_html(path: Path) -> None:
 
 def write_config(src: Path, dst: Path) -> None:
     config = json.loads(src.read_text(encoding="utf-8"))
+    sentry = config.get("sentry")
+    if not isinstance(sentry, dict) or not str(sentry.get("dsn") or "").strip():
+        sys.exit(f"apply-noise: {src} has no sentry.dsn; the desktop app would never report to GlitchTip")
     if config.pop("update_base_url", None) is not None:
         print("dropped update_base_url: our builds never follow Element's update feed")
     config.setdefault("web_base_url", WEB_BASE_URL)
     dst.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"config: {dst}")
+    url = urlparse(str(sentry["dsn"]))
+    print(f"config: {dst} (sentry {sentry.get('environment')} -> {url.hostname}{url.path})")
 
 
 def main() -> None:

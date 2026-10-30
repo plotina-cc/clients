@@ -31,8 +31,13 @@ The delta is applied to the webapp after it is unpacked:
   to `index.html` — the same two files the web image loads, the wrapper on
   `getUserMedia` plus the level slider in Settings → Voice and Video.
 - `../element-web/config.json` becomes the webapp's `config.json` with
-  `web_base_url` added (context-menu links point at chat.plotina.cc);
-  `update_base_url` is dropped, so the shell never asks Element for updates.
+  `web_base_url` added (context-menu links point at chat.plotina.cc) and
+  `sentry.dsn` filled from `SENTRY_DSN`; `update_base_url` is dropped, so the
+  shell never asks Element for updates. Upstream's `apps/desktop` reads that same
+  file: the main process calls `Sentry.init()` when `sentry.dsn` is present and
+  the renderer's `initSentry()` runs from the config it receives over IPC, so
+  both halves report to GlitchTip. A build without a usable DSN fails instead of
+  shipping silent binaries.
 - Script tags are **relative** on purpose: the custom protocol serves only paths
   below `/webapp/`, so the `/noise/...` used on the web would 404 here.
   `noise/boot.js` resolves its own directory at runtime
@@ -51,8 +56,14 @@ scripts/build.sh          clone, install, asar, installers -> dist-stable/
 ## Building
 
 ```bash
-element-desktop/scripts/build.sh
+SENTRY_DSN=... element-desktop/scripts/build.sh
 ```
+
+`SENTRY_DSN` is the GlitchTip DSN (`https://<32 hex>@sentry.plotina.cc/relay/1`);
+it overrides the value committed in `element-web/config.json`, and CI passes
+the repository variable so a rotation needs no commit. The build fails if the
+resulting config has no usable DSN, because a desktop that cannot report is not
+shippable.
 
 Linux produces `dist-stable/Plotina-Element.AppImage` and
 `Plotina-Element.deb`; Windows (Git Bash) produces
@@ -97,6 +108,11 @@ be installed side by side.
 
 ## Verifying a build by hand
 
+- The packed config carries Sentry:
+  `node -e 'console.log(JSON.parse(require("@electron/asar").extractFile("webapp.asar","config.json")).sentry)'`
+  prints the relay DSN with `environment: "production"` (run in `apps/desktop`).
+- Starting the app logs `Enabling Sentry with dsn=https://<key>@sentry.plotina.cc/relay/1 environment=production`
+  from the main process; without that line Sentry never initialised.
 - Settings → Voice and Video shows the noise slider (default 60).
 - In a call, `window.__plotinaNoiseStats` in the devtools console counts
   `callRequests`/`processed`; `window.__plotinaNoise.isSupported()` is `true`.
