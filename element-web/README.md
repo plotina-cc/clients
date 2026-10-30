@@ -43,6 +43,58 @@ The stock **Noise suppression** toggle remains the master switch: when the app
 asks for `noiseSuppression: false`, the wrapper does nothing. The slider stores
 `plotina.noise.level` in `localStorage`, default 60 (DFN attenuation limit, dB).
 
+## Error reporting (GlitchTip)
+
+Element Web has Sentry support upstream: `matrix-react-sdk`'s `initSentry()`
+reads a `sentry` object from `config.json` at startup and calls `Sentry.init()`.
+The integration is configuration only — no client code, no extra SDK, nothing to
+rebase. We point it at our GlitchTip:
+
+```json
+"sentry": {
+    "dsn": "https://<key>@sentry.plotina.cc/relay/1",
+    "environment": "production"
+}
+```
+
+The DSN is public by design (every bundle carries it) and is also the
+`SENTRY_DSN` repository variable; `scripts/render-config.py` writes it into the
+published file, so a rotation needs no commit. Its path must stay `/relay/1`:
+the public root of `sentry.plotina.cc` answers 403 and only `/relay/*` is
+routed, so a DSN without that prefix parses but every envelope is refused.
+
+What this gives, and what it does not:
+
+- **Automatic capture: no.** Upstream initialises the SDK with
+  `defaultIntegrations: false` and no `GlobalHandlers`, so uncaught errors and
+  rejected promises are not reported on their own. Events come from rageshake
+  submissions: the "report a problem" path calls
+  `window.mxSendSentryReport(text, issueUrl, error)`. Do not add a second,
+  global `Sentry.init` — it would replace the client upstream owns and lose the
+  release and source-map pairing.
+- **Release: `1.12.32`, not `element-web@1.12.32`.** `initSentry()` passes
+  `process.env.VERSION`, which upstream bakes into the bundle
+  (`release:"1.12.32"` in `bundles/<hash>/6312.js`), and `config.json` has no
+  release key. `scripts/sourcemaps.py` reads that literal back and the publish
+  workflow uploads the maps under it, so events and maps always agree. The
+  `element-web@…` name would need a source build with `VERSION=` set (this
+  overlay does not build Element Web) or a rewrite of the baked literal;
+  neither is done here.
+- **Source maps: wired, waiting on the relay.** The image already ships the
+  maps next to the bundles (that is why `chat.plotina.cc` answers
+  `/bundles/<hash>/bundle.js.map`). `scripts/sourcemaps.py` extracts them from
+  the pinned image and `.github/workflows/publish-element-web.yml` uploads them
+  to GlitchTip. `sentry-cli` refuses a server URL with a path, so the upload
+  needs `/api/0/*` at the public root; today only `/relay/*` is routed, and the
+  workflow keeps that step non-fatal until the relay change lands.
+
+Deploying a DSN change is one file: copy the published
+`element-web-config.json` to `/srv/plotina/element/config.json` on the host
+(the file `plotina-infra` also keeps under `/opt/plotina-infra/config/element/`)
+and reload the page. Element Web fetches the config at startup, so no image
+rebuild. Note that `element-desktop` copies this same file into its webapp, so
+desktop builds report too, under the same release.
+
 ## Assumptions that upstream can break
 
 | Assumption | Where | What happens if it breaks |
@@ -52,6 +104,7 @@ asks for `noiseSuppression: false`, the wrapper does nothing. The slider stores
 | Element Call passes boolean audio constraints | `logic.js` | Denoise silently stops; browser NS still works |
 | Settings has a visible "Подавление шума" / "Noise suppression" label | `boot.js` | Slider missing; default 60 still applies |
 | `deepfilternet3-noise-filter` exposes `DeepFilterNet3Core` and asset paths `v3/…` | `boot.js`, Dockerfile | Processing fails → falls back to raw audio |
+| The bundle contains exactly one `release:"<version>"` literal | `scripts/sourcemaps.py` | Publish fails loudly instead of uploading maps under a name events never report |
 
 ## Tests
 

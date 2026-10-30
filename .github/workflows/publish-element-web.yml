@@ -1,0 +1,141 @@
+name: publish-element-web
+
+# Element Web is not built here: we run the pinned vectorim/element-web image
+# (element-web/Dockerfile) with our noise/ overlay and a runtime config.json.
+# This workflow publishes the two pieces that cannot live in the image:
+#
+#   - config.json with the Sentry DSN from the SENTRY_DSN repository variable;
+#   - the source maps of that exact image, uploaded to GlitchTip so the events
+#     the same config produces can be symbolicated.
+#
+# Nothing here builds or deploys the image itself; the deploy is a config file
+# copied to the host (element-web/README.md, "Error reporting").
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*-plotina-web.*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-element-web-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SENTRY_CLI_VERSION: "2.42.2"
+  SENTRY_ORG: plotina
+  SENTRY_PROJECT: web-clients
+
+jobs:
+  publish:
+    name: config and source maps
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the pinned image
+        id: image
+        run: |
+          set -euo pipefail
+          line="$(grep -m1 '^FROM vectorim/element-web:' element-web/Dockerfile)"
+          image="${line#FROM }"
+          image="${image%% *}"
+          ref="${image#vectorim/element-web:}"
+          version="${ref%%@*}"
+          version="${version#v}"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+      - name: Render config.json
+        env:
+          SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SENTRY_DSN:-}" ]; then
+            echo "::notice::SENTRY_DSN is not set; the DSN committed in element-web/config.json is used"
+          fi
+          python3 element-web/scripts/render-config.py --out dist/element-web-config.json
+
+      # The maps must come from the image we deploy, not from the GitHub release
+      # tarball: the two are not byte-identical (different bundle hash) and a map
+      # from the wrong build symbols nothing.
+      - name: Extract the webapp from the image
+        run: |
+          set -euo pipefail
+          trap 'docker rm -f element-web >/dev/null 2>&1 || true' EXIT
+          docker create --name element-web "${{ steps.image.outputs.image }}" >/dev/null
+          docker cp element-web:/app dist/webapp
+          test -f dist/webapp/index.html
+          test -d "dist/webapp/bundles"
+
+      - name: Collect source maps
+        id: maps
+        run: |
+          set -euo pipefail
+          python3 element-web/scripts/sourcemaps.py --webapp dist/webapp --out dist/sourcemaps | tee /tmp/maps.out
+          grep '^release=' /tmp/maps.out >> "$GITHUB_OUTPUT"
+          grep '^maps=' /tmp/maps.out >> "$GITHUB_OUTPUT"
+          cat "$GITHUB_OUTPUT"
+
+      - name: Fetch sentry-cli
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/sentry-cli \
+            "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION}/sentry-cli-Linux-x86_64"
+          chmod +x /tmp/sentry-cli
+
+      - name: Upload source maps to GlitchTip
+        id: upload
+        continue-on-error: true
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SENTRY_AUTH_TOKEN:-}" ]; then
+            echo "::notice::SENTRY_AUTH_TOKEN is not set: no maps are uploaded, events still arrive"
+            exit 0
+          fi
+          # sentry-cli rejects a server URL with a path, so the relay has to be
+          # reachable at the root for /api/0/*; today Caddy exposes only
+          # /relay/*, where the same API answers. Kept non-fatal until that
+          # route exists: the release must ship even without symbols.
+          export SENTRY_URL=https://sentry.plotina.cc
+          release="${{ steps.maps.outputs.release }}"
+          /tmp/sentry-cli releases new "$release"
+          # Relative paths under dist/sourcemaps start with bundles/, hence the
+          # upload directory one level down: ~/bundles/<hash>/<chunk>.js.
+          /tmp/sentry-cli sourcemaps upload --release "$release" \
+            --url-prefix "~/bundles" dist/sourcemaps/bundles
+
+      - name: Note the map upload that GlitchTip did not get
+        if: steps.upload.outcome == 'failure'
+        run: |
+          echo "::warning::source maps for ${{ steps.maps.outputs.release }} were not uploaded; the events still arrive, symbolication waits for /api/0/* at https://sentry.plotina.cc (relay change)."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: element-web-config
+          path: dist/element-web-config.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: dist/element-web-config.json
+          body: |
+            Runtime `config.json` for Element Web ${{ steps.image.outputs.version }} on
+            chat.plotina.cc, with the Sentry/GlitchTip block filled from the
+            `SENTRY_DSN` repository variable.
+
+            Deploy: copy `element-web-config.json` to
+            `/srv/plotina/element/config.json` on the host and reload the page —
+            Element Web fetches it at startup, no image rebuild.
+
+            Source maps: ${{ steps.maps.outputs.maps }} maps for release
+            `${{ steps.maps.outputs.release }}`, taken from the pinned
+            `${{ steps.image.outputs.image }}`.
