@@ -60,6 +60,13 @@ and `.github/workflows/build-element-desktop.yml` trigger on a `v*-plotina.*` ta
 and attach the installers to the release. Build details that are specific to one
 client live in that client's directory.
 
+## Windows builds
+
+The Windows installer is not code-signed. On first launch SmartScreen shows
+"Windows protected your PC" — choose "More info", then "Run anyway". The binary
+is built from the same sources as every other client; we do not pay for a code
+signing certificate.
+
 ## Licence
 
 AGPL-3.0 (see `LICENSE`), matching the upstream projects we derive from: Element
