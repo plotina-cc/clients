@@ -8,11 +8,11 @@
   "use strict";
 
   var LEVEL_KEY = "plotina.noise.level";
-  var DEFAULT_LEVEL = 40;
+  var DEFAULT_LEVEL = 60;
 
   var STRINGS = {
-    ru: { section: "Звук", title: "Уровень шумоподавления", hint: "0 — выключено, 70 — по умолчанию" },
-    en: { section: "Sound", title: "Noise suppression level", hint: "0 disables it, 70 is the default" },
+    ru: { section: "Звук", title: "Уровень шумоподавления", hint: "0 — выключено, 60 — по умолчанию" },
+    en: { section: "Sound", title: "Noise suppression level", hint: "0 disables it, 60 is the default" },
   };
 
   function clampLevel(value) {
