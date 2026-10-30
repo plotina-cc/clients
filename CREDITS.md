@@ -1,43 +1,34 @@
 # What the Plotina clients are built from
 
-Every binary we hand out is an upstream client plus a small patch layer from
-this repository. Nothing here replaces the upstream project: the sources of the
-unmodified parts come from the links below, at the version pinned in the build
-scripts, and the patch layer is public in this repository under AGPL-3.0.
+Each client is an upstream release plus the patch layer in this repository. The
+patch layer is AGPL-3.0 (see `LICENSE`). Upstream versions are pinned in the
+files named in the tables.
 
-## Upstream clients
+## Clients
 
-| Client | Upstream | Pinned version | License |
+| Project | What we take | License | Upstream |
 | --- | --- | --- | --- |
-| Element Web / Element Desktop | [element-hq/element-web](https://github.com/element-hq/element-web), [element-hq/element-desktop](https://github.com/element-hq/element-desktop) | `v1.12.32` (web image by digest) | AGPL-3.0 |
-| Cinny | [cinnyapp/cinny](https://github.com/cinnyapp/cinny) | `4.12.8` | AGPL-3.0 |
-| FluffyChat | [krille-chan/fluffychat](https://github.com/krille-chan/fluffychat) | `v2.11.3` | AGPL-3.0 |
-| Element X | [element-hq/element-x-android](https://github.com/element-hq/element-x-android) | `v26.10.1` | AGPL-3.0 |
-| Element Call | [element-hq/element-call](https://github.com/element-hq/element-call) | `v0.26.1` | AGPL-3.0 |
-
-The exact pins live next to each client: `element-web/Dockerfile`,
-`cinny/desktop/UPSTREAM_TAG`, `fluffychat/UPSTREAM_TAG`,
-`element-x/pins.env`, `element-call/pins.env`.
+| Element Web | `v1.12.32` web client (`element-web/Dockerfile`) | AGPL-3.0-or-later | [element-hq/element-web](https://github.com/element-hq/element-web) |
+| Element Desktop | `v1.12.32`, the `apps/desktop` Electron shell (`element-desktop/UPSTREAM_TAG`) | AGPL-3.0-or-later | [element-hq/element-web](https://github.com/element-hq/element-web) |
+| Element Call | `v0.26.1` web app, also bundled in Element X (`element-call/pins.env`) | AGPL-3.0-or-later | [element-hq/element-call](https://github.com/element-hq/element-call) |
+| Cinny | `v4.12.8` web app, the `cinny` submodule of `cinny-desktop` (`cinny/UPSTREAM_TAG`) | AGPL-3.0-only | [cinnyapp/cinny](https://github.com/cinnyapp/cinny) |
+| Cinny Desktop | `v4.12.8` Tauri shell around that web app (`cinny/UPSTREAM_TAG`) | AGPL-3.0-only | [cinnyapp/cinny-desktop](https://github.com/cinnyapp/cinny-desktop) |
+| FluffyChat | `v2.11.3` Android build (`fluffychat/UPSTREAM_TAG`) | AGPL-3.0-or-later | [krille-chan/fluffychat](https://github.com/krille-chan/fluffychat) |
+| Element X | `v26.10.1` Android build (`element-x/pins.env`) | AGPL-3.0-or-later | [element-hq/element-x-android](https://github.com/element-hq/element-x-android) |
 
 ## Noise suppression
 
-We do not implement the DSP ourselves. The web clients run
-[deepfilternet3-noise-filter](https://github.com/mezonai/mezon-noise-suppression)
-(`deepfilternet3-noise-filter`, Apache-2.0 OR MIT), a WASM build of
-[DeepFilterNet](https://github.com/Rikorose/DeepFilterNet) (Apache-2.0 OR MIT);
-FluffyChat links the `deep_filter` crate from the same project. The model and
-WASM binaries are pinned by sha256 in the build scripts.
+| Project | What we take | License | Upstream |
+| --- | --- | --- | --- |
+| DeepFilterNet | `deep_filter` crate `v0.5.6` in FluffyChat; the DFN3 model used by it and by the web clients | MIT OR Apache-2.0 | [Rikorose/DeepFilterNet](https://github.com/Rikorose/DeepFilterNet) |
+| mezon-noise-suppression | `noise/vendor/dfn.esm.js`, the WASM binding around DeepFilterNet3 (`noise/vendor/LICENSE-*`) | MIT OR Apache-2.0 | [mezonai/mezon-noise-suppression](https://github.com/mezonai/mezon-noise-suppression) |
 
-## Prior art
+## Error reporting
 
-Upstream has the same feature pending, and these are the discussions our
-approach follows:
-
-- [element-hq/element-call#714](https://github.com/element-hq/element-call/issues/714) — noise reduction request, open since 2022.
-- [element-hq/element-call#3819](https://github.com/element-hq/element-call/pull/3819) — DeepFilterNet proof of concept.
-- [element-hq/element-call#3772](https://github.com/element-hq/element-call/pull/3772) — RNNoise variant.
-
-No lines from those pull requests are shipped here — they hook into Element
-Call's own audio pipeline, while our wrapper patches `getUserMedia` one level up,
-so it covers Element Web, Cinny, Element Desktop and Element Call without
-touching upstream code. The denoiser itself is the library credited above.
+| Project | What we take | License | Upstream |
+| --- | --- | --- | --- |
+| GlitchTip | the error tracking server the clients report to | MIT | [glitchtip/glitchtip-backend](https://gitlab.com/glitchtip/glitchtip-backend) |
+| Sentry JavaScript SDK | `@sentry/browser` and `@sentry/react` in Element Web, Cinny and Element Call | MIT | [getsentry/sentry-javascript](https://github.com/getsentry/sentry-javascript) |
+| Sentry Electron SDK | `@sentry/electron` in Element Desktop | MIT | [getsentry/sentry-electron](https://github.com/getsentry/sentry-electron) |
+| Sentry Android SDK | `io.sentry:sentry-android` in Element X | MIT | [getsentry/sentry-java](https://github.com/getsentry/sentry-java) |
+| Sentry Flutter SDK | `sentry_flutter` in FluffyChat | MIT | [getsentry/sentry-dart](https://github.com/getsentry/sentry-dart) |
