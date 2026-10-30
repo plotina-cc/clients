@@ -1,0 +1,13 @@
+diff --git a/lib/config/setting_keys.dart b/lib/config/setting_keys.dart
+index 6e701bc..8b1faa7 100644
+--- a/lib/config/setting_keys.dart
++++ b/lib/config/setting_keys.dart
+@@ -29,7 +29,7 @@ enum AppSettings<T> {
+   unifiedPushEndpoint<String>('chat.fluffy.unifiedpush.endpoint', ''),
+   pushNotificationsGatewayUrl<String>(
+     'pushNotificationsGatewayUrl',
+-    'https://push.fluffychat.im/_matrix/push/v1/notify',
++    'https://push.plotina.cc/_matrix/push/v1/notify',
+   ),
+   pushNotificationsPusherFormat<String>(
+     'pushNotificationsPusherFormat',

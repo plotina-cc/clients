@@ -1,0 +1,538 @@
+name: build-fluffychat
+
+# Builds Plotina's FluffyChat APK: upstream pinned in fluffychat/UPSTREAM_TAG,
+# our patches from fluffychat/patches/, the DeepFilterNet3 plugin in
+# fluffychat/plotina_dfn/ (Kotlin + Rust), and Firebase Cloud Messaging
+# (upstream's own scripts/add-firebase-messaging.sh plus google-services.json
+# from the GOOGLE_SERVICES_JSON secret).
+#
+# Triggered by tags of the form v<upstream>-plotina-fluffy.<n>, e.g.
+# v2.11.3-plotina-fluffy.1. The client-specific part keeps this workflow from
+# firing for tags that release the other clients in this repository.
+#
+# Crash reports go to GlitchTip at sentry.plotina.cc through sentry_flutter.
+# The DSN is the SENTRY_DSN repository variable (public by design, it is
+# compiled into the APK) and the release is fluffy@<version>+<tag>; the
+# mapping files and Dart symbols are uploaded to the same release.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*-plotina-fluffy.*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-fluffychat-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UPSTREAM_REPO: https://github.com/krille-chan/fluffychat
+  PLUGIN_DIR: fluffychat/plotina_dfn
+  APK_NAME: Plotina-FluffyChat.apk
+  APK_NAME_ARMV7: Plotina-FluffyChat-armv7.apk
+  # GlitchTip. The DSN is public by design and ends up inside libapp.so; an
+  # empty value simply builds without reporting (Sentry stays a no-op).
+  SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+  SENTRY_URL: https://sentry.plotina.cc
+  SENTRY_ORG: plotina
+  SENTRY_PROJECT: web-clients
+  SENTRY_CLI_VERSION: 2.42.2
+
+jobs:
+  apk:
+    name: Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin upstream and apply patches
+        working-directory: fluffychat
+        run: |
+          set -euo pipefail
+          TAG="$(cat UPSTREAM_TAG)"
+          echo "upstream: $UPSTREAM_REPO @ $TAG"
+          git clone --depth 1 --branch "$TAG" "$UPSTREAM_REPO" upstream
+          for patch in "$PWD"/patches/*.patch; do
+            echo "applying $(basename "$patch")"
+            git -C upstream apply --verbose "$patch"
+          done
+          grep -q '^  plotina_dfn:' upstream/pubspec.yaml
+          echo "plugin registered in upstream/pubspec.yaml"
+
+      # One name for the release, the Dart define and the symbol upload. The
+      # pubspec version is what upstream calls 2.11.3+3574; the build number is
+      # upstream's own and would repeat across our tags, so the tag is the dist.
+      - name: Work out the Sentry release
+        id: sentry
+        working-directory: fluffychat/upstream
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^version: \([0-9][0-9.]*\)+.*/\1/p' pubspec.yaml)"
+          if [ -z "$VERSION" ]; then
+            echo "::error::cannot read the version from pubspec.yaml"
+            exit 1
+          fi
+          RELEASE="fluffy@${VERSION}+${GITHUB_REF_NAME}"
+          echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
+          echo "sentry release: $RELEASE"
+
+      # runner.temp is not available in workflow-level env, so the path is
+      # decided here and exported for the upload step.
+      - name: Fetch sentry-cli
+        if: ${{ env.SENTRY_DSN != '' }}
+        run: |
+          set -euo pipefail
+          cli="$RUNNER_TEMP/sentry-cli"
+          curl -fsSL -o "$cli" \
+            "https://github.com/getsentry/sentry-cli/releases/download/${SENTRY_CLI_VERSION}/sentry-cli-Linux-x86_64"
+          chmod +x "$cli"
+          echo "SENTRY_CLI=$cli" >> "$GITHUB_ENV"
+          "$cli" --version
+
+      - name: Read Flutter version
+        id: flutter_version
+        working-directory: fluffychat/upstream
+        run: |
+          set -euo pipefail
+          if [ ! -f .fvmrc ]; then
+            echo "::error::upstream ${{ env.UPSTREAM_REPO }} has no .fvmrc; set the Flutter version by hand"
+            exit 1
+          fi
+          VERSION="$(python3 -c 'import json; print(json.load(open(".fvmrc"))["flutter"])')"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "flutter $VERSION"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ steps.flutter_version.outputs.version }}
+          channel: stable
+          cache: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Firebase Cloud Messaging. Upstream ships the switch as a script: it adds
+      # fcm_shared_isolate (which pulls in firebase_core and firebase-messaging)
+      # and uncomments the FCM code paths. google-services.json has to be in
+      # place before Gradle configures the project, because
+      # android/settings.gradle.kts only declares the com.google.gms.google-services
+      # plugin when that file exists — otherwise the manifest's FcmPushService
+      # has nothing to talk to and FCM silently stays off.
+      - name: Enable Firebase Cloud Messaging
+        working-directory: fluffychat/upstream
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GOOGLE_SERVICES_JSON:-}" ]; then
+            echo "::error::GOOGLE_SERVICES_JSON is not set, so FCM cannot be enabled. Add the base64 of google-services.json as a repository secret."
+            exit 1
+          fi
+          # The secret is base64; GitHub keeps no trailing newline, but strip any
+          # whitespace that a paste may have introduced.
+          printf '%s' "$GOOGLE_SERVICES_JSON" | tr -d '[:space:]' | base64 --decode \
+            > android/app/google-services.json
+          python3 - <<'PY'
+          import json
+          import sys
+
+          path = "android/app/google-services.json"
+          with open(path, "rb") as handle:
+              raw = handle.read()
+          if not raw.strip():
+              sys.exit(f"{path} decoded to an empty file; the secret is not base64")
+          config = json.loads(raw)
+          project = config["project_info"]["project_id"]
+          clients = [
+              entry["client_info"]["android_client_info"]["package_name"]
+              for entry in config.get("client", [])
+          ]
+          print(f"firebase project: {project}")
+          print("clients:", *clients, sep="\n  ")
+          expected = ["chat.fluffy.fluffychat", "io.element.android.x"]
+          missing = [name for name in expected if name not in clients]
+          if missing:
+              sys.exit(f"{path} has no client for: {', '.join(missing)}")
+          PY
+          bash scripts/add-firebase-messaging.sh
+          # The script is silent about whether it matched anything, so check the
+          # markers it is supposed to remove.
+          if grep -q '<GOOGLE_SERVICES>' lib/utils/background_push.dart; then
+            echo "::error::background_push.dart still has //<GOOGLE_SERVICES> markers"
+            exit 1
+          fi
+          grep -q '^  fcm_shared_isolate:' pubspec.yaml ||
+            { echo "::error::fcm_shared_isolate is not in pubspec.yaml"; exit 1; }
+          grep -qx 'package chat.fluffy.fluffychat' \
+            android/app/src/main/kotlin/chat/fluffy/fluffychat/FcmPushService.kt ||
+            { echo "::error::FcmPushService.kt is still commented out"; exit 1; }
+          grep -q 'com.google.gms.google-services' android/settings.gradle.kts
+          echo "FCM enabled: fcm_shared_isolate added, background_push.dart and FcmPushService.kt uncommented"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fluffychat/plotina_dfn/rust -> target
+
+      # cargo-binstall (behind install-action) runs `cargo metadata` in the
+      # repository root, which has no Cargo.toml. Plain `cargo install` does not.
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Fetch DeepFilterNet3 model
+        run: fluffychat/scripts/fetch-model.sh
+
+      - name: Build native denoiser
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?ANDROID_SDK_ROOT/ANDROID_HOME is not set}}"
+          NDK_DIR="$(ls -d "$SDK"/ndk/* 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -z "$NDK_DIR" ]; then
+            # No NDK in the runner image: install the one Flutter itself asks
+            # for, so Gradle does not have to download a second copy.
+            NDK_VERSION="$(sed -n 's/.*ndkVersion: String = "\([^"]*\)".*/\1/p' \
+              "${FLUTTER_ROOT:?}/packages/flutter_tools/gradle/src/main/kotlin/FlutterExtension.kt" | head -1)"
+            NDK_VERSION="${NDK_VERSION:-28.2.13676358}"
+            echo "no NDK found, installing $NDK_VERSION"
+            SDKMANAGER="$(command -v sdkmanager || echo "$SDK/cmdline-tools/latest/bin/sdkmanager")"
+            # `yes | …` alone trips `pipefail` via SIGPIPE when sdkmanager exits.
+            (yes || true) | "$SDKMANAGER" --install "ndk;$NDK_VERSION" > /dev/null
+            NDK_DIR="$SDK/ndk/$NDK_VERSION"
+          fi
+          echo "using NDK $NDK_DIR"
+          # cargo-ndk only looks at the process environment: set it here as well
+          # as for the later Gradle step.
+          export ANDROID_NDK_HOME="$NDK_DIR"
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          # cargo-ndk runs `cargo metadata` in the current directory before it
+          # looks at `--manifest-path`, which fails in the repository root
+          # (there is no Cargo.toml there). Run it from the crate itself.
+          JNI_LIBS="$GITHUB_WORKSPACE/$PLUGIN_DIR/android/src/main/jniLibs"
+          cd "$GITHUB_WORKSPACE/$PLUGIN_DIR/rust"
+          cargo ndk \
+            -t arm64-v8a -t armeabi-v7a -t x86_64 \
+            -o "$JNI_LIBS" \
+            build --release 2>&1 | tee /tmp/cargo-ndk.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            # The job log needs a token to read; the step summary is visible
+            # without one, so the failure reason goes there as well.
+            tail -n 60 /tmp/cargo-ndk.log >> "$GITHUB_STEP_SUMMARY"
+            exit "$status"
+          fi
+          ls -l "$JNI_LIBS"/*/libplotina_dfn.so
+
+      # The APK is signed with our key only when the keystore is configured.
+      # Without the secrets there is nothing to sign with — upstream's
+      # build.gradle.kts points at a dummy.keystore that is not in the repo — so
+      # fall back to a debug build, which installs but cannot update a release.
+      - name: Configure signing
+        id: signing
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          cd fluffychat/upstream/android
+          if [ -z "${KEYSTORE_B64:-}" ]; then
+            echo "::warning title=Debug build::ANDROID_KEYSTORE_BASE64 is not set, so this run produces a debug APK signed with the Android debug key. It installs, but it cannot update an installed Plotina build."
+            echo "variant=debug" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > plotina-release.jks
+          if [ -z "${STORE_PASSWORD:-}" ]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 is set but ANDROID_KEYSTORE_PASSWORD is empty"
+            exit 1
+          fi
+          {
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyPassword=${KEY_PASSWORD:-$STORE_PASSWORD}"
+            echo "keyAlias=${KEY_ALIAS:-plotina}"
+            # Relative to android/app, where build.gradle.kts resolves it:
+            # android/key.properties -> android/plotina-release.jks.
+            echo "storeFile=../plotina-release.jks"
+          } > key.properties
+          echo "signed with alias ${KEY_ALIAS:-plotina}"
+          echo "variant=release" >> "$GITHUB_OUTPUT"
+
+      - name: Build APK
+        working-directory: fluffychat/upstream
+        env:
+          SENTRY_RELEASE: ${{ steps.sentry.outputs.release }}
+        run: |
+          set -euo pipefail
+          VARIANT="${{ steps.signing.outputs.variant }}"
+          echo "building the $VARIANT variant"
+          flutter pub get
+          # Per-ABI splits: the universal APK carries four sets of native
+          # libraries and is roughly twice the size of the arm64 one, which is
+          # what every phone from the last several years needs. x86_64 is left
+          # to emulators and is not published.
+          #
+          # --split-debug-info keeps the Dart symbol files that make a release
+          # stack trace readable; CI uploads them to GlitchTip with the release.
+          # --obfuscate is deliberately not used: it would rename symbols in the
+          # whole app for little gain, and FluffyChat is not shipped to an
+          # untrusted store.
+          flutter build apk --split-per-abi "--$VARIANT" \
+            --build-number "$GITHUB_RUN_NUMBER" \
+            --dart-define=SENTRY_DSN="${SENTRY_DSN:-}" \
+            --dart-define=SENTRY_RELEASE="$SENTRY_RELEASE" \
+            --dart-define=SENTRY_DIST="$GITHUB_RUN_NUMBER" \
+            --split-debug-info=build/app/outputs/symbols
+          arm64="build/app/outputs/flutter-apk/app-arm64-v8a-$VARIANT.apk"
+          armv7="build/app/outputs/flutter-apk/app-armeabi-v7a-$VARIANT.apk"
+          [ -f "$arm64" ] || { echo "::error::no arm64-v8a APK"; ls build/app/outputs/flutter-apk; exit 1; }
+          [ -f "$armv7" ] || { echo "::error::no armeabi-v7a APK"; ls build/app/outputs/flutter-apk; exit 1; }
+          cp "$arm64" "$GITHUB_WORKSPACE/$APK_NAME"
+          cp "$armv7" "$GITHUB_WORKSPACE/$APK_NAME_ARMV7"
+          ls -lh "$GITHUB_WORKSPACE/$APK_NAME" "$GITHUB_WORKSPACE/$APK_NAME_ARMV7"
+          sha256sum "$GITHUB_WORKSPACE/$APK_NAME" "$GITHUB_WORKSPACE/$APK_NAME_ARMV7"
+
+      # Uploaded before the checks on purpose: if a check rejects the APK, the
+      # artifact is still there to inspect instead of costing another 30 minutes.
+      # Nothing is released until both checks pass.
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Plotina-FluffyChat
+          path: Plotina-FluffyChat*.apk
+          if-no-files-found: error
+
+      # The build falls back to the debug key when the keystore secrets are
+      # missing (see "Configure signing"). Such an APK installs but cannot update
+      # an installed Plotina build, so a release run must not ship it.
+      - name: Verify APK signature
+        env:
+          VARIANT: ${{ steps.signing.outputs.variant }}
+        run: |
+          set -euo pipefail
+          echo "build variant: $VARIANT"
+          if [ "$VARIANT" != "release" ]; then
+            echo "::error::expected the release variant signed with the Plotina key, got '$VARIANT'"
+            exit 1
+          fi
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?ANDROID_SDK_ROOT/ANDROID_HOME is not set}}"
+          APKSIGNER="$(ls -1 "$SDK"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -z "$APKSIGNER" ]; then
+            echo "::error::no apksigner under $SDK/build-tools, cannot prove the APKs are signed"
+            exit 1
+          fi
+          echo "using $APKSIGNER"
+          previous_digest=""
+          for apk in "$APK_NAME" "$APK_NAME_ARMV7"; do
+            # apksigner writes the verify summary to stdout only with --verbose and
+            # has moved cert lines between streams across build-tools versions, so
+            # keep both streams and do not depend on the exact wording.
+            report="$("$APKSIGNER" verify --print-certs "$apk" 2>&1)" || {
+              echo "$report"
+              echo "::error::$apk does not verify"
+              exit 1
+            }
+            echo "$report" | sed 's/^/  /'
+            if echo "$report" | grep -qi 'certificate DN:.*CN=Android Debug'; then
+              echo "::error::$apk is signed with the Android debug key, not the Plotina key"
+              exit 1
+            fi
+            digest="$(echo "$report" | grep -i 'certificate SHA-256 digest' | head -1 |
+              sed 's/.*digest:[[:space:]]*//' | tr -d '\r')"
+            if [ -z "$digest" ]; then
+              # apksigner exit 0 already proves a valid signature, and a release
+              # variant only exists when the keystore secrets were present.
+              echo "::warning title=Signature::apksigner printed no cert digest for $apk; relying on 'verify' plus the release variant"
+            elif [ -n "$previous_digest" ] && [ "$digest" != "$previous_digest" ]; then
+              echo "::error::the two APKs are signed with different keys"
+              exit 1
+            else
+              previous_digest="$digest"
+            fi
+          done
+          echo "both APKs verify, and neither is debug-signed"
+
+      # A missing libplotina_dfn.so, model asset or Firebase class does not fail
+      # the build on its own: the plugin or FCM just stays silent. Fail here.
+      - name: Verify APK contents
+        run: |
+          set -euo pipefail
+          # `unzip -l | grep -c com/google/firebase` counts zip *entry names*, and
+          # R8 folds those classes into classes*.dex, so it is 0 even when FCM is
+          # linked in. Kept as a recorded data point; the real check reads the dex
+          # payload further down.
+          for apk in "$APK_NAME" "$APK_NAME_ARMV7"; do
+            count="$(unzip -l "$apk" | grep -c 'com/google/firebase' || true)"
+            echo "unzip -l $apk | grep -c 'com/google/firebase' -> ${count:-0}"
+          done
+          python3 - "$APK_NAME" arm64-v8a "$APK_NAME_ARMV7" armeabi-v7a <<'PY'
+          import sys
+          import zipfile
+
+          pairs = [(sys.argv[1], sys.argv[2]), (sys.argv[3], sys.argv[4])]
+          failures = []
+
+          for apk, abi in pairs:
+              print(f"== {apk} ({abi})")
+              with zipfile.ZipFile(apk) as archive:
+                  names = archive.namelist()
+                  sizes = {name: archive.getinfo(name).file_size for name in names}
+                  dex_names = sorted(name for name in names if name.endswith(".dex"))
+                  dex = b"".join(archive.read(name) for name in dex_names)
+                  resources = (
+                      archive.read("resources.arsc") if "resources.arsc" in names else b""
+                  )
+                  manifest = (
+                      archive.read("AndroidManifest.xml")
+                      if "AndroidManifest.xml" in names
+                      else b""
+                  )
+
+              wanted = [
+                  f"lib/{abi}/libplotina_dfn.so",
+                  "assets/flutter_assets/packages/plotina_dfn/assets/DeepFilterNet3_onnx.tar.gz",
+              ]
+              missing = [name for name in wanted if name not in names]
+              if missing:
+                  print("missing from the APK:", *missing, sep="\n  ")
+                  print("lib/ entries:", *sorted(n for n in names if n.startswith("lib/")), sep="\n  ")
+                  print("model entries:", *sorted(n for n in names if "DeepFilterNet" in n), sep="\n  ")
+                  failures.append(f"{apk}: missing {', '.join(missing)}")
+              for name in wanted:
+                  if name in sizes:
+                      if sizes[name] == 0:
+                          print(f"empty entry: {name}")
+                          failures.append(f"{apk}: {name} is empty")
+                      print(f"  {name}: {sizes[name]} bytes")
+
+              # Firebase. R8 folds the classes into classes*.dex, so no zip entry
+              # is ever called `com/google/firebase` and `unzip -l | grep -c` stays
+              # at 0 even when FCM is linked in. Look inside the dex payload.
+              entry_hits = len([name for name in names if "com/google/firebase" in name])
+              firebase_hits = dex.count(b"com/google/firebase")
+              print(f"  zip entries named com/google/firebase: {entry_hits} (expected 0: R8 dexes the classes)")
+              print(f"  'com/google/firebase' in {', '.join(dex_names)}: {firebase_hits} occurrences")
+              if firebase_hits == 0:
+                  failures.append(f"{apk}: no com/google/firebase classes in the dex payload")
+
+              # The google-services plugin turns google-services.json into string
+              # resources, so the project id ends up in resources.arsc; Firebase
+              # reads it back by name at runtime.
+              needle = b"plotina-push"
+              needle_utf16 = "plotina-push".encode("utf-16-le")
+              arsc_hits = resources.count(needle) + resources.count(needle_utf16)
+              dex_project_hits = dex.count(needle) + dex.count(needle_utf16)
+              manifest_hits = manifest.count(needle) + manifest.count(needle_utf16)
+              print(
+                  "  'plotina-push' — resources.arsc: "
+                  f"{arsc_hits}, dex: {dex_project_hits}, AndroidManifest.xml: {manifest_hits}"
+              )
+              if arsc_hits + dex_project_hits + manifest_hits == 0:
+                  failures.append(
+                      f"{apk}: project id plotina-push is nowhere in the APK "
+                      "(google-services.json did not reach the build)"
+                  )
+
+              event = b"com.google.firebase.MESSAGING_EVENT"
+              event_hits = manifest.count(event) + manifest.count(event.decode().encode("utf-16-le"))
+              print(f"  MESSAGING_EVENT service in AndroidManifest.xml: {event_hits > 0}")
+
+          if failures:
+              print("FAILED:", *failures, sep="\n  ")
+              sys.exit(1)
+          print("both APKs carry the denoiser, the model, firebase classes and the plotina-push project id")
+          PY
+
+      # Mapping files and Dart symbols for the release that the APKs report as.
+      # Known blocker (2026-10-30): sentry.plotina.cc's relay forwards only the
+      # ingest endpoints (/api/1/envelope); /api/0/* is answered with Caddy's
+      # 403, and sentry-cli needs /api/0 for releases and debug files. Opening
+      # that path is a separate task on the relay/Caddy side. Until then this
+      # step warns and skips instead of failing a good build; once the relay
+      # answers, the same commands run unchanged.
+      - name: Upload mapping files and symbols to GlitchTip
+        if: ${{ env.SENTRY_DSN != '' }}
+        continue-on-error: true
+        working-directory: fluffychat/upstream
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          RELEASE: ${{ steps.sentry.outputs.release }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SENTRY_AUTH_TOKEN:-}" ]; then
+            echo "::warning title=No symbol upload::SENTRY_AUTH_TOKEN is not set; the release ships without symbols."
+            exit 0
+          fi
+          code="$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer $SENTRY_AUTH_TOKEN" \
+            "$SENTRY_URL/api/0/organizations/$SENTRY_ORG/")"
+          if [ "$code" != "200" ]; then
+            echo "::warning title=Symbol upload skipped::$SENTRY_URL/api/0 answered $code (the relay only exposes ingest today); $RELEASE ships without symbols."
+            exit 0
+          fi
+          echo "uploading symbols for $RELEASE"
+          "$SENTRY_CLI" releases new "$RELEASE"
+          # Dart: the files --split-debug-info wrote, one per ABI.
+          "$SENTRY_CLI" debug-files upload --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
+            build/app/outputs/symbols
+          # Java/Kotlin: R8 names in every stack trace from the APK.
+          mapping="build/app/outputs/mapping/${{ steps.signing.outputs.variant }}/mapping.txt"
+          if [ -f "$mapping" ]; then
+            "$SENTRY_CLI" debug-files upload --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
+              "$mapping"
+          else
+            echo "::warning title=No mapping.txt::no $mapping; Java frames stay obfuscated."
+          fi
+          # Native: the unstripped libraries, including libplotina_dfn.so.
+          native="$(ls -d build/app/intermediates/merged_native_libs/*/merge*NativeLibs/out/lib 2>/dev/null | head -1 || true)"
+          if [ -n "$native" ] && [ -d "$native" ]; then
+            "$SENTRY_CLI" debug-files upload --org "$SENTRY_ORG" --project "$SENTRY_PROJECT" \
+              "$native"
+          else
+            echo "::notice::no merged native libraries to upload"
+          fi
+
+      # Kept as an artifact as well: while the relay's /api/0 is closed these
+      # files are the only way to symbolise a trace by hand (flutter symbolize).
+      - name: Upload Dart symbols
+        if: ${{ env.SENTRY_DSN != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Plotina-FluffyChat-symbols
+          path: fluffychat/upstream/build/app/outputs/symbols
+          if-no-files-found: warn
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          BODY="$RUNNER_TEMP/release-notes.md"
+          cat > "$BODY" <<'EOF'
+          FluffyChat for Android with DeepFilterNet3 noise suppression built in.
+
+          - The sign-in screen already points at plotina.cc, so there is no server to type.
+          - Push notifications go through FCM and our own push gateway (push.plotina.cc), no ntfy app needed.
+          - Signed with the Plotina key: installs over our previous builds.
+          - Two APKs: arm64-v8a (most phones) and armeabi-v7a (older devices).
+          - Source: this repository at this tag (AGPL-3.0).
+          EOF
+          gh release view "$TAG" > /dev/null 2>&1 ||
+            gh release create "$TAG" --title "FluffyChat $TAG" --notes-file "$BODY"
+          gh release upload "$TAG" "$APK_NAME" "$APK_NAME_ARMV7" --clobber
+          # The release is the deliverable, so prove both APKs are on it.
+          for asset in "$APK_NAME" "$APK_NAME_ARMV7"; do
+            gh release view "$TAG" --json assets \
+              -q ".assets[] | select(.name == \"$asset\") | \"\\(.name) \\(.size) bytes\"" \
+              | grep -q . || { echo "::error::$asset is not attached to release $TAG"; exit 1; }
+          done

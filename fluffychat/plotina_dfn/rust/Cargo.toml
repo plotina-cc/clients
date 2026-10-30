@@ -1,0 +1,24 @@
+[package]
+name = "plotina_dfn_native"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "plotina_dfn"
+crate-type = ["cdylib"]
+
+[dependencies]
+# JNI bridge used by cc.plotina.dfn.DfnNative.
+jni = "0.21"
+# Must match the ndarray version libDF uses, we pass ArrayView2 across the API.
+ndarray = "0.15"
+# DeepFilterNet is not published on crates.io past 0.2.5; DFN3 lives in the repo.
+deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", tag = "v0.5.6", default-features = false, features = ["tract"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "unwind"
+strip = "symbols"
