@@ -98,6 +98,7 @@ jobs:
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0006-element-x-android-plotina-account-provider.patch"
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0007-element-x-android-plotina-push-gateway.patch"
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0008-element-x-android-plotina-sentry.patch"
+          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0009-plotina-application-id.patch"
 
   build:
     needs: patches
@@ -190,6 +191,7 @@ jobs:
           # "production" instead of upstream's "RELEASE". No init code: the app-side SDK is upstream's
           # services/analyticsproviders/sentry, initialised by its own SentryAnalyticsProvider.
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0008-element-x-android-plotina-sentry.patch"
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0009-plotina-application-id.patch"
 
       - name: Write the Firebase project into the gplay flavour
         env:
