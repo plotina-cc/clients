@@ -1,0 +1,11 @@
+--- a/plugins/src/main/kotlin/config/BuildTimeConfig.kt
++++ b/plugins/src/main/kotlin/config/BuildTimeConfig.kt
+@@ -9,7 +9,7 @@
+ package config
+ 
+ object BuildTimeConfig {
+-    const val APPLICATION_ID = "io.element.android.x"
++    const val APPLICATION_ID = "cc.plotina.element.x"
+     const val APPLICATION_NAME = "Element X"
+     val METADATA_HOST_REVERSED: String? = null
+     val OAUTH_CLIENT_URL_PATH: String? = "apps/android"

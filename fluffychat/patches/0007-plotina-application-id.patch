@@ -1,0 +1,11 @@
+--- a/android/app/build.gradle.kts
++++ b/android/app/build.gradle.kts
+@@ -66,7 +66,7 @@
+     }
+ 
+     defaultConfig {
+-        applicationId = "chat.fluffy.fluffychat"
++        applicationId = "cc.plotina.fluffychat"
+         minSdk = flutter.minSdkVersion
+         targetSdk = flutter.targetSdkVersion
+         versionCode = flutter.versionCode

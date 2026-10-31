@@ -218,7 +218,8 @@ jobs:
           # plus the keep.xml that stops AGP 9.3's resource shrinker from deleting them.
           python3 "$GITHUB_WORKSPACE/element-x/scripts/firebase-resources.py" \
             upstream/element-x/app/google-services.json \
-            upstream/element-x/app/src/gplay/res
+            upstream/element-x/app/src/gplay/res \
+            cc.plotina.element.x
           find upstream/element-x/app/src/gplay/res -type f -print
 
       - name: Decode the signing key

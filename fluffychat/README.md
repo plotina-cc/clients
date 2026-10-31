@@ -17,7 +17,7 @@ listened to a call on a device yet.
 | Tag | `v2.11.3` (`UPSTREAM_TAG`), commit `6fc4920` |
 | Flutter | `3.47.8` (upstream `.fvmrc`) |
 | Call stack | `livekit_client` 2.13.1, `flutter_webrtc` 1.6.2+hotfix.4 (both from `pubspec.lock`) |
-| Patch | six: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level (`patches/`) |
+| Patch | seven: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.fluffychat` (`patches/`) |
 
 ## What is in this directory
 
@@ -29,6 +29,7 @@ patches/0003-plotina-push-gateway.patch
 patches/0004-split-per-abi-vs-abi-filters.patch
 patches/0005-plotina-sentry.patch
 patches/0006-plotina-noise-level.patch
+patches/0007-plotina-application-id.patch
 plotina_dfn/                       Flutter plugin (Android only)
   lib/plotina_dfn.dart             isAvailable / setEnabled / setAttenLim / frameLength / status
   android/…/PlotinaDfnPlugin.kt    attaches to flutter_webrtc, extracts the model
