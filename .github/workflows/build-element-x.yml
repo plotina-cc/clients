@@ -193,6 +193,9 @@ jobs:
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0008-element-x-android-plotina-sentry.patch"
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0009-plotina-application-id.patch"
 
+      - name: Apply Plotina launcher icons
+        run: python3 element-x/scripts/apply-plotina-icons.py upstream/element-x
+
       - name: Write the Firebase project into the gplay flavour
         env:
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
