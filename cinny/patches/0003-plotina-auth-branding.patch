@@ -1,0 +1,144 @@
+diff --git a/public/res/svg/plotina.svg b/public/res/svg/plotina.svg
+new file mode 100644
+index 0000000..0432060
+--- /dev/null
++++ b/public/res/svg/plotina.svg
+@@ -0,0 +1,4 @@
++<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Plotina">
++  <rect width="512" height="512" rx="96" fill="#111111"/>
++  <path d="M128 128H384V384H320V192H192V384H128Z" fill="#FFFFFF"/>
++</svg>
+diff --git a/src/app/features/settings/about/About.tsx b/src/app/features/settings/about/About.tsx
+index d3dcde9..9289c3d 100644
+--- a/src/app/features/settings/about/About.tsx
++++ b/src/app/features/settings/about/About.tsx
+@@ -4,7 +4,7 @@ import { Page, PageContent, PageHeader } from '../../../components/page';
+ import { SequenceCard } from '../../../components/sequence-card';
+ import { SequenceCardStyle } from '../styles.css';
+ import { SettingTile } from '../../../components/setting-tile';
+-import CinnySVG from '../../../../../public/res/svg/cinny.svg';
++import PlotinaSVG from '../../../../../public/res/svg/plotina.svg';
+ import { clearCacheAndReload } from '../../../../client/initMatrix';
+ import { useMatrixClient } from '../../../hooks/useMatrixClient';
+ 
+@@ -38,14 +38,14 @@ export function About({ requestClose }: AboutProps) {
+                 <Box shrink="No">
+                   <img
+                     style={{ width: toRem(60), height: toRem(60) }}
+-                    src={CinnySVG}
+-                    alt="Cinny logo"
++                    src={PlotinaSVG}
++                    alt="Plotina Lite Web"
+                   />
+                 </Box>
+                 <Box direction="Column" gap="300">
+                   <Box direction="Column" gap="100">
+                     <Box gap="100" alignItems="End">
+-                      <Text size="H3">Cinny</Text>
++                      <Text size="H3">Plotina Lite Web</Text>
+                       <Text size="T200">v4.12.8</Text>
+                     </Box>
+                     <Text>Yet another matrix client.</Text>
+diff --git a/src/app/features/settings/notifications/SystemNotification.tsx b/src/app/features/settings/notifications/SystemNotification.tsx
+index e0df06d..cd844d4 100644
+--- a/src/app/features/settings/notifications/SystemNotification.tsx
++++ b/src/app/features/settings/notifications/SystemNotification.tsx
+@@ -27,7 +27,7 @@ function EmailNotification() {
+             device_display_name: email,
+             lang: 'en',
+             data: {
+-              brand: 'Cinny',
++              brand: 'Plotina Lite Web',
+             },
+             append: true,
+           });
+diff --git a/src/app/pages/auth/AuthLayout.tsx b/src/app/pages/auth/AuthLayout.tsx
+index 3943f42..5b9dc28 100644
+--- a/src/app/pages/auth/AuthLayout.tsx
++++ b/src/app/pages/auth/AuthLayout.tsx
+@@ -20,7 +20,7 @@ import {
+ } from '../../hooks/useClientConfig';
+ import { AsyncStatus, useAsyncCallback } from '../../hooks/useAsyncCallback';
+ import { LOGIN_PATH, REGISTER_PATH, RESET_PASSWORD_PATH } from '../paths';
+-import CinnySVG from '../../../../public/res/svg/cinny.svg';
++import PlotinaSVG from '../../../../public/res/svg/plotina.svg';
+ import { ServerPicker } from './ServerPicker';
+ import { AutoDiscoveryAction, autoDiscovery } from '../../cs-api';
+ import { SpecVersionsLoader } from '../../components/SpecVersionsLoader';
+@@ -134,8 +134,8 @@ export function AuthLayout() {
+         <Box direction="Column" className={css.AuthCard}>
+           <Header className={css.AuthHeader} size="600" variant="Surface">
+             <Box grow="Yes" direction="Row" gap="300" alignItems="Center">
+-              <img className={css.AuthLogo} src={CinnySVG} alt="Cinny Logo" />
+-              <Text size="H3">Cinny</Text>
++              <img className={css.AuthLogo} src={PlotinaSVG} alt="Plotina Lite Web" />
++              <Text size="H3">Plotina Lite Web</Text>
+             </Box>
+           </Header>
+           <Box className={css.AuthCardContent} direction="Column">
+diff --git a/src/app/pages/auth/login/PasswordLoginForm.tsx b/src/app/pages/auth/login/PasswordLoginForm.tsx
+index 62f46dd..9e2d79a 100644
+--- a/src/app/pages/auth/login/PasswordLoginForm.tsx
++++ b/src/app/pages/auth/login/PasswordLoginForm.tsx
+@@ -133,7 +133,7 @@ export function PasswordLoginForm({ defaultUsername, defaultEmail }: PasswordLog
+         user: username,
+       },
+       password,
+-      initial_device_display_name: 'Cinny Web',
++      initial_device_display_name: 'Plotina Lite Web',
+     });
+   };
+ 
+@@ -151,7 +151,7 @@ export function PasswordLoginForm({ defaultUsername, defaultEmail }: PasswordLog
+         user: mxIdUsername,
+       },
+       password,
+-      initial_device_display_name: 'Cinny Web',
++      initial_device_display_name: 'Plotina Lite Web',
+     });
+   };
+   const handleEmailLogin = (email: string, password: string) => {
+@@ -163,7 +163,7 @@ export function PasswordLoginForm({ defaultUsername, defaultEmail }: PasswordLog
+         address: email,
+       },
+       password,
+-      initial_device_display_name: 'Cinny Web',
++      initial_device_display_name: 'Plotina Lite Web',
+     });
+   };
+ 
+diff --git a/src/app/pages/auth/login/TokenLogin.tsx b/src/app/pages/auth/login/TokenLogin.tsx
+index 761d5dc..ba1b439 100644
+--- a/src/app/pages/auth/login/TokenLogin.tsx
++++ b/src/app/pages/auth/login/TokenLogin.tsx
+@@ -57,7 +57,7 @@ export function TokenLogin({ token }: TokenLoginProps) {
+     startLogin(baseUrl, {
+       type: 'm.login.token',
+       token,
+-      initial_device_display_name: 'Cinny Web',
++      initial_device_display_name: 'Plotina Lite Web',
+     });
+   }, [baseUrl, token, startLogin]);
+ 
+diff --git a/src/app/pages/auth/register/PasswordRegisterForm.tsx b/src/app/pages/auth/register/PasswordRegisterForm.tsx
+index 9f17342..abcdbb6 100644
+--- a/src/app/pages/auth/register/PasswordRegisterForm.tsx
++++ b/src/app/pages/auth/register/PasswordRegisterForm.tsx
+@@ -109,7 +109,7 @@ function RegisterUIAFlow({
+         auth: authDict,
+         password,
+         username,
+-        initial_device_display_name: 'Cinny Web',
++        initial_device_display_name: 'Plotina Lite Web',
+       });
+     },
+     [onRegister, formData]
+@@ -250,7 +250,7 @@ export function PasswordRegisterForm({
+       auth: {
+         session: authData.session,
+       },
+-      initial_device_display_name: 'Cinny Web',
++      initial_device_display_name: 'Plotina Lite Web',
+     });
+   };
+ 
