@@ -6,12 +6,13 @@ without the user touching a setting.
 
 ## Clients
 
-- **Element Web** — the browser client at `chat.plotina.cc`
-- **Element Desktop** — Linux and Windows builds of the same client
-- **Cinny** — web client at `cinny.plotina.cc`, plus a desktop build
+- **Plotina Web** — the browser client at `chat.plotina.cc` (Element Web)
+- **Plotina Desktop** — Linux and Windows builds of the same client (Element Desktop)
+- **Plotina Lite Web** — the lighter browser client at `lite.plotina.cc` (Cinny)
+- **Plotina Lite Desktop** — its desktop build
 - **Element Call** — the call UI at `call.plotina.cc`
-- **FluffyChat** — Android
-- **Element X** — Android
+- **Plotina Mobile** — Android (FluffyChat)
+- **Plotina X** — Android (Element X)
 
 ## What is baked in
 
@@ -23,6 +24,13 @@ without the user touching a setting.
   track is published — in the browsers, in the desktop apps and in Element X's
   call view. It is on by default and there is nothing to install; the level can
   be changed while a call is running, from the control in the call view.
+
+## Trademarks
+
+Plotina is an unofficial client for `plotina.cc` and is not affiliated with
+Element Creations, the FluffyChat project or the Cinny project. Their names are
+used only to describe the upstream code; all rights in those names and logos
+belong to their owners.
 
 ## How this repository is organised
 

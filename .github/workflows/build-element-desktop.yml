@@ -193,7 +193,7 @@ jobs:
           # generated changelog would compare against an unrelated product.
           generate_release_notes: false
           body: |
-            Сборка Element Desktop для plotina.cc с шумоподавлением DeepFilterNet3.
+            Сборка Plotina Desktop для plotina.cc с шумоподавлением DeepFilterNet3.
 
             Шумоподавление включено по умолчанию (уровень 70), настраивается в Настройки → Голос и видео.
             Windows: установщик не подписан, SmartScreen попросит подтверждение.

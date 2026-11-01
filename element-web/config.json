@@ -15,6 +15,7 @@
   },
   "branding": {
     "logo_link_url": "https://plotina.cc",
+    "auth_header_logo_url": "https://plotina.cc/dl/plotina-green.svg",
     "auth_footer_links": [
       {
         "text": "Исходный код",

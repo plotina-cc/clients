@@ -260,7 +260,7 @@ jobs:
           files: dist/**/*
           generate_release_notes: true
           body: |
-            Сборка Cinny Desktop для plotina.cc с шумоподавлением DeepFilterNet3.
+            Сборка Plotina Lite Desktop для plotina.cc с шумоподавлением DeepFilterNet3.
 
             Шумоподавление с уровнем по умолчанию 60, настраивается в Настройки → General → Sound.
             Windows: установщик не подписан, SmartScreen попросит подтверждение.

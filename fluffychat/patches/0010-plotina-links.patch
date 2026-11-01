@@ -1,0 +1,21 @@
+--- a/lib/config/setting_keys.dart
++++ b/lib/config/setting_keys.dart
+@@ -63,14 +63,14 @@
+   welcomeText<String>('chat.fluffy.welcome_text', ''),
+-  website<String>('chat.fluffy.website_url', 'https://fluffychat.im'),
++  website<String>('chat.fluffy.website_url', 'https://plotina.cc'),
+   logoUrl<String>(
+     'chat.fluffy.logo_url',
+-    'https://fluffychat.im/assets/favicon.png',
++    'https://plotina.cc/dl/plotina-purple.png',
+   ),
+   privacyPolicy<String>(
+     'chat.fluffy.privacy_policy_url',
+-    'https://fluffychat.im/privacy',
++    'https://plotina.cc',
+   ),
+-  tos<String>('chat.fluffy.tos_url', 'https://fluffychat.im/tos'),
++  tos<String>('chat.fluffy.tos_url', 'https://plotina.cc'),
+   sendTimelineEventTimeout<int>('chat.fluffy.send_timeline_event_timeout', 15),
+   webNotificationSound<bool>('chat.fluffy.web_notification_sound', true),
+   chatFilter<String>('chat.fluffy.chat_filter', 'allChats'),
