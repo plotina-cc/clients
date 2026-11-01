@@ -1,3 +1,40 @@
+diff --git a/features/call/impl/src/main/res/values-ru/translations.xml b/features/call/impl/src/main/res/values-ru/translations.xml
+index dd5bb7a6..01e1fa10 100644
+--- a/features/call/impl/src/main/res/values-ru/translations.xml
++++ b/features/call/impl/src/main/res/values-ru/translations.xml
+@@ -3,6 +3,6 @@
+   <string name="call_foreground_service_channel_title_android">"Текущий вызов"</string>
+   <string name="call_foreground_service_message_android">"Коснитесь, чтобы вернуться к вызову"</string>
+   <string name="call_foreground_service_title_android">"☎️ Идёт вызов"</string>
+-  <string name="call_invalid_audio_device_bluetooth_devices_disabled">"Element Call не поддерживает использование устройств Bluetooth в данной версии Android. Пожалуйста, выберите другое устройство."</string>
+-  <string name="screen_incoming_call_subtitle_android">"Входящий вызов Element Call"</string>
++  <string name="call_invalid_audio_device_bluetooth_devices_disabled">"Plotina Call не поддерживает использование устройств Bluetooth в данной версии Android. Пожалуйста, выберите другое устройство."</string>
++  <string name="screen_incoming_call_subtitle_android">"Входящий вызов Plotina Call"</string>
+ </resources>
+diff --git a/features/call/impl/src/main/res/values/do_not_translate.xml b/features/call/impl/src/main/res/values/do_not_translate.xml
+index deb835b3..5b524ed2 100644
+--- a/features/call/impl/src/main/res/values/do_not_translate.xml
++++ b/features/call/impl/src/main/res/values/do_not_translate.xml
+@@ -6,5 +6,5 @@
+   ~ Please see LICENSE files in the repository root for full details.
+   -->
+ <resources>
+-    <string translatable="false" name="element_call">Element Call</string>
++    <string translatable="false" name="element_call">Plotina Call</string>
+ </resources>
+diff --git a/features/call/impl/src/main/res/values/localazy.xml b/features/call/impl/src/main/res/values/localazy.xml
+index 5ab2caa4..813c8a09 100644
+--- a/features/call/impl/src/main/res/values/localazy.xml
++++ b/features/call/impl/src/main/res/values/localazy.xml
+@@ -3,6 +3,6 @@
+   <string name="call_foreground_service_channel_title_android">"Ongoing call"</string>
+   <string name="call_foreground_service_message_android">"Tap to return to the call"</string>
+   <string name="call_foreground_service_title_android">"☎️ Call in progress"</string>
+-  <string name="call_invalid_audio_device_bluetooth_devices_disabled">"Element Call does not support using Bluetooth audio devices in this Android version. Please select a different audio device."</string>
+-  <string name="screen_incoming_call_subtitle_android">"Incoming Element Call"</string>
++  <string name="call_invalid_audio_device_bluetooth_devices_disabled">"Plotina Call does not support using Bluetooth audio devices in this Android version. Please select a different audio device."</string>
++  <string name="screen_incoming_call_subtitle_android">"Incoming Plotina Call"</string>
+ </resources>
 diff --git a/features/login/impl/src/main/res/values-ru/translations.xml b/features/login/impl/src/main/res/values-ru/translations.xml
 index e536c234..914246e3 100644
 --- a/features/login/impl/src/main/res/values-ru/translations.xml
@@ -24,3 +61,29 @@ index 0d716537..1e8dc021 100644
    <string name="screen_qr_code_login_connecting_subtitle">"Establishing a secure connection"</string>
    <string name="screen_qr_code_login_connection_note_secure_state_description">"A secure connection could not be made to the new device. Your existing devices are still safe and you don\'t need to worry about them."</string>
    <string name="screen_qr_code_login_connection_note_secure_state_list_header">"What now?"</string>
+diff --git a/features/messages/impl/src/main/res/values-ru/translations.xml b/features/messages/impl/src/main/res/values-ru/translations.xml
+index d23ba8fe..9ad7c71e 100644
+--- a/features/messages/impl/src/main/res/values-ru/translations.xml
++++ b/features/messages/impl/src/main/res/values-ru/translations.xml
+@@ -63,7 +63,7 @@
+   <string name="screen_room_timeline_add_reaction">"Добавить реакцию"</string>
+   <string name="screen_room_timeline_beginning_of_room">"Это начало %1$s."</string>
+   <string name="screen_room_timeline_beginning_of_room_no_name">"Это начало беседы."</string>
+-  <string name="screen_room_timeline_legacy_call">"Звонок не поддерживается. Собеседник должен использовать новое приложение Element X."</string>
++  <string name="screen_room_timeline_legacy_call">"Звонок не поддерживается. Собеседник должен использовать новое приложение Plotina X."</string>
+   <string name="screen_room_timeline_less_reactions">"Показать меньше"</string>
+   <string name="screen_room_timeline_message_copied">"Сообщение скопировано"</string>
+   <string name="screen_room_timeline_no_permission_to_post">"Вы не можете писать сообщения в этой комнате"</string>
+diff --git a/features/messages/impl/src/main/res/values/localazy.xml b/features/messages/impl/src/main/res/values/localazy.xml
+index 59307256..a9c6987a 100644
+--- a/features/messages/impl/src/main/res/values/localazy.xml
++++ b/features/messages/impl/src/main/res/values/localazy.xml
+@@ -62,7 +62,7 @@
+   <string name="screen_room_timeline_add_reaction">"Add a reaction"</string>
+   <string name="screen_room_timeline_beginning_of_room">"This is the beginning of %1$s."</string>
+   <string name="screen_room_timeline_beginning_of_room_no_name">"This is the beginning of this conversation."</string>
+-  <string name="screen_room_timeline_legacy_call">"Unsupported call. Ask if the caller can use the new Element X app."</string>
++  <string name="screen_room_timeline_legacy_call">"Unsupported call. Ask if the caller can use the new Plotina X app."</string>
+   <string name="screen_room_timeline_less_reactions">"Show less"</string>
+   <string name="screen_room_timeline_message_copied">"Message copied"</string>
+   <string name="screen_room_timeline_no_permission_to_post">"You do not have permission to post to this room"</string>
