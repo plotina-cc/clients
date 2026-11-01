@@ -63,6 +63,10 @@ jobs:
           grep -q '^  plotina_dfn:' upstream/pubspec.yaml
           echo "plugin registered in upstream/pubspec.yaml"
 
+      - name: Apply Plotina launcher icons
+        working-directory: fluffychat
+        run: python3 scripts/apply-plotina-icons.py upstream
+
       # One name for the release, the Dart define and the symbol upload. The
       # pubspec version is what upstream calls 2.11.3+3574; the build number is
       # upstream's own and would repeat across our tags, so the tag is the dist.
