@@ -44,7 +44,7 @@ AGPL source: the upstream tag plus this repository.
 Element Web image:
 
 ```
-docker build -t plotina/element-web:<tag>-noise1 element-web/
+element-web/scripts/build-image.sh plotina/element-web:<tag>-noise1
 element-web/tests/run.sh          # unit tests
 element-web/tests/integration.sh  # end-to-end with a fake microphone
 ```
