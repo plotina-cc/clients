@@ -99,6 +99,7 @@ jobs:
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0007-element-x-android-plotina-push-gateway.patch"
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0008-element-x-android-plotina-sentry.patch"
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0009-plotina-application-id.patch"
+          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0010-plotina-visible-strings.patch"
 
   build:
     needs: patches
@@ -192,6 +193,8 @@ jobs:
           # services/analyticsproviders/sentry, initialised by its own SentryAnalyticsProvider.
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0008-element-x-android-plotina-sentry.patch"
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0009-plotina-application-id.patch"
+          # 0010: the onboarding headline is the first full-screen copy a new user sees.
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0010-plotina-visible-strings.patch"
 
       - name: Apply Plotina launcher icons
         run: python3 element-x/scripts/apply-plotina-icons.py upstream/element-x

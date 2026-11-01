@@ -1,0 +1,125 @@
+diff --git a/lib/l10n/intl_en.arb b/lib/l10n/intl_en.arb
+index e8fdc95..1840752 100644
+--- a/lib/l10n/intl_en.arb
++++ b/lib/l10n/intl_en.arb
+@@ -986,7 +986,7 @@
+         "type": "String",
+         "placeholders": {}
+     },
+-    "inviteText": "{username} invited you to FluffyChat.\n1. Visit fluffychat.im and install the app \n2. Sign up or sign in \n3. Open the invite link: \n {link}",
++    "inviteText": "{username} invited you to Plotina Mobile.\n1. Visit plotina.cc/dl and install the app\n2. Sign up or sign in\n3. Open the invite link:\n {link}",
+     "@inviteText": {
+         "type": "String",
+         "placeholders": {
+@@ -1147,7 +1147,7 @@
+         "type": "String",
+         "placeholders": {}
+     },
+-    "newMessageInFluffyChat": "💬 New message in FluffyChat",
++    "newMessageInFluffyChat": "💬 New message in Plotina Mobile",
+     "@newMessageInFluffyChat": {
+         "type": "String",
+         "placeholders": {}
+@@ -2542,7 +2542,7 @@
+     "advancedConfigurations": "Advanced configurations",
+     "signIn": "Sign in",
+     "createNewAccount": "Create new account",
+-    "signUpGreeting": "FluffyChat is decentralized! Select a server where you want to create your account and let's go!",
++    "signUpGreeting": "Plotina Mobile is decentralized! Select a server where you want to create your account and let's go!",
+     "signInGreeting": "You already have an account in Matrix? Welcome back! Select your homeserver and sign in.",
+     "theProcessWasCanceled": "The process was canceled.",
+     "join": "Join",
+@@ -2562,7 +2562,7 @@
+     },
+     "createNewChat": "Create new chat",
+     "reset": "Reset",
+-    "supportFluffyChat": "Support FluffyChat",
++    "supportFluffyChat": "Support Plotina Mobile",
+     "support": "Support",
+     "setLowPriority": "Set low priority",
+     "unsetLowPriority": "Unset low priority",
+@@ -2572,7 +2572,7 @@
+     "tagName": "Tag name",
+     "createNewTag": "Create new tag",
+     "hideRoomsInSpaces": "Hide rooms that are in a space",
+-    "possibleByYou": "This release was only possible thanks to your support. FluffyChat remains free, open-source, and entirely community-driven.",
++    "possibleByYou": "This release was only possible thanks to your support. Plotina Mobile remains free, open-source, and entirely community-driven.",
+     "showThumbnailsInTimeline": "Show thumbnails of images and videos",
+     "appSubtitle": "Secure [matrix] Communication",
+     "appDescription": "Communicate encrypted over the decentralized [matrix] network in an easy and accessible way for everyone.",
+@@ -2656,7 +2656,7 @@
+         "type": "String",
+         "placeholders": {}
+     },
+-    "newPassphraseDescription": "FluffyChat uses end to end encryption. To not lose your messages, please choose a strong passphrase to secure your crypto identity and your encrypted message backup.",
++    "newPassphraseDescription": "Plotina Mobile uses end to end encryption. To not lose your messages, please choose a strong passphrase to secure your crypto identity and your encrypted message backup.",
+     "@newPassphraseDescription": {
+         "type": "String",
+         "placeholders": {}
+diff --git a/lib/l10n/intl_ru.arb b/lib/l10n/intl_ru.arb
+index 9b7a180..4485a79 100644
+--- a/lib/l10n/intl_ru.arb
++++ b/lib/l10n/intl_ru.arb
+@@ -814,7 +814,7 @@
+         "type": "String",
+         "placeholders": {}
+     },
+-    "inviteText": "{username} пригласил(а) вас в FluffyChat. \n1. Посетите https://fluffychat.im и установите приложение \n2. Зарегистрируйтесь или войдите \n3. Откройте ссылку приглашения: \n {link}",
++    "inviteText": "{username} пригласил(а) вас в Plotina Mobile.\n1. Откройте plotina.cc/dl и установите приложение\n2. Зарегистрируйтесь или войдите\n3. Откройте ссылку приглашения:\n {link}",
+     "@inviteText": {
+         "type": "String",
+         "placeholders": {
+@@ -962,7 +962,7 @@
+         "type": "String",
+         "placeholders": {}
+     },
+-    "newMessageInFluffyChat": "💬 Новое сообщение во FluffyChat",
++    "newMessageInFluffyChat": "💬 Новое сообщение в Plotina Mobile",
+     "@newMessageInFluffyChat": {
+         "type": "String",
+         "placeholders": {}
+@@ -997,7 +997,7 @@
+         "type": "String",
+         "placeholders": {}
+     },
+-    "noGoogleServicesWarning": "Похоже, у вас нет служб Google на вашем телефоне. Это хорошее решение для вашей конфиденциальности! Для получения push-уведомлений во FluffyChat мы рекомендуем использовать ntfy. С ntfy или другим провайдером единых уведомлений вы можете получать push-уведомления безопасным способом передачи данных. Скачать ntfy можно из F-Droid или из Play Маркета.",
++    "noGoogleServicesWarning": "Похоже, на вашем телефоне нет служб Google. Это хорошее решение для конфиденциальности! Для получения push-уведомлений в Plotina Mobile мы рекомендуем ntfy. С ntfy или другим провайдером Unified Push вы можете получать уведомления безопасно. Скачать ntfy можно из F-Droid или Play Маркета.",
+     "@noGoogleServicesWarning": {
+         "type": "String",
+         "placeholders": {}
+@@ -2415,7 +2415,7 @@
+     "logs": "Архивные записи",
+     "advancedConfigs": "Расширенные Настройки",
+     "advancedConfigurations": "Расширенные конфигурации",
+-    "signUpGreeting": "FluffyChat децентрализорован! Выберите сервер, где вы хотите сделать свой аккаунт и заходите!",
++    "signUpGreeting": "Plotina Mobile — децентрализованный мессенджер! Выберите сервер, на котором хотите создать аккаунт, и начнём!",
+     "signInGreeting": "У вас есть уже аккаунт в Matrix? Добро пожаловать! Выберите свой сервер и войдите.",
+     "join": "Присоединиться",
+     "countFiles": "{count} файлов",
+@@ -2491,7 +2491,7 @@
+     },
+     "createNewChat": "Сделать новый чат",
+     "reset": "Сброс",
+-    "supportFluffyChat": "Поддержать FluffyChat",
++    "supportFluffyChat": "Поддержать Plotina Mobile",
+     "support": "Поддержать",
+     "setLowPriority": "Установить маленький приоритет",
+     "unsetLowPriority": "Отменить низкий приоритет",
+@@ -2518,7 +2518,7 @@
+     },
+     "showMore": "Показать больше",
+     "showLess": "Показать меньше",
+-    "possibleByYou": "Этот релиз был только возможен из-за вашей поддержки. FluffyChat остаётся бесплатным, с открытым исходным кодом, и полностью управляется сообществом.",
++    "possibleByYou": "Этот релиз стал возможен благодаря вашей поддержке. Plotina Mobile остаётся бесплатным, с открытым исходным кодом и полностью управляется сообществом.",
+     "hideRoomsInSpaces": "Спрятать комнаты которые в пространстве",
+     "interactiveVerification": "Интерактивная верификация",
+     "waitingForKeys": "Ожидание ключей... Пожалуйста оставьте другое устройство активным.",
+@@ -2655,7 +2655,7 @@
+         "type": "String",
+         "placeholders": {}
+     },
+-    "newPassphraseDescription": "FluffyChat защищает ваши сообщения сквозным шифрованием. Чтобы не потерять ваши сообщения, пожалуйста, придумайте сильную кодовую фразу, чтобы защитить вашу крипто-идентичность и легко восстанавливать зашифрованные сообщения.",
++    "newPassphraseDescription": "Plotina Mobile защищает сообщения сквозным шифрованием. Чтобы не потерять переписку, придумайте надёжную кодовую фразу для защиты крипто-идентичности и резервной копии сообщений.",
+     "@newPassphraseDescription": {
+         "type": "String",
+         "placeholders": {}
