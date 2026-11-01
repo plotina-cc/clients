@@ -71,6 +71,22 @@ Linux produces `dist-stable/Plotina-Element.AppImage` and
 python3, git and curl; the upstream clone and the 53 MB tarball are cached in
 `.build/`.
 
+### Installing the AppImage
+
+An AppImage does not register its `.desktop` file, so the browser keeps sending
+the SSO callback (`io.element.desktop`) to an installed upstream Element. Run
+the installer as the desktop user:
+
+```bash
+element-desktop/scripts/install-appimage.sh ~/Downloads/Plotina-Element.AppImage
+```
+
+It puts the image in `~/.local/bin/plotina-element`, installs the icon and
+desktop entry, and makes `io.element.desktop`, `element` and
+`cc.plotina.element` point at it. The `.deb` installs the same desktop entry
+system-wide; if an upstream Element is already the default handler, choose
+Plotina Element once in the browser's protocol prompt.
+
 The same steps run in CI: `.github/workflows/build-element-desktop.yml` triggers
 on a `v*-plotina.*` tag, builds one webapp and hands it to the Linux and Windows
 packaging jobs, then attaches the stable names to the release. macOS is out of
