@@ -224,6 +224,14 @@ jobs:
         working-directory: cinny/upstream
         run: npm ci
 
+      - name: Apply Plotina window and installer icons
+        shell: bash
+        run: |
+          set -euo pipefail
+          for icon in 32x32.png 128x128.png 128x128@2x.png icon.png icon.ico; do
+            cp "cinny/icons/$icon" "cinny/upstream/src-tauri/icons/$icon"
+          done
+
       - name: Build installers
         working-directory: cinny/upstream
         run: npm run tauri -- build --config "${{ github.workspace }}/cinny/tauri.plotina.json" --bundles ${{ matrix.bundles }}
