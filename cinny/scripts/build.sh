@@ -69,6 +69,12 @@ cd ..
 cp "$ROOT/config.json" config.json
 python3 "$ROOT/apply-noise.py" --dist cinny/dist --noise "$ROOT/noise" --brand "Plotina Lite Desktop"
 
+# Tauri gets the provisional Plotina mark for the window, the launcher and the
+# Windows installer; upstream's Cinny bird stays out of the shipped bundle.
+for icon in 32x32.png 128x128.png 128x128@2x.png icon.png icon.ico; do
+  cp "$ROOT/icons/$icon" "src-tauri/icons/$icon"
+done
+
 echo "==> tauri shell deps"
 [ -d node_modules ] || npm ci
 
