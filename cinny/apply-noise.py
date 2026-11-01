@@ -46,10 +46,25 @@ def patch_html(path: Path, snippet: str, marker: str) -> None:
 
 def rebrand(dist: Path, brand: str) -> None:
     index = dist / "index.html"
+    repo_root = Path(__file__).resolve().parent.parent
+    icon_svg = repo_root / "branding" / "icons" / "plotina-black.svg"
+    icon_192 = repo_root / "branding" / "icons" / "png" / "black-192.png"
+    icon_512 = repo_root / "branding" / "icons" / "png" / "black-512.png"
+    if icon_svg.is_file():
+        shutil.copyfile(icon_svg, dist / "plotina-icon.svg")
+    for src, name in ((icon_192, "plotina-icon-192.png"), (icon_512, "plotina-icon-512.png")):
+        if src.is_file():
+            shutil.copyfile(src, dist / name)
     if index.is_file():
         src = index.read_text(encoding="utf-8")
         src = src.replace("<title>Cinny</title>", f"<title>{brand}</title>")
         src = src.replace('content="Cinny"', f'content="{brand}"')
+        if 'rel="icon" href="/plotina-icon.svg"' not in src:
+            src = src.replace(
+                "</head>",
+                '<link rel="icon" type="image/svg+xml" href="/plotina-icon.svg"></head>',
+                1,
+            )
         index.write_text(src, encoding="utf-8")
     for name in ("manifest.json", "manifest.webmanifest"):
         path = dist / name
@@ -62,7 +77,13 @@ def rebrand(dist: Path, brand: str) -> None:
         if isinstance(data, dict):
             data["name"] = brand
             data["short_name"] = brand
+            if (dist / "plotina-icon-192.png").is_file() and (dist / "plotina-icon-512.png").is_file():
+                data["icons"] = [
+                    {"src": "/plotina-icon-192.png", "sizes": "192x192", "type": "image/png"},
+                    {"src": "/plotina-icon-512.png", "sizes": "512x512", "type": "image/png"},
+                ]
             path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
 
 
 def main() -> None:
