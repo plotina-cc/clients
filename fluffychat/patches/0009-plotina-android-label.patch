@@ -1,0 +1,8 @@
+--- a/android/app/src/main/AndroidManifest.xml
++++ b/android/app/src/main/AndroidManifest.xml
+@@ -29,4 +29,4 @@
+     <application
+-        android:label="FluffyChat"
++        android:label="Plotina Mobile"
+         android:icon="@mipmap/ic_launcher"
+         android:requestLegacyExternalStorage="true"
