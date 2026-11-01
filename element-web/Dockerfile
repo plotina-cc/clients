@@ -31,6 +31,7 @@ RUN set -eux; \
 COPY noise/logic.js /app/noise/logic.js
 COPY noise/boot.js /app/noise/boot.js
 COPY noise/vendor/ /app/noise/vendor/
+COPY plotina-icon.svg /app/plotina-icon.svg
 
 RUN set -eux; \
     chmod 0644 /app/LICENSE-AGPL-3.0 /app/NOTICE; \
@@ -57,7 +58,11 @@ RUN set -eux; \
     grep -q "/noise/dfn/" /etc/nginx/templates/default.conf.template
 
 RUN set -eux; \
+    sed -i 's#<title>Element</title>#<title>Plotina Web</title>#' /app/index.html; \
+    sed -i 's#</head>#<link rel="icon" type="image/svg+xml" href="/plotina-icon.svg"></head>#' /app/index.html; \
     sed -i 's#</head>#<script src="/noise/logic.js"></script><script src="/noise/boot.js" defer></script></head>#' /app/index.html; \
+    grep -q '<title>Plotina Web</title>' /app/index.html; \
+    grep -q 'plotina-icon.svg' /app/index.html; \
     grep -q 'noise/boot.js' /app/index.html; \
     grep -q 'noise/logic.js' /app/index.html
 
