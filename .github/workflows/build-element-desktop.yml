@@ -157,9 +157,9 @@ jobs:
           cd "$SRC/apps/desktop/dist"
           mkdir -p "$GITHUB_WORKSPACE/stable"
           shopt -s nullglob
-          for f in *.AppImage; do cp "$f" "$GITHUB_WORKSPACE/stable/Plotina-Element.AppImage"; done
-          for f in *.deb;      do cp "$f" "$GITHUB_WORKSPACE/stable/Plotina-Element.deb"; done
-          for f in *.exe;      do cp "$f" "$GITHUB_WORKSPACE/stable/Plotina-Element-setup.exe"; done
+          for f in *.AppImage; do cp "$f" "$GITHUB_WORKSPACE/stable/Plotina-Desktop.AppImage"; done
+          for f in *.deb;      do cp "$f" "$GITHUB_WORKSPACE/stable/Plotina-Desktop.deb"; done
+          for f in *.exe;      do cp "$f" "$GITHUB_WORKSPACE/stable/Plotina-Desktop-setup.exe"; done
           ls -lh "$GITHUB_WORKSPACE/stable"
 
       - name: Fail if nothing was produced

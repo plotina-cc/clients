@@ -65,9 +65,9 @@ the repository variable so a rotation needs no commit. The build fails if the
 resulting config has no usable DSN, because a desktop that cannot report is not
 shippable.
 
-Linux produces `dist-stable/Plotina-Element.AppImage` and
-`Plotina-Element.deb`; Windows (Git Bash) produces
-`dist-stable/Plotina-Element-setup.exe` via NSIS. Needs node 24 with pnpm,
+Linux produces `dist-stable/Plotina-Desktop.AppImage` and
+`Plotina-Desktop.deb`; Windows (Git Bash) produces
+`dist-stable/Plotina-Desktop-setup.exe` via NSIS. Needs node 24 with pnpm,
 python3, git and curl; the upstream clone and the 53 MB tarball are cached in
 `.build/`.
 
@@ -78,7 +78,7 @@ the SSO callback (`io.element.desktop`) to an installed upstream Element. Run
 the installer as the desktop user:
 
 ```bash
-element-desktop/scripts/install-appimage.sh ~/Downloads/Plotina-Element.AppImage
+element-desktop/scripts/install-appimage.sh ~/Downloads/Plotina-Desktop.AppImage
 ```
 
 It puts the image in `~/.local/bin/plotina-element`, installs the icon and

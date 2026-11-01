@@ -54,13 +54,15 @@ def patch_html(path: Path) -> None:
     print(f"patched: {path}")
 
 
-def write_config(src: Path, dst: Path) -> None:
+def write_config(src: Path, dst: Path, brand: str | None = None) -> None:
     config = json.loads(src.read_text(encoding="utf-8"))
     sentry = config.get("sentry")
     if not isinstance(sentry, dict) or not str(sentry.get("dsn") or "").strip():
         sys.exit(f"apply-noise: {src} has no sentry.dsn; the desktop app would never report to GlitchTip")
     if config.pop("update_base_url", None) is not None:
         print("dropped update_base_url: our builds never follow Element's update feed")
+    if brand:
+        config["brand"] = brand
     config.setdefault("web_base_url", WEB_BASE_URL)
     dst.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     url = urlparse(str(sentry["dsn"]))
@@ -72,6 +74,7 @@ def main() -> None:
     ap.add_argument("--webapp", required=True)
     ap.add_argument("--noise", required=True)
     ap.add_argument("--config", required=True)
+    ap.add_argument("--brand", default=None, help="override brand shown by this shell")
     args = ap.parse_args()
 
     webapp = Path(args.webapp).resolve()
@@ -96,7 +99,7 @@ def main() -> None:
         sys.exit("apply-noise: noise/boot.js does not resolve its own path; refresh the shared noise layer")
 
     patch_html(webapp / "index.html")
-    write_config(config_src, webapp / "config.json")
+    write_config(config_src, webapp / "config.json", args.brand)
 
     version = webapp / "version"
     if version.is_file():

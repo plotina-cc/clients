@@ -89,7 +89,7 @@ CONFIG="$WORK/element-web-config.json"
 
 echo "==> overlay"
 "$PYTHON" "$ROOT/apply-noise.py" --webapp "$DEST" --noise "$NOISE" \
-  --config "$CONFIG"
+  --config "$CONFIG" --brand "Plotina Desktop"
 
 # The webapp directory becomes webapp.asar inside the installer; the licence
 # text and the modification notice have to travel with it. Byte-identical to

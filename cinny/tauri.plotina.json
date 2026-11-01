@@ -1,5 +1,5 @@
 {
-  "productName": "Plotina",
+  "productName": "Plotina Lite Desktop",
   "identifier": "cc.plotina.chat",
   "build": {
     "beforeBuildCommand": ""

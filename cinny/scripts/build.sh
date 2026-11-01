@@ -67,7 +67,7 @@ python3 "$ROOT/scripts/sentry-sourcemaps.py" --dist dist \
 echo "==> patch"
 cd ..
 cp "$ROOT/config.json" config.json
-python3 "$ROOT/apply-noise.py" --dist cinny/dist --noise "$ROOT/noise"
+python3 "$ROOT/apply-noise.py" --dist cinny/dist --noise "$ROOT/noise" --brand "Plotina Lite Desktop"
 
 echo "==> tauri shell deps"
 [ -d node_modules ] || npm ci

@@ -77,7 +77,7 @@ VARIANT_PATH=variant.json pnpm run build --publish never "${TARGETS[@]}"
 echo "==> stable names"
 mkdir -p "$ROOT/dist-stable"
 shopt -s nullglob
-for f in dist/*.AppImage; do cp "$f" "$ROOT/dist-stable/Plotina-Element.AppImage"; done
-for f in dist/*.deb;      do cp "$f" "$ROOT/dist-stable/Plotina-Element.deb"; done
-for f in dist/*.exe;      do cp "$f" "$ROOT/dist-stable/Plotina-Element-setup.exe"; done
+for f in dist/*.AppImage; do cp "$f" "$ROOT/dist-stable/Plotina-Desktop.AppImage"; done
+for f in dist/*.deb;      do cp "$f" "$ROOT/dist-stable/Plotina-Desktop.deb"; done
+for f in dist/*.exe;      do cp "$f" "$ROOT/dist-stable/Plotina-Desktop-setup.exe"; done
 ls -lh "$ROOT/dist-stable"

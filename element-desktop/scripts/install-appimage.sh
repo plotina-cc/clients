@@ -48,7 +48,7 @@ fi
 
 cat > "$DESKTOP" <<EOF
 [Desktop Entry]
-Name=Plotina Element
+Name=Plotina Desktop
 Comment=Element for plotina.cc
 Exec="$BIN" --no-sandbox %U
 Terminal=false

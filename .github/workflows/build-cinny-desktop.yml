@@ -187,7 +187,7 @@ jobs:
           cp config.json upstream/config.json
           cp config.json upstream/cinny/config.json
           cp config.json upstream/cinny/dist/config.json
-          python apply-noise.py --dist upstream/cinny/dist --noise noise
+          python apply-noise.py --dist upstream/cinny/dist --noise noise --brand "Plotina Lite Desktop"
 
       - name: Verify the patch landed
         working-directory: cinny
@@ -233,11 +233,11 @@ jobs:
         run: |
           mkdir -p stable
           shopt -s nullglob
-          for f in cinny/upstream/src-tauri/target/release/bundle/appimage/*.AppImage; do cp "$f" stable/Plotina.AppImage; done
-          for f in cinny/upstream/src-tauri/target/release/bundle/deb/*.deb;           do cp "$f" stable/Plotina.deb; done
-          for f in cinny/upstream/src-tauri/target/release/bundle/rpm/*.rpm;           do cp "$f" stable/Plotina.rpm; done
-          for f in cinny/upstream/src-tauri/target/release/bundle/nsis/*.exe;          do cp "$f" stable/Plotina-setup.exe; done
-          for f in cinny/upstream/src-tauri/target/release/bundle/msi/*.msi;           do cp "$f" stable/Plotina.msi; done
+          for f in cinny/upstream/src-tauri/target/release/bundle/appimage/*.AppImage; do cp "$f" stable/Plotina-Lite-Desktop.AppImage; done
+          for f in cinny/upstream/src-tauri/target/release/bundle/deb/*.deb;           do cp "$f" stable/Plotina-Lite-Desktop.deb; done
+          for f in cinny/upstream/src-tauri/target/release/bundle/rpm/*.rpm;           do cp "$f" stable/Plotina-Lite-Desktop.rpm; done
+          for f in cinny/upstream/src-tauri/target/release/bundle/nsis/*.exe;          do cp "$f" stable/Plotina-Lite-Desktop-setup.exe; done
+          for f in cinny/upstream/src-tauri/target/release/bundle/msi/*.msi;           do cp "$f" stable/Plotina-Lite-Desktop.msi; done
           ls -lh stable
 
       - uses: actions/upload-artifact@v4

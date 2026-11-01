@@ -3,5 +3,12 @@
     "name": "plotina-element",
     "productName": "Plotina Element",
     "description": "Element for plotina.cc with DeepFilterNet3 noise suppression",
-    "protocols": ["io.element.desktop", "element", "cc.plotina.element"]
+    "protocols": ["io.element.desktop", "element", "cc.plotina.element"],
+    "linux": {
+        "desktop": {
+            "entry": {
+                "Name": "Plotina Desktop"
+            }
+        }
+    }
 }
