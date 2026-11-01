@@ -8,6 +8,19 @@ index 0000000..0432060
 +  <rect width="512" height="512" rx="96" fill="#111111"/>
 +  <path d="M128 128H384V384H320V192H192V384H128Z" fill="#FFFFFF"/>
 +</svg>
+diff --git a/src/app/components/splash-screen/SplashScreen.tsx b/src/app/components/splash-screen/SplashScreen.tsx
+index 27adadb..f49704f 100644
+--- a/src/app/components/splash-screen/SplashScreen.tsx
++++ b/src/app/components/splash-screen/SplashScreen.tsx
+@@ -21,7 +21,7 @@ export function SplashScreen({ children }: SplashScreenProps) {
+         justifyContent="Center"
+       >
+         <Text size="H2" align="Center">
+-          Cinny
++          Plotina Lite Web
+         </Text>
+       </Box>
+     </Box>
 diff --git a/src/app/features/settings/about/About.tsx b/src/app/features/settings/about/About.tsx
 index d3dcde9..9289c3d 100644
 --- a/src/app/features/settings/about/About.tsx
@@ -142,3 +155,27 @@ index 9f17342..abcdbb6 100644
      });
    };
  
+diff --git a/src/app/pages/client/WelcomePage.tsx b/src/app/pages/client/WelcomePage.tsx
+index 6a25392..abc3db2 100644
+--- a/src/app/pages/client/WelcomePage.tsx
++++ b/src/app/pages/client/WelcomePage.tsx
+@@ -1,7 +1,7 @@
+ import React from 'react';
+ import { Box, Button, Icon, Icons, Text, config, toRem } from 'folds';
+ import { Page, PageHero, PageHeroSection } from '../../components/page';
+-import CinnySVG from '../../../../public/res/svg/cinny.svg';
++import PlotinaSVG from '../../../../public/res/svg/plotina.svg';
+ 
+ export function WelcomePage() {
+   return (
+@@ -14,8 +14,8 @@ export function WelcomePage() {
+       >
+         <PageHeroSection>
+           <PageHero
+-            icon={<img width="70" height="70" src={CinnySVG} alt="Cinny Logo" />}
+-            title="Welcome to Cinny"
++            icon={<img width="70" height="70" src={PlotinaSVG} alt="Plotina Lite Web" />}
++            title="Welcome to Plotina Lite Web"
+             subTitle={
+               <span>
+                 Yet another matrix client.{' '}
