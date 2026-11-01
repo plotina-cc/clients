@@ -187,7 +187,8 @@ jobs:
           cp config.json upstream/config.json
           cp config.json upstream/cinny/config.json
           cp config.json upstream/cinny/dist/config.json
-          python apply-noise.py --dist upstream/cinny/dist --noise noise --brand "Plotina Lite Desktop"
+          python apply-noise.py --dist upstream/cinny/dist --noise noise
+          python branding.py --dist upstream/cinny/dist --brand "Plotina Lite Desktop"
 
       - name: Verify the patch landed
         working-directory: cinny
@@ -199,6 +200,11 @@ jobs:
           test -f upstream/cinny/dist/noise/vendor/dfn.esm.js
           test -s upstream/cinny/dist/LICENSE-AGPL-3.0
           test -s upstream/cinny/dist/NOTICE
+          grep -q 'plotina-icon.svg' upstream/cinny/dist/index.html
+          if grep -q 'favicon-.*\.ico' upstream/cinny/dist/index.html; then
+            echo "upstream favicon survived branding" >&2
+            exit 1
+          fi
           # The Sentry SDK must be in the bundle even though it is a no-op
           # without a DSN; "sentry.javascript" is the SDK name every envelope
           # carries. Source maps of the app bundle, by contrast, must not be

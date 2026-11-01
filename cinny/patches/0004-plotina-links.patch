@@ -1,0 +1,133 @@
+diff --git a/src/app/features/settings/about/About.tsx b/src/app/features/settings/about/About.tsx
+index 3e3a13a..bb76f2e 100644
+--- a/src/app/features/settings/about/About.tsx
++++ b/src/app/features/settings/about/About.tsx
+@@ -46,15 +46,15 @@ export function About({ requestClose }: AboutProps) {
+                   <Box direction="Column" gap="100">
+                     <Box gap="100" alignItems="End">
+                       <Text size="H3">Plotina Lite Web</Text>
+-                      <Text size="T200">v4.12.8</Text>
++                      <Text size="T200">v4.12.8-plotina.6</Text>
+                     </Box>
+-                    <Text>Yet another matrix client.</Text>
++                    <Text>Матрикс-клиент для сообщества Плотина.</Text>
+                   </Box>
+ 
+                   <Box gap="200" wrap="Wrap">
+                     <Button
+                       as="a"
+-                      href="https://github.com/cinnyapp/cinny"
++                      href="https://github.com/plotina-cc/clients"
+                       rel="noreferrer noopener"
+                       target="_blank"
+                       variant="Secondary"
+@@ -63,11 +63,11 @@ export function About({ requestClose }: AboutProps) {
+                       radii="300"
+                       before={<Icon src={Icons.Code} size="100" filled />}
+                     >
+-                      <Text size="B300">Source Code</Text>
++                      <Text size="B300">Исходный код</Text>
+                     </Button>
+                     <Button
+                       as="a"
+-                      href="https://cinny.in/#sponsor"
++                      href="https://plotina.cc"
+                       rel="noreferrer noopener"
+                       target="_blank"
+                       variant="Critical"
+@@ -76,7 +76,7 @@ export function About({ requestClose }: AboutProps) {
+                       radii="300"
+                       before={<Icon src={Icons.Heart} size="100" filled />}
+                     >
+-                      <Text size="B300">Support</Text>
++                      <Text size="B300">Плотина</Text>
+                     </Button>
+                   </Box>
+                 </Box>
+diff --git a/src/app/pages/auth/AuthFooter.tsx b/src/app/pages/auth/AuthFooter.tsx
+index 1f92449..8f2e9b6 100644
+--- a/src/app/pages/auth/AuthFooter.tsx
++++ b/src/app/pages/auth/AuthFooter.tsx
+@@ -5,17 +5,17 @@ import * as css from './styles.css';
+ export function AuthFooter() {
+   return (
+     <Box className={css.AuthFooter} justifyContent="Center" gap="400" wrap="Wrap">
+-      <Text as="a" size="T300" href="https://cinny.in" target="_blank" rel="noreferrer">
+-        About
++      <Text as="a" size="T300" href="https://plotina.cc" target="_blank" rel="noreferrer">
++        Плотина
+       </Text>
+       <Text
+         as="a"
+         size="T300"
+-        href="https://github.com/ajbura/cinny/releases"
++        href="https://github.com/plotina-cc/clients/releases/tag/v4.12.8-plotina-cinny.6"
+         target="_blank"
+         rel="noreferrer"
+       >
+-        v4.12.8
++        v4.12.8-plotina.6
+       </Text>
+       <Text
+         as="a"
+@@ -26,9 +26,6 @@ export function AuthFooter() {
+       >
+         Исходный код
+       </Text>
+-      <Text as="a" size="T300" href="https://twitter.com/cinnyapp" target="_blank" rel="noreferrer">
+-        Twitter
+-      </Text>
+       <Text as="a" size="T300" href="https://matrix.org" target="_blank" rel="noreferrer">
+         Powered by Matrix
+       </Text>
+diff --git a/src/app/pages/client/WelcomePage.tsx b/src/app/pages/client/WelcomePage.tsx
+index abc3db2..461c3cb 100644
+--- a/src/app/pages/client/WelcomePage.tsx
++++ b/src/app/pages/client/WelcomePage.tsx
+@@ -18,13 +18,13 @@ export function WelcomePage() {
+             title="Welcome to Plotina Lite Web"
+             subTitle={
+               <span>
+-                Yet another matrix client.{' '}
++                Матрикс-клиент для сообщества Плотина.{' '}
+                 <a
+-                  href="https://github.com/cinnyapp/cinny/releases"
++                  href="https://github.com/plotina-cc/clients/releases/tag/v4.12.8-plotina-cinny.6"
+                   target="_blank"
+                   rel="noreferrer noopener"
+                 >
+-                  v4.12.8
++                  v4.12.8-plotina.6
+                 </a>
+               </span>
+             }
+@@ -33,25 +33,25 @@ export function WelcomePage() {
+               <Box grow="Yes" style={{ maxWidth: toRem(300) }} direction="Column" gap="300">
+                 <Button
+                   as="a"
+-                  href="https://github.com/cinnyapp/cinny"
++                  href="https://github.com/plotina-cc/clients"
+                   target="_blank"
+                   rel="noreferrer noopener"
+                   before={<Icon size="200" src={Icons.Code} />}
+                 >
+                   <Text as="span" size="B400" truncate>
+-                    Source Code
++                    Исходный код
+                   </Text>
+                 </Button>
+                 <Button
+                   as="a"
+-                  href="https://cinny.in/#sponsor"
++                  href="https://plotina.cc"
+                   target="_blank"
+                   rel="noreferrer noopener"
+                   fill="Soft"
+                   before={<Icon size="200" src={Icons.Heart} />}
+                 >
+                   <Text as="span" size="B400" truncate>
+-                    Support
++                    Плотина
+                   </Text>
+                 </Button>
+               </Box>

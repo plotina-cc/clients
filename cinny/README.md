@@ -11,12 +11,14 @@ is patched before packaging, and the installers are built with our own config.
 
 ## Source and licence
 
-The web app and the desktop build are Cinny `v4.12.8` plus `patches/` and
-`apply-noise.py`. The source pair — upstream tag plus this repository — is in
-`../SOURCE.md`. Patch `0002-plotina-source-link.patch` adds the "Исходный код"
-link to the auth footer and to Settings → About; both point at
-<https://github.com/plotina-cc/clients>. `apply-noise.py` also copies
+The web app and the desktop build are Cinny `v4.12.8` plus `patches/`,
+`apply-noise.py` and `branding.py`. The source pair — upstream tag plus this
+repository — is in `../SOURCE.md`. Patch `0002-plotina-source-link.patch` adds
+the "Исходный код" link to the auth footer and to Settings → About; both point
+at <https://github.com/plotina-cc/clients>. `apply-noise.py` copies
 `../LICENSE` and `../NOTICE` into the dist as `LICENSE-AGPL-3.0` and `NOTICE`.
+`branding.py` owns the browser shell: icons, HTML metadata and the web app
+manifest.
 
 ## What is here
 
@@ -24,6 +26,7 @@ link to the auth footer and to Settings → About; both point at
 config.json          default homeserver (plotina.cc), no featured communities
 UPSTREAM_TAG         the cinny-desktop tag we build against
 apply-noise.py       copies noise/ into dist and inserts the tags into two documents
+branding.py          applies Plotina icons, HTML metadata and manifest to the dist
 tauri.plotina.json   build override: no beforeBuildCommand, updater disabled
 noise.lock.json      URL and sha256 of the two model binaries (wasm and .tar.gz)
 scripts/build.sh     local Linux build (AppImage + deb)
@@ -138,6 +141,7 @@ cp -a ../noise/vendor/. noise/vendor/
 python3 scripts/fetch-noise.py
 cp config.json upstream/config.json
 python3 apply-noise.py --dist upstream/cinny/dist --noise noise
+python3 branding.py --dist upstream/cinny/dist --brand "Plotina Lite Desktop"
 npm run tauri -- build --config "$PWD/tauri.plotina.json"
 ```
 

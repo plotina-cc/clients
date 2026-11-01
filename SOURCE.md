@@ -51,8 +51,9 @@ The per-client READMEs have the full details; these are the entry points.
 - **Cinny web** — clone `cinny-desktop` at `v4.12.8` with
   `--recurse-submodules`, apply `cinny/patches/*.patch` inside its `cinny`
   submodule, run `npm ci && npm run build`, then run
-  `cinny/apply-noise.py --dist <dist> --noise cinny/noise`. The noise assets are
-  fetched and checksummed by `cinny/scripts/fetch-noise.py`.
+  `cinny/apply-noise.py --dist <dist> --noise cinny/noise`, then
+  `cinny/branding.py --dist <dist>`. The noise assets are fetched and checksummed
+  by `cinny/scripts/fetch-noise.py`.
 - **Cinny Desktop** — `cinny/scripts/build.sh` does the clone, patches, web
   build and Tauri packaging.
 - **FluffyChat** — `fluffychat/scripts/build-android.sh` clones

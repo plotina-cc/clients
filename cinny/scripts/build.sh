@@ -67,7 +67,8 @@ python3 "$ROOT/scripts/sentry-sourcemaps.py" --dist dist \
 echo "==> patch"
 cd ..
 cp "$ROOT/config.json" config.json
-python3 "$ROOT/apply-noise.py" --dist cinny/dist --noise "$ROOT/noise" --brand "Plotina Lite Desktop"
+python3 "$ROOT/apply-noise.py" --dist cinny/dist --noise "$ROOT/noise"
+python3 "$ROOT/branding.py" --dist cinny/dist --brand "Plotina Lite Desktop"
 
 # Tauri gets the provisional Plotina mark for the window, the launcher and the
 # Windows installer; upstream's Cinny bird stays out of the shipped bundle.

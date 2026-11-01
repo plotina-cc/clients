@@ -61,6 +61,7 @@ Cinny Desktop (Linux):
 cd cinny
 npm ci && npm run build           # inside the upstream checkout
 python3 apply-noise.py --dist <upstream>/cinny/dist --noise noise
+python3 branding.py --dist <upstream>/cinny/dist
 ```
 
 CI runs the same builds on GitHub runners: `.github/workflows/build-cinny-desktop.yml`

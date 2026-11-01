@@ -163,7 +163,7 @@ jobs:
           "$cli" sourcemaps upload --release "$SENTRY_RELEASE" \
             --url-prefix "~" "$RUNNER_TEMP/cinny-sourcemaps"
 
-      - name: Apply noise patch
+      - name: Apply noise and branding patches
         working-directory: cinny
         shell: bash
         run: |
@@ -172,6 +172,7 @@ jobs:
           cp config.json upstream/cinny/config.json
           cp config.json upstream/cinny/dist/config.json
           python apply-noise.py --dist upstream/cinny/dist --noise noise
+          python branding.py --dist upstream/cinny/dist --brand "Plotina Lite Web"
 
       - name: Verify the artifact
         working-directory: cinny
@@ -186,6 +187,11 @@ jobs:
           test -f "$dist/config.json"
           test -s "$dist/LICENSE-AGPL-3.0"
           test -s "$dist/NOTICE"
+          grep -q 'plotina-icon.svg' "$dist/index.html"
+          if grep -q 'favicon-.*\.ico' "$dist/index.html"; then
+            echo "upstream favicon survived branding" >&2
+            exit 1
+          fi
           # The SDK is in the bundle; both build-time values survive minification.
           grep -Raqs 'sentry.javascript' "$dist/assets"
           grep -RaqsF "$VITE_SENTRY_DSN" "$dist/assets"
