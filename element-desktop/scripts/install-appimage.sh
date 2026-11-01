@@ -40,6 +40,12 @@ for icon in "$TMP"/squashfs-root/*.png; do
     install -Dm 644 "$icon" "$ICON_DIR/${size}x${size}/apps/plotina-element.png"
 done
 
+# The AppImage ships one plain plotina-element.png; treat it as the largest icon.
+if [ ! -f "$ICON_DIR/512x512/apps/plotina-element.png" ] && [ -f "$TMP/squashfs-root/plotina-element.png" ]; then
+    install -Dm 644 "$TMP/squashfs-root/plotina-element.png" \
+        "$ICON_DIR/512x512/apps/plotina-element.png"
+fi
+
 cat > "$DESKTOP" <<EOF
 [Desktop Entry]
 Name=Plotina Element
