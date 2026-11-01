@@ -5,7 +5,8 @@
  
  object BuildTimeConfig {
 -    const val APPLICATION_ID = "io.element.android.x"
-+    const val APPLICATION_ID = "cc.plotina.element.x"
-     const val APPLICATION_NAME = "Element X"
+-    const val APPLICATION_NAME = "Element X"
++    const val APPLICATION_ID = "cc.plotina.x"
++    const val APPLICATION_NAME = "Plotina X"
      val METADATA_HOST_REVERSED: String? = null
      val OAUTH_CLIENT_URL_PATH: String? = "apps/android"

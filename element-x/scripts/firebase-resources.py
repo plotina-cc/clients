@@ -30,7 +30,7 @@ import sys
 import xml.sax.saxutils as sax
 from typing import NoReturn
 
-DEFAULT_PACKAGE = "io.element.android.x"
+DEFAULT_PACKAGE = "cc.plotina.x"
 
 # The four values Firebase cannot start without. `project_id` is also what CI greps the APK for.
 REQUIRED = ("google_app_id", "gcm_defaultSenderId", "google_api_key", "project_id")
@@ -43,10 +43,21 @@ def fail(message: str, code: int = 1) -> NoReturn:
 
 def pick_client(document: dict, package: str) -> dict:
     clients = document.get("client") or []
+    fallbacks = ["cc.plotina.element.x", "io.element.android.x"]
     for client in clients:
         info = (client.get("client_info") or {}).get("android_client_info") or {}
         if info.get("package_name") == package:
             return client
+    for fallback in fallbacks:
+        for client in clients:
+            info = (client.get("client_info") or {}).get("android_client_info") or {}
+            if info.get("package_name") == fallback:
+                print(
+                    f"warning: google-services.json has no client for {package!r}; "
+                    f"reusing the {fallback!r} Firebase app",
+                    file=sys.stderr,
+                )
+                return client
     known = [
         ((c.get("client_info") or {}).get("android_client_info") or {}).get("package_name")
         for c in clients

@@ -221,7 +221,7 @@ jobs:
           python3 "$GITHUB_WORKSPACE/element-x/scripts/firebase-resources.py" \
             upstream/element-x/app/google-services.json \
             upstream/element-x/app/src/gplay/res \
-            cc.plotina.element.x
+            cc.plotina.x
           find upstream/element-x/app/src/gplay/res -type f -print
 
       - name: Decode the signing key
@@ -316,18 +316,18 @@ jobs:
           arm64=$(find "$apk_dir" -name '*arm64-v8a*.apk' | head -1)
           armv7=$(find "$apk_dir" -name '*armeabi-v7a*.apk' | head -1)
           [ -n "$arm64" ] || { echo "::error::no arm64-v8a APK in $apk_dir"; exit 1; }
-          cp "$arm64" "$GITHUB_WORKSPACE/Plotina-ElementX.apk"
-          if [ -n "$armv7" ]; then cp "$armv7" "$GITHUB_WORKSPACE/Plotina-ElementX-armv7.apk"; fi
-          ls -lh "$GITHUB_WORKSPACE"/Plotina-ElementX*.apk
+          cp "$arm64" "$GITHUB_WORKSPACE/Plotina-X.apk"
+          if [ -n "$armv7" ]; then cp "$armv7" "$GITHUB_WORKSPACE/Plotina-X-armv7.apk"; fi
+          ls -lh "$GITHUB_WORKSPACE"/Plotina-X*.apk
           kill "$monitor" 2>/dev/null || true
 
       # Uploaded before the checks on purpose: a failing check must still leave the APK behind to
       # inspect, otherwise the only trace of a wrong artifact is a red step.
       - uses: actions/upload-artifact@v4
-        if: always() && hashFiles('Plotina-ElementX.apk') != ''
+        if: always() && hashFiles('Plotina-X.apk') != ''
         with:
-          name: Plotina-ElementX
-          path: Plotina-ElementX*.apk
+          name: Plotina-X
+          path: Plotina-X*.apk
           if-no-files-found: error
           retention-days: 30
 
@@ -335,27 +335,27 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE"
           SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
-          ls -lh Plotina-ElementX*.apk
+          ls -lh Plotina-X*.apk
 
           # The bundled Element Call stays in the APK: it is the offline fallback if our host is down.
-          unzip -l Plotina-ElementX.apk | grep -E "assets/element-call/" | head -5
-          unzip -l Plotina-ElementX.apk | grep -q "assets/element-call/index.html"
+          unzip -l Plotina-X.apk | grep -E "assets/element-call/" | head -5
+          unzip -l Plotina-X.apk | grep -q "assets/element-call/index.html"
 
           # And our URL is in the code, not only in the README. This is the whole point of the build:
           # if the next person bumps the pin and 0004 stops applying, this fails instead of shipping
           # an APK that silently opens Element's bundle again.
-          unzip -p Plotina-ElementX.apk "classes*.dex" | strings | grep -F "https://call.plotina.cc/room"
-          unzip -p Plotina-ElementX.apk "classes*.dex" | strings | grep -qF "https://call.plotina.cc/room"
+          unzip -p Plotina-X.apk "classes*.dex" | strings | grep -F "https://call.plotina.cc/room"
+          unzip -p Plotina-X.apk "classes*.dex" | strings | grep -qF "https://call.plotina.cc/room"
 
           # 0006 puts our homeserver in the login screen's default account provider. That string
           # lives in the dex, so it is checked there: if the next pin bump drops 0006 the login
           # screen silently falls back to matrix.org, which is exactly what this fails on.
-          unzip -p Plotina-ElementX.apk "classes*.dex" | strings | grep -F "plotina.cc" | sort -u | head -5
-          unzip -p Plotina-ElementX.apk "classes*.dex" | strings | grep -qF "plotina.cc"
+          unzip -p Plotina-X.apk "classes*.dex" | strings | grep -F "plotina.cc" | sort -u | head -5
+          unzip -p Plotina-X.apk "classes*.dex" | strings | grep -qF "plotina.cc"
 
           APKSIGNER=$(ls "$SDK"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
           echo "apksigner: $APKSIGNER"
-          "$APKSIGNER" verify --print-certs Plotina-ElementX.apk | head -5
+          "$APKSIGNER" verify --print-certs Plotina-X.apk | head -5
 
           # --- the https://plotina.cc/app app link -------------------------------------------
           # This APK is signed with the Plotina key, while mobile.element.io's assetlinks.json
@@ -406,7 +406,7 @@ jobs:
             fi
           }
 
-          for apk in Plotina-ElementX*.apk; do check_app_link "$apk"; done
+          for apk in Plotina-X*.apk; do check_app_link "$apk"; done
 
       - name: Check Sentry is wired into the APK
         env:
@@ -414,7 +414,7 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE"
           SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
-          apk=Plotina-ElementX.apk
+          apk=Plotina-X.apk
           if [ -z "${ELEMENT_ANDROID_SENTRY_DSN:-}" ]; then
             echo "::warning::SENTRY_DSN is not set: this APK has no crash reporting"
             exit 0
@@ -460,7 +460,7 @@ jobs:
           AAPT2=$(ls "$SDK"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1)
           echo "aapt2: ${AAPT2:-none}"
           failed=0
-          for apk in Plotina-ElementX*.apk; do
+          for apk in Plotina-X*.apk; do
             echo "-- $apk"
 
             # 1. The library itself. Two notes on the command: `unzip -l | grep -c
@@ -531,12 +531,12 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: Plotina-ElementX*.apk
+          files: Plotina-X*.apk
           # Tag namespace is shared with the other clients in this repository, so generated notes
           # would paste an unrelated changelog.
           generate_release_notes: false
           body: |
-            Element X for Android built from element-x-android `${{ env.ELEMENT_X_TAG }}`, with calls
+            Plotina X for Android built from element-x-android `${{ env.ELEMENT_X_TAG }}`, with calls
             opening on **https://call.plotina.cc/room** by default — no setting to change, no URL to
             type. Element Call is loaded in the WebView from our origin, which is where our noise
             suppression lives.
@@ -551,11 +551,11 @@ jobs:
             - **Push notifications come through FCM**, registered against our own push gateway at
               `https://push.plotina.cc` instead of Element's. The phone needs Google Play Services
               for that; where they are missing, the app falls back to UnifiedPush (ntfy).
-            - Signed with the Plotina key, application id `io.element.android.x`: installs over our
+            - Signed with the Plotina key, application id `cc.plotina.x`: installs over our
               previous builds. Without signing secrets the build falls back to a debug APK with the
               `.debug` application id, which has to be installed from scratch.
-            - `Plotina-ElementX.apk` is the arm64-v8a build (every phone from the last several
-              years); `Plotina-ElementX-armv7.apk` covers older 32-bit devices. There is no universal
+            - `Plotina-X.apk` is the arm64-v8a build (every phone from the last several
+              years); `Plotina-X-armv7.apk` covers older 32-bit devices. There is no universal
               APK on purpose: one file for all four ABIs is 400 MB.
             - Source: this repository at this tag plus the upstream tag pinned in `element-x/pins.env`. The full set and rebuild steps are in
               https://github.com/plotina-cc/clients/blob/main/SOURCE.md (AGPL-3.0-or-later upstream, AGPL-3.0 patch layer).

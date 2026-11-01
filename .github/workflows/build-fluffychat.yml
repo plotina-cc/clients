@@ -30,8 +30,8 @@ concurrency:
 env:
   UPSTREAM_REPO: https://github.com/krille-chan/fluffychat
   PLUGIN_DIR: fluffychat/plotina_dfn
-  APK_NAME: Plotina-FluffyChat.apk
-  APK_NAME_ARMV7: Plotina-FluffyChat-armv7.apk
+  APK_NAME: Plotina-Mobile.apk
+  APK_NAME_ARMV7: Plotina-Mobile-armv7.apk
   # GlitchTip. The DSN is public by design and ends up inside libapp.so; an
   # empty value simply builds without reporting (Sentry stays a no-op).
   SENTRY_DSN: ${{ vars.SENTRY_DSN }}
@@ -159,6 +159,26 @@ jobs:
           missing = [name for name in expected if name not in clients]
           if missing:
               sys.exit(f"{path} has no client for: {', '.join(missing)}")
+          # The Firebase project still registers the upstream client. Gradle's
+          # google-services plugin rejects a package name that is not in this
+          # file, so point that client at the Plotina package for this build.
+          target = "cc.plotina.mobile"
+          chosen = next(
+              (
+                  entry
+                  for entry in config.get("client", [])
+                  if entry["client_info"]["android_client_info"]["package_name"]
+                  in ("chat.fluffy.fluffychat", "cc.plotina.fluffychat")
+              ),
+              None,
+          )
+          if chosen is None:
+              sys.exit(f"{path} has no FluffyChat client to map onto {target}")
+          chosen["client_info"]["android_client_info"]["package_name"] = target
+          with open(path, "w", encoding="utf-8") as handle:
+              json.dump(config, handle, indent=2)
+              handle.write("\n")
+          print(f"firebase client mapped to {target}")
           PY
           bash scripts/add-firebase-messaging.sh
           # The script is silent about whether it matched anything, so check the
@@ -306,8 +326,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Plotina-FluffyChat
-          path: Plotina-FluffyChat*.apk
+          name: Plotina-Mobile
+          path: Plotina-Mobile*.apk
           if-no-files-found: error
 
       # The build falls back to the debug key when the keystore secrets are
@@ -506,7 +526,7 @@ jobs:
         if: ${{ env.SENTRY_DSN != '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: Plotina-FluffyChat-symbols
+          name: Plotina-Mobile-symbols
           path: fluffychat/upstream/build/app/outputs/symbols
           if-no-files-found: warn
 
