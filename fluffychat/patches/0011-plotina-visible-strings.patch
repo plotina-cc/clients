@@ -123,3 +123,14 @@ index 9b7a180..4485a79 100644
      "@newPassphraseDescription": {
          "type": "String",
          "placeholders": {}
+diff --git a/lib/utils/start_push_foreground_service.dart b/lib/utils/start_push_foreground_service.dart
+--- a/lib/utils/start_push_foreground_service.dart
++++ b/lib/utils/start_push_foreground_service.dart
+@@ -68,6 +68,6 @@
+         final result = await FlutterForegroundTask.startService(
+           serviceTypes: [ForegroundServiceTypes.shortService],
+-          notificationTitle: 'FluffyChat',
++          notificationTitle: 'Plotina Mobile',
+           notificationText: l10n.loadingMessages,
+           notificationIcon: NotificationIcon(metaDataName: 'ic_launcher'),
+         );
