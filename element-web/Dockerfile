@@ -34,7 +34,7 @@ COPY noise/vendor/ /app/noise/vendor/
 COPY plotina-icon.svg /app/plotina-icon.svg
 
 RUN set -eux; \
-    chmod 0644 /app/LICENSE-AGPL-3.0 /app/NOTICE; \
+    chmod 0644 /app/LICENSE-AGPL-3.0 /app/NOTICE /app/plotina-icon.svg; \
     grep -q '</head>' /app/index.html; \
     test -s /app/LICENSE-AGPL-3.0; \
     test -s /app/NOTICE; \
