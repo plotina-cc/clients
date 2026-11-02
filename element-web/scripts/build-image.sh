@@ -8,7 +8,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$HERE")"
-TAG="${1:-plotina/element-web:1.12.32-noise10}"
+TAG="${1:-plotina/element-web:1.12.32-noise12}"
 CTX="$(mktemp -d)"
 trap 'rm -rf "$CTX"' EXIT
 

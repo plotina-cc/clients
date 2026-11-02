@@ -32,13 +32,16 @@ COPY noise/logic.js /app/noise/logic.js
 COPY noise/boot.js /app/noise/boot.js
 COPY noise/vendor/ /app/noise/vendor/
 COPY plotina-icon.svg /app/plotina-icon.svg
+COPY plotina-512.png /app/plotina-512.png
+COPY manifest.json /app/manifest.json
 
 RUN set -eux; \
-    chmod 0644 /app/LICENSE-AGPL-3.0 /app/NOTICE /app/plotina-icon.svg; \
+    chmod 0644 /app/LICENSE-AGPL-3.0 /app/NOTICE /app/plotina-icon.svg /app/plotina-512.png /app/manifest.json; \
     grep -q '</head>' /app/index.html; \
     test -s /app/LICENSE-AGPL-3.0; \
     test -s /app/NOTICE; \
     test -f /etc/nginx/templates/default.conf.template; \
+    test -s /app/manifest.json; \
     echo "upstream layout ok"
 
 # The entrypoint regenerates conf.d/default.conf from templates/default.conf.template
@@ -59,11 +62,17 @@ RUN set -eux; \
 
 RUN set -eux; \
     sed -i 's#<title>Element</title>#<title>Plotina Web</title>#' /app/index.html; \
+    sed -i 's#<link rel="apple-touch-icon"[^>]*>##g; s#<link rel="icon"[^>]*>##g' /app/index.html; \
+    sed -i 's#<meta name="apple-mobile-web-app-title" content="Element">#<meta name="apple-mobile-web-app-title" content="Plotina Web">#' /app/index.html; \
+    sed -i 's#<meta name="application-name" content="Element">#<meta name="application-name" content="Plotina Web">#' /app/index.html; \
+    sed -i 's|<meta name="theme-color" content="#ffffff">|<meta name="theme-color" content="#17795A">|' /app/index.html; \
+    sed -i 's#https://app.element.io/themes/element/img/logos/opengraph.png#https://chat.plotina.cc/plotina-512.png#' /app/index.html; \
+    cp /app/plotina-icon.svg /app/themes/element/img/logos/element-logo.svg; \
     sed -i 's#</head>#<link rel="icon" type="image/svg+xml" href="/plotina-icon.svg"></head>#' /app/index.html; \
     sed -i 's#</head>#<script src="/noise/logic.js"></script><script src="/noise/boot.js" defer></script></head>#' /app/index.html; \
     grep -q '<title>Plotina Web</title>' /app/index.html; \
     grep -q 'plotina-icon.svg' /app/index.html; \
+    grep -q '"name": "Plotina Web"' /app/manifest.json; \
     grep -q 'noise/boot.js' /app/index.html; \
     grep -q 'noise/logic.js' /app/index.html
-
 USER nginx

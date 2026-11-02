@@ -4,16 +4,20 @@ Element Web (pinned upstream image) plus a small overlay that runs microphone
 audio for **Element Call** through DeepFilterNet3 and adds a level slider to
 Settings → Voice & Video.
 
-Nothing in Element's own code is patched: the image contains the stock build with
-two extra `<script>` tags in `index.html` and a `/noise/` directory. That keeps the
+Nothing in Element's own code is patched: the image contains the stock build
+with a small Plotina overlay (local logo/favicon/manifest, and the two noise
+`script` tags) in `index.html` and a `/noise/` directory. That keeps the
 overlay cheap to rebase onto a new upstream release — see "Bumping upstream".
 
 ## Layout
 
 ```
 config/element/
-  Dockerfile              overlay image (pinned FROM, one sed on index.html)
-  config.json             Element Web config (unchanged by the overlay)
+  Dockerfile              overlay image (pinned FROM; branding + noise)
+  config.json             Element Web runtime config, including local Plotina logo
+  manifest.json           Plotina PWA manifest
+  plotina-icon.svg        login-header logo used before/without config
+  plotina-512.png         PWA/OG image
   noise/
     logic.js              pure decisions: what is call audio, level clamping, strings
     boot.js               browser wiring: getUserMedia wrapper + settings slider
