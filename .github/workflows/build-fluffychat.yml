@@ -67,6 +67,10 @@ jobs:
         working-directory: fluffychat
         run: python3 scripts/apply-plotina-icons.py upstream
 
+      - name: Keep only English and Russian UI languages
+        working-directory: fluffychat
+        run: bash scripts/keep-en-ru-l10n.sh upstream
+
       # One name for the release, the Dart define and the symbol upload. The
       # pubspec version is what upstream calls 2.11.3+3574; the build number is
       # upstream's own and would repeat across our tags, so the tag is the dist.
@@ -299,6 +303,7 @@ jobs:
           VARIANT="${{ steps.signing.outputs.variant }}"
           echo "building the $VARIANT variant"
           flutter pub get
+          flutter gen-l10n
           # Per-ABI splits: the universal APK carries four sets of native
           # libraries and is roughly twice the size of the arm64 one, which is
           # what every phone from the last several years needs. x86_64 is left

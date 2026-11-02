@@ -100,6 +100,7 @@ jobs:
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0008-element-x-android-plotina-sentry.patch"
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0009-plotina-application-id.patch"
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0010-plotina-visible-strings.patch"
+          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0011-plotina-locales.patch"
 
   build:
     needs: patches
@@ -195,6 +196,8 @@ jobs:
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0009-plotina-application-id.patch"
           # 0010: the onboarding headline is the first full-screen copy a new user sees.
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0010-plotina-visible-strings.patch"
+          # 0011: keep only the two maintained UI locales in the APK.
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0011-plotina-locales.patch"
 
       - name: Apply Plotina launcher icons
         run: python3 element-x/scripts/apply-plotina-icons.py upstream/element-x
