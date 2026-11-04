@@ -116,7 +116,7 @@ jobs:
         run: python3 -m unittest discover -s noise/tests -p '*_test.py'
 
       - name: Noise tests (node)
-        run: node --test noise/tests/
+        run: node --test noise/tests/*.test.mjs
 
       - name: Noise tests (headless browser)
         shell: bash

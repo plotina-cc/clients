@@ -120,7 +120,7 @@ jobs:
 
       - name: Noise tests (node)
         if: matrix.name == 'linux'
-        run: node --test noise/tests/
+        run: node --test noise/tests/*.test.mjs
 
       - name: Noise tests (headless browser)
         if: matrix.name == 'linux'
