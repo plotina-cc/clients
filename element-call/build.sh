@@ -4,8 +4,8 @@
 #
 # Two modes:
 #   release (default)  take the upstream release tarball, verify its SHA-256,
-#                      inject noise/, add config.json. No toolchain, ~40 MB of
-#                      downloads, seconds of CPU.
+#                      inject noise/, brand it as Plotina Call, add config.json.
+#                      No toolchain, ~40 MB of downloads, seconds of CPU.
 #   source             clone the tag and run `pnpm build:full`. Only worth it
 #                      when we carry a change that cannot be applied to the
 #                      built bundle — the release tarball is upstream's own
@@ -21,6 +21,7 @@
 #   --dfn-dir DIR           existing noise/dfn tree (v3/pkg, v3/models) instead
 #                           of downloading the two assets
 #   --config FILE           default: element-call/config.json
+#   --icons DIR             default: <repo>/branding/icons (the Plotina marks)
 #   --maps-out DIR          copy each source map and its script to DIR, then
 #                           drop the maps from the bundle (CI uploads DIR to
 #                           GlitchTip; the served JS keeps working because the
@@ -46,6 +47,7 @@ OUT="$REPO/dist"
 NOISE="$REPO/noise"
 DFN_DIR=""
 CONFIG="$HERE/config.json"
+ICONS="$REPO/branding/icons"
 MAPS_OUT=""
 SENTRY_CLI=""
 KEEP=0
@@ -53,7 +55,7 @@ KEEP=0
 say() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-usage() { sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; }
 
 while (($#)); do
   case "$1" in
@@ -63,6 +65,7 @@ while (($#)); do
     --noise)   NOISE="${2:?--noise needs a value}"; shift 2 ;;
     --dfn-dir) DFN_DIR="${2:?--dfn-dir needs a value}"; shift 2 ;;
     --config)  CONFIG="${2:?--config needs a value}"; shift 2 ;;
+    --icons)   ICONS="${2:?--icons needs a value}"; shift 2 ;;
     --maps-out) MAPS_OUT="${2:?--maps-out needs a value}"; shift 2 ;;
     --sentry-cli) SENTRY_CLI="${2:?--sentry-cli needs a value}"; shift 2 ;;
     --keep)    KEEP=1; shift ;;
@@ -80,7 +83,8 @@ esac
 # $OUT/sentry-release.txt so the upload step cannot drift from the build.
 RELEASE="${VITE_SENTRY_RELEASE:-element-call@$TAG}"
 
-for f in "$NOISE/logic.js" "$NOISE/boot.js" "$NOISE/plotina-dfn.js" "$NOISE/plotina-panel.js" "$NOISE/vendor/dfn.esm.js" "$CONFIG"; do
+for f in "$NOISE/logic.js" "$NOISE/boot.js" "$NOISE/plotina-dfn.js" "$NOISE/plotina-panel.js" "$NOISE/vendor/dfn.esm.js" \
+         "$CONFIG" "$ICONS/plotina-green.svg" "$ICONS/png/green-48.png" "$ICONS/png/green-512.png"; do
   [ -f "$f" ] || die "missing input: $f"
 done
 
@@ -208,6 +212,13 @@ say "patching index.html"
 python3 "$HERE/inject-noise.py" "$DIST/index.html"
 python3 "$HERE/inject-noise.py" --check "$DIST/index.html"
 
+say "branding as Plotina Call"
+# Ours to brand: the shell of index.html, the strings the bundle prints and the
+# element.io links. branding.py counts every literal it rewrites and aborts when
+# the pinned tag does not carry the number its rule table expects.
+python3 "$HERE/branding.py" --icons "$ICONS" "$DIST"
+python3 "$HERE/branding.py" --icons "$ICONS" --check "$DIST"
+
 say "copying noise/ into the bundle"
 mkdir -p "$DIST/noise/vendor"
 install -m 0644 "$NOISE/logic.js" "$NOISE/boot.js" "$NOISE/plotina-dfn.js" "$NOISE/plotina-panel.js" "$HERE/source-link.js" "$DIST/noise/"
@@ -270,6 +281,25 @@ grep -q 'assets/' "$DIST/index.html" || die "no asset references in index.html; 
 compgen -G "$DIST/assets/index-*.js" >/dev/null || die "no hashed app bundle under assets/"
 [ -s "$DIST/config.json" ] || die "config.json is empty"
 [ -s "$DIST/NOTICE" ] || die "NOTICE is empty"
+
+# Branding, asserted independently of branding.py's own --check: a shell that
+# says Plotina, an icon tree that came from branding/icons, no upstream URL.
+python3 "$HERE/branding.py" --icons "$ICONS" --check "$DIST" >/dev/null
+if grep -q 'Element Call' "$DIST/index.html"; then
+  die "index.html still says 'Element Call'"
+fi
+grep -q '<title>Plotina Call</title>' "$DIST/index.html" || die "index.html has no Plotina Call title"
+grep -q 'href="/plotina-icon.svg"' "$DIST/index.html" || die "index.html points its icon somewhere else"
+grep -q 'content="/plotina-512.png"' "$DIST/index.html" || die "index.html has no Plotina social card"
+for icon in plotina-icon.svg plotina-512.png favicon.png; do
+  [ -s "$DIST/$icon" ] || die "$icon is missing from the bundle"
+done
+cmp -s "$DIST/favicon.png" "$ICONS/png/green-48.png" || die "favicon.png is not the Plotina 48px mark"
+for url in 'https://element\.io/privacy' 'https://element\.io/cookie-policy' 'docs\.element\.io'; do
+  if grep -q "$url" "$DIST"/assets/*.js; then
+    die "the bundle still links $url"
+  fi
+done
 
 wasm_size="$(file_size "$DIST/noise/dfn/v3/pkg/df_bg.wasm")"
 model_size="$(file_size "$DIST/noise/dfn/v3/models/DeepFilterNet3_onnx.tar.gz")"

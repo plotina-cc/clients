@@ -1,8 +1,8 @@
 # Element Call for plotina.cc
 
-Our own Element Call, served at `call.plotina.cc`, with the DeepFilterNet3 wrapper from
-`../noise/` injected into it. One static bundle is meant to serve every client that can be
-pointed at it: Element X (which has no native call code at v26.10.1 — it opens Element Call in a
+Our own Element Call, served at `call.plotina.cc` as **Plotina Call**, with the DeepFilterNet3
+wrapper from `../noise/` injected into it. One static bundle is meant to serve every client that can
+be pointed at it: Element X (which has no native call code at v26.10.1 — it opens Element Call in a
 WebView), and optionally Element Web and Cinny.
 
 **Status: scaffold. No CI run yet, nothing deployed.** Everything below comes from the tagged
@@ -39,7 +39,9 @@ Output: `dist/plotina-element-call.tar.gz`, one top-level directory:
 ```
 element-call-plotina/
 ├── index.html                 # upstream, plus two <script> tags after <head>
-├── favicon.png
+├── favicon.png                # branding/icons/png/green-48.png
+├── plotina-icon.svg           # the brand mark, linked from index.html
+├── plotina-512.png            # the og:/twitter: social card
 ├── config.json                # ours (upstream ships none)
 ├── LICENSE-AGPL-3.0           # upstream ships none either
 ├── NOTICE                     # copyright and modification notice
@@ -56,6 +58,59 @@ element-call-plotina/
 
 The tar is written with `--sort=name --mtime=@0` on GNU tar, so a rebuild of the same inputs is
 byte-identical and comparable with the published asset.
+
+## Branding
+
+`branding.py` runs in `release` mode right after `inject-noise.py` and turns the shell and the
+bundle into Plotina Call. It edits the shipped bytes, not the sources: `index.html`, plus the
+literal strings in `assets/*.js`.
+
+```bash
+element-call/branding.py dist/element-call-0.26.1          # brand in place, idempotent
+element-call/branding.py --check <dist>                    # exit 1 unless branded already
+```
+
+The rules are a table, one entry per literal, each with the number of hits the pinned tag carries.
+A rule that matches a different number of times **aborts the build** rather than guessing, so
+`EC_TAG` bumps make every brand string auditable:
+
+| | | |
+| :-- | :-- | :-- |
+| `index.html` | title, `og:`/`twitter:` title and description, `og:image`/`twitter:image` → `/plotina-512.png`, icon link → `/plotina-icon.svg` | 9 |
+| `document_title` | `let t="Element Call";document.title=…` — the tab title | 1 |
+| `beta_logo_label` | `Element Call (Beta)` → `Plotina Call`, the logo's `<desc>` | 1 |
+| `product_name` | `{productName:'Element Call'}` in the settings footer | 1 |
+| `close_host_error` | `Failed to ask the host to close Element Call`, two call sites | 2 |
+| `brand_argument` | `{brand:'Element Call'}` in the localised errors | 2 |
+| `version_log` | the `F.info('Element Call v0.26.1')` console line | 1 |
+| `privacy_url`, `cookie_policy_url` | `https://element.io/{privacy,cookie-policy}` → `https://plotina.cc` | 1 + 1 |
+| `docs_url` | the `docs.element.io` SFU-troubleshooting link → `https://github.com/plotina-cc/clients` | 1 |
+
+`favicon.png` in the dist is overwritten with `branding/icons/png/green-48.png`; `plotina-icon.svg`
+(holds for `branding/icons/plotina-green.svg`) and `plotina-512.png` (`png/green-512.png`) are copied
+in next to it.
+
+Out of scope on purpose, and asserted so in the tests:
+
+- The i18n JSON files under `assets/` keep their `Element Call` strings: `header_label` in 18 of the
+  22 locales that carry the name (the German file carries four), plus the compatibility notes.
+  Rewording translations is a different change with a different review.
+- The logo's `aria-label` keeps upstream's name — one occurrence, which `branding.py` counts as
+  `KNOWN_LEFTOVERS` and fails on if the number changes.
+- Source maps and non-`assets/` files are untouched.
+
+## Tests
+
+```bash
+python3 -m unittest discover -s element-call/tests          # 47 tests, ~3 s
+EC_SKIP_NETWORK=1 python3 -m unittest discover -s element-call/tests   # fixtures only
+```
+
+`tests/test_branding.py` runs on fixtures copied verbatim out of the pinned bundle, so the counters
+it asserts are the counters a real build asserts. `tests/test_tarball_integration.py` downloads the
+release tarball named in `pins.env` (~40 MB, cached under the system temp dir), checks its sha256,
+unpacks it, runs `inject-noise.py` and `branding.py` over it in the order `build.sh` does and checks
+the result — including that a partly-reverted literal makes `--check` fail.
 
 ## Patches
 

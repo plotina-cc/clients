@@ -1,7 +1,8 @@
 name: build-element-call
 
-# Static build of our own Element Call at call.plotina.cc: upstream v0.26.1
-# (see element-call/pins.env) with the noise/ wrapper injected into index.html.
+# Static build of our own Element Call at call.plotina.cc as Plotina Call:
+# upstream v0.26.1 (see element-call/pins.env) with the noise/ wrapper injected
+# into index.html and branded by element-call/branding.py.
 #
 # Default mode takes the upstream release tarball and verifies its SHA-256, so
 # a run is a minute of downloads and no compiler. The `source` mode builds from
@@ -78,6 +79,15 @@ jobs:
         with:
           node-version: ${{ steps.pins.outputs.node }}
 
+      # The rule table in branding.py is pinned to the bytes of the tag in
+      # pins.env. Run it over the fixtures before building, so a bump that
+      # moved a literal fails here instead of half-branding a release. The
+      # tarball integration test is skipped: no cached asset on a clean runner.
+      - name: Test the branding rules
+        env:
+          EC_SKIP_NETWORK: "1"
+        run: python3 -m unittest discover -s element-call/tests -p 'test_*.py'
+
       - name: Build the bundle
         run: |
           set -euo pipefail
@@ -125,6 +135,17 @@ jobs:
           tar -xzf dist/plotina-element-call.tar.gz -C check
           grep -q 'src="/noise/logic.js"' check/element-call-plotina/index.html
           grep -q 'src="/noise/boot.js"' check/element-call-plotina/index.html
+          # Branding: the artifact re-derives every counter in branding.py's
+          # table, and the shell must not carry the upstream name at all.
+          python3 element-call/branding.py --check check/element-call-plotina
+          grep -q '<title>Plotina Call</title>' check/element-call-plotina/index.html
+          grep -q 'href="/plotina-icon.svg"' check/element-call-plotina/index.html
+          if grep -q 'Element Call' check/element-call-plotina/index.html; then
+            echo "index.html still carries the upstream brand" >&2
+            exit 1
+          fi
+          test -s check/element-call-plotina/plotina-icon.svg
+          test -s check/element-call-plotina/plotina-512.png
           grep -q '"livekit_service_url"' check/element-call-plotina/config.json
           test -s check/element-call-plotina/LICENSE-AGPL-3.0
           test -s check/element-call-plotina/noise/vendor/dfn.esm.js
