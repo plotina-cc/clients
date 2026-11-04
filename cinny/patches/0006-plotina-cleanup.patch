@@ -1,0 +1,13 @@
+diff --git a/src/app/features/settings/devices/LocalBackup.tsx b/src/app/features/settings/devices/LocalBackup.tsx
+index 00128c8..4218b23 100644
+--- a/src/app/features/settings/devices/LocalBackup.tsx
++++ b/src/app/features/settings/devices/LocalBackup.tsx
+@@ -28,7 +28,7 @@ function ExportKeys() {
+         const blob = new Blob([encKeys], {
+           type: 'text/plain;charset=us-ascii',
+         });
+-        FileSaver.saveAs(blob, 'cinny-keys.txt');
++        FileSaver.saveAs(blob, 'plotina-keys.txt');
+       },
+       [mx]
+     )
