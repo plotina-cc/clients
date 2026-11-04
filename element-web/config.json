@@ -15,6 +15,7 @@
   },
   "branding": {
     "logo_link_url": "https://plotina.cc",
+    "welcome_background_url": "/plotina-bg.png",
     "auth_header_logo_url": "/plotina-icon.svg",
     "auth_footer_links": [
       {
