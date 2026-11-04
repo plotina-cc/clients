@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Install the Plotina Element AppImage for one user and make it the handler for
+# Install the Plotina Desktop AppImage for one user and make it the handler for
 # the SSO callback scheme. Run as the desktop user, not root.
 #
-#   scripts/install-appimage.sh ~/Downloads/Plotina-Element.AppImage
+#   scripts/install-appimage.sh ~/Downloads/Plotina-Desktop.AppImage
 #
 # AppImages do not register their .desktop file by themselves, so without this
 # step the browser keeps opening the upstream Element for io.element.desktop.
 set -euo pipefail
 
-APPIMAGE="${1:?usage: install-appimage.sh <Plotina-Element.AppImage>}"
+APPIMAGE="${1:?usage: install-appimage.sh <Plotina-Desktop.AppImage>}"
 [ -f "$APPIMAGE" ] || { echo "no such file: $APPIMAGE" >&2; exit 1; }
 APPIMAGE="$(readlink -f "$APPIMAGE")"
 
 PREFIX="${PREFIX:-$HOME/.local}"
-BIN="$PREFIX/bin/plotina-element"
-DESKTOP="$PREFIX/share/applications/plotina-element.desktop"
+BIN="$PREFIX/bin/plotina-desktop"
+DESKTOP="$PREFIX/share/applications/plotina-desktop.desktop"
 ICON_DIR="$PREFIX/share/icons/hicolor"
 
 install -d "$PREFIX/bin" "$(dirname "$DESKTOP")"
@@ -37,13 +37,13 @@ for icon in "$TMP"/squashfs-root/*.png; do
         *32x32*)   size=32 ;;
     esac
     [ -n "$size" ] || continue
-    install -Dm 644 "$icon" "$ICON_DIR/${size}x${size}/apps/plotina-element.png"
+    install -Dm 644 "$icon" "$ICON_DIR/${size}x${size}/apps/plotina-desktop.png"
 done
 
-# The AppImage ships one plain plotina-element.png; treat it as the largest icon.
-if [ ! -f "$ICON_DIR/512x512/apps/plotina-element.png" ] && [ -f "$TMP/squashfs-root/plotina-element.png" ]; then
-    install -Dm 644 "$TMP/squashfs-root/plotina-element.png" \
-        "$ICON_DIR/512x512/apps/plotina-element.png"
+# The AppImage ships one plain plotina-desktop.png; treat it as the largest icon.
+if [ ! -f "$ICON_DIR/512x512/apps/plotina-desktop.png" ] && [ -f "$TMP/squashfs-root/plotina-desktop.png" ]; then
+    install -Dm 644 "$TMP/squashfs-root/plotina-desktop.png" \
+        "$ICON_DIR/512x512/apps/plotina-desktop.png"
 fi
 
 cat > "$DESKTOP" <<EOF
@@ -53,15 +53,15 @@ Comment=Element for plotina.cc
 Exec="$BIN" --no-sandbox %U
 Terminal=false
 Type=Application
-Icon=plotina-element
-StartupWMClass=plotina-element
+Icon=plotina-desktop
+StartupWMClass=plotina-desktop
 MimeType=x-scheme-handler/io.element.desktop;x-scheme-handler/element;x-scheme-handler/cc.plotina.element;
 Categories=Network;InstantMessaging;Chat;
 EOF
 
 command -v update-desktop-database >/dev/null && update-desktop-database "$PREFIX/share/applications" || true
 for scheme in io.element.desktop element cc.plotina.element; do
-    xdg-mime default plotina-element.desktop "x-scheme-handler/$scheme"
+    xdg-mime default plotina-desktop.desktop "x-scheme-handler/$scheme"
 done
 
 if command -v gio >/dev/null; then

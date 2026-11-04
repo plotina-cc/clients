@@ -89,11 +89,11 @@ the installer as the desktop user:
 element-desktop/scripts/install-appimage.sh ~/Downloads/Plotina-Desktop.AppImage
 ```
 
-It puts the image in `~/.local/bin/plotina-element`, installs the icon and
+It puts the image in `~/.local/bin/plotina-desktop`, installs the icon and
 desktop entry, and makes `io.element.desktop`, `element` and
 `cc.plotina.element` point at it. The `.deb` installs the same desktop entry
 system-wide; if an upstream Element is already the default handler, choose
-Plotina Element once in the browser's protocol prompt.
+Plotina Desktop once in the browser's protocol prompt.
 
 The same steps run in CI: `.github/workflows/build-element-desktop.yml` triggers
 on a `v*-plotina.*` tag, builds one webapp and hands it to the Linux and Windows
@@ -129,7 +129,7 @@ be installed side by side.
 - Settings → Voice and Video shows the noise slider (default 60).
 - In a call, `window.__plotinaNoiseStats` in the devtools console counts
   `callRequests`/`processed`; `window.__plotinaNoise.isSupported()` is `true`.
-- The app is called "Plotina Element" and logs into plotina.cc by default.
+- The app is called "Plotina Desktop" and logs into plotina.cc by default.
 - `Help → About` shows 1.12.32; there is no update prompt.
 
 ## Licence

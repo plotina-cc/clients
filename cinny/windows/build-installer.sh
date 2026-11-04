@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Wrap a cross-compiled cinny.exe into a per-user NSIS installer.
+# Wrap a cross-compiled plotina-lite.exe into a per-user NSIS installer.
 #
-#   windows/build-installer.sh <path to cinny.exe> <version>
+#   windows/build-installer.sh <path to plotina-lite.exe> <version>
 #
 # Needs makensis (Arch: yay -S nsis, Debian: apt install nsis).
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EXE="${1:?usage: build-installer.sh <cinny.exe> <version>}"
-VERSION="${2:?usage: build-installer.sh <cinny.exe> <version>}"
+EXE="${1:?usage: build-installer.sh <plotina-lite.exe> <version>}"
+VERSION="${2:?usage: build-installer.sh <plotina-lite.exe> <version>}"
 
 # NSIS resolves File relative to the script, so hand it an absolute path.
 EXE="$(cd "$(dirname "$EXE")" && pwd)/$(basename "$EXE")"

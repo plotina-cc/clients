@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the Plotina Element Web image from this directory.
+# Build the Plotina Web image from this directory.
 #
 # The Dockerfile expects the shared ../noise overlay in its build context, while
 # the source tree keeps that overlay one level up. Assemble a throwaway context

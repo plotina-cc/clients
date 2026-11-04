@@ -35,7 +35,7 @@ alongside a release build rather than over it.
 ## Building
 
 CI only (`.github/workflows/build-element-x.yml`). Tags `v*-plotina-x.*` and `workflow_dispatch`
-both build; a tag also publishes a release with `Plotina-ElementX.apk`.
+both build; a tag also publishes a release with `Plotina-X*.apk`.
 
 Locally:
 

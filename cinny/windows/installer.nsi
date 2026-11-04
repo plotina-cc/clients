@@ -1,11 +1,11 @@
 ; Plotina (Cinny) per-user installer.
 ;
 ; Tauri's CLI refuses to bundle Windows installers on a Linux host, so this
-; script builds the NSIS setup from the cross-compiled cinny.exe with makensis.
+; script builds the NSIS setup from the cross-compiled plotina-lite.exe with makensis.
 ; It installs into %LOCALAPPDATA%, needs no admin rights, and bootstraps the
 ; WebView2 runtime when the machine does not have it yet.
 ;
-;   makensis -DVERSION=4.12.8 -DAPPEXE=cinny.exe -DOUTFILE=Plotina-4.12.8-setup.exe installer.nsi
+;   makensis -DVERSION=4.12.8 -DAPPEXE=plotina-lite.exe -DOUTFILE=Plotina-4.12.8-setup.exe installer.nsi
 
 Unicode true
 SetCompressor /SOLID lzma
@@ -18,10 +18,10 @@ RequestExecutionLevel user
   !define VERSION "0.0.0"
 !endif
 !ifndef EXENAME
-  !define EXENAME "cinny.exe"
+  !define EXENAME "plotina-lite.exe"
 !endif
 !ifndef EXEPATH
-  !define EXEPATH "cinny.exe"
+  !define EXEPATH "plotina-lite.exe"
 !endif
 !ifndef OUTFILE
   !define OUTFILE "Plotina-${VERSION}-setup.exe"
