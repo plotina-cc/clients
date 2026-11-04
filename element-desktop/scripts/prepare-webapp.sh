@@ -77,6 +77,7 @@ cp -a "$REPO_ROOT/noise/vendor/." "$NOISE/vendor/"
 
 echo "==> noise assets"
 "$PYTHON" "$REPO_ROOT/cinny/scripts/fetch-noise.py" --dest "$NOISE"
+"$PYTHON" "$REPO_ROOT/noise/scripts/fetch-dpdfnet.py" --dest "$NOISE"
 
 echo "==> config"
 # The DSN is the one deployment value that may change without a commit:
@@ -116,6 +117,10 @@ test -s "$DEST/NOTICE"
 test -f "$DEST/noise/vendor/dfn.esm.js"
 test -f "$DEST/noise/dfn/v3/pkg/df_bg.wasm"
 test -f "$DEST/noise/dfn/v3/models/DeepFilterNet3_onnx.tar.gz"
+test -f "$DEST/noise/vendor/dpdfnet.esm.js"
+test -f "$DEST/noise/vendor/ort/ort.wasm.bundle.min.mjs"
+test -f "$DEST/noise/vendor/ort/ort-wasm-simd-threaded.wasm"
+test -f "$DEST/noise/vendor/dpdfnet/dpdfnet2_48khz_hr/model_stateful.onnx"
 test -f "$DEST/config.json"
 "$PYTHON" "$REPO_ROOT/element-web/scripts/render-config.py" --check --config "$DEST/config.json"
 

@@ -34,6 +34,30 @@ RUN set -eux; \
 COPY noise/logic.js /app/noise/logic.js
 COPY noise/boot.js /app/noise/boot.js
 COPY noise/vendor/ /app/noise/vendor/
+# DPDFNet experimental backend: the two big binaries (ort wasm + model) are
+# gitignored and pinned by SHA-256 in noise/dpdfnet.lock.json — same policy as
+# the DFN3 assets above, so fetch them at build time instead of shipping the
+# un-fetched context. fetch-dpdfnet.py and the lock ride in /tmp only, like
+# branding.py; noise/tests never enters the image (the COPYs above are
+# selective). The Alpine base already trusts CAs (the wget step proves it);
+# python3 comes in as a virtual package and leaves again.
+COPY noise/scripts/fetch-dpdfnet.py /tmp/fetch-dpdfnet.py
+COPY noise/dpdfnet.lock.json /tmp/dpdfnet.lock.json
+RUN set -eux; \
+    apk add --no-cache --virtual .dpdfnet python3; \
+    python3 /tmp/fetch-dpdfnet.py --lock /tmp/dpdfnet.lock.json --dest /app/noise; \
+    apk del .dpdfnet; \
+    rm -f /tmp/fetch-dpdfnet.py /tmp/dpdfnet.lock.json; \
+    gzip -9 -k /app/noise/vendor/ort/ort-wasm-simd-threaded.wasm; \
+    test -s /app/noise/vendor/dpdfnet.esm.js; \
+    test -s /app/noise/vendor/ort/ort.wasm.bundle.min.mjs; \
+    test -s /app/noise/vendor/ort/ort-wasm-simd-threaded.mjs; \
+    test -f /app/noise/vendor/ort/ort-wasm-simd-threaded.wasm.gz; \
+    test -f /app/noise/vendor/dpdfnet/dpdfnet2_48khz_hr/model_stateful.onnx; \
+    test -s /app/noise/vendor/dpdfnet/dpdfnet2_48khz_hr/initial_states.bin; \
+    test -s /app/noise/vendor/dpdfnet/dpdfnet2_48khz_hr/initial_states.json; \
+    test -s /app/noise/vendor/dpdfnet/dpdfnet2_48khz_hr/config.ini; \
+    ! test -e /app/noise/tests; ! test -e /app/noise/scripts
 COPY plotina-icon.svg /app/plotina-icon.svg
 COPY plotina-512.png /app/plotina-512.png
 # plotina-icon-192.png is the apple-touch-icon target and plotina-bg.png the
@@ -81,11 +105,21 @@ RUN set -eux; \
         gzip_static on;\
         add_header Cache-Control "public, max-age=2592000";\
     }\
+    location /noise/vendor/ort/ {\
+        gzip_static on;\
+        add_header Cache-Control "public, max-age=2592000";\
+    }\
+    location /noise/vendor/dpdfnet/ {\
+        gzip_static on;\
+        add_header Cache-Control "public, max-age=2592000";\
+    }\
     location /noise/ {\
         add_header Cache-Control "no-cache";\
     }\
 ' /etc/nginx/templates/default.conf.template; \
-    grep -q "/noise/dfn/" /etc/nginx/templates/default.conf.template
+    grep -q "/noise/dfn/" /etc/nginx/templates/default.conf.template; \
+    grep -q "/noise/vendor/ort/" /etc/nginx/templates/default.conf.template; \
+    grep -q "/noise/vendor/dpdfnet/" /etc/nginx/templates/default.conf.template
 
 # The two noise <script> tags belong to the noise overlay, not to the brand:
 # they are inserted here, before branding.py runs, and the brand pass leaves

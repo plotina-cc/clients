@@ -11,7 +11,11 @@ licence and the exact pins.
 
 Third-party components keep their own copyright and licence notices. The
 vendored DeepFilterNet wrapper carries the MIT and Apache-2.0 texts in
-noise/vendor/LICENSE-MIT and noise/vendor/LICENSE-APACHE.
+noise/vendor/LICENSE-MIT and noise/vendor/LICENSE-APACHE. The experimental
+DPDFNet backend (noise/vendor/dpdfnet.esm.js and the model zoo under
+noise/vendor/dpdfnet/) is Apache-2.0 — see noise/vendor/LICENSE-DPDFNET.txt
+and the LICENSE-APACHE text next to it; it runs on onnxruntime-web
+(noise/vendor/ort/), MIT — see noise/vendor/LICENSE-ORT.
 
 Upstream copyright notices are retained in the upstream sources; this notice
 does not replace them.

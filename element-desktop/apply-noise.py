@@ -36,6 +36,17 @@ REQUIRED_ASSETS = [
     "vendor/dfn.esm.js",
     "dfn/v3/pkg/df_bg.wasm",
     "dfn/v3/models/DeepFilterNet3_onnx.tar.gz",
+    # DPDFNet experimental backend; the binaries come from fetch-dpdfnet.py
+    # (prepare-webapp.sh runs it before this script). copytree carries them
+    # into the webapp, this list is the assertion.
+    "vendor/dpdfnet.esm.js",
+    "vendor/dpdfnet/dpdfnet2_48khz_hr/model_stateful.onnx",
+    "vendor/dpdfnet/dpdfnet2_48khz_hr/initial_states.bin",
+    "vendor/dpdfnet/dpdfnet2_48khz_hr/initial_states.json",
+    "vendor/dpdfnet/dpdfnet2_48khz_hr/config.ini",
+    "vendor/ort/ort.wasm.bundle.min.mjs",
+    "vendor/ort/ort-wasm-simd-threaded.mjs",
+    "vendor/ort/ort-wasm-simd-threaded.wasm",
 ]
 
 WEB_BASE_URL = "https://chat.plotina.cc/"

@@ -32,6 +32,7 @@ config/element/
     logic.js              pure decisions: what is call audio, level clamping, strings
     boot.js               browser wiring: getUserMedia wrapper + settings slider
     vendor/dfn.esm.js     vendored deepfilternet3-noise-filter 1.3.0 (Apache-2.0)
+    vendor/dpdfnet.esm.js experimental DPDFNet backend (Apache-2.0)
   tests/
     branding_test.py      brand-pass unit tests (python3 -m unittest, fixture copies)
     fixtures/             byte-exact upstream index.html/error-view.js/config.json
@@ -39,8 +40,11 @@ config/element/
     integration.html integration.sh   real audio path with a fake microphone
 ```
 
-Model assets (`df_bg.wasm`, `DeepFilterNet3_onnx.tar.gz`) are **not** in git: the
-Dockerfile downloads them at build time and verifies their SHA-256.
+Model assets (`df_bg.wasm`, `DeepFilterNet3_onnx.tar.gz`, and the DPDFNet
+binary set under `vendor/ort/` + `vendor/dpdfnet/`) are **not** in git: the
+Dockerfile downloads them at build time and verifies their SHA-256 — the DFN3
+pair with `wget` against the pins above, the DPDFNet pair by running the
+repo-level `noise/scripts/fetch-dpdfnet.py` with `noise/dpdfnet.lock.json`.
 
 ## Error reporting (GlitchTip)
 

@@ -15,6 +15,47 @@ env:
   UPSTREAM_REPO: https://github.com/element-hq/element-web.git
 
 jobs:
+  # The noise layer is baked into the webapp.asar; its tests must not regress.
+  # The pinned DPDFNet binaries are gitignored, so fetch them first: the python
+  # suite verifies their SHA-256 digests and the headless smoke drives the real
+  # browser pages (run-headless.sh).
+  noise-tests:
+    name: noise tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Fetch DPDFNet assets
+        run: python3 noise/scripts/fetch-dpdfnet.py
+
+      - name: Noise tests (python)
+        run: python3 -m unittest discover -s noise/tests -p '*_test.py'
+
+      - name: Noise tests (node)
+        run: node --test noise/tests/
+
+      - name: Noise tests (headless browser)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for b in chromium chromium-browser google-chrome; do
+            if command -v "$b" >/dev/null 2>&1; then export CHROME="$b"; break; fi
+          done
+          if [ -n "${CHROME:-}" ]; then
+            bash noise/tests/run-headless.sh
+          else
+            echo "::notice::no chromium binary on this runner; headless smoke skipped"
+          fi
+
   # One webapp for both platforms: the desktop shell embeds a fixed asar, so the
   # overlay has to be applied once and handed to the packaging jobs.
   webapp:
@@ -118,7 +159,11 @@ jobs:
           pnpm run asar-webapp
           # asar lists entries with path.sep, so normalize before matching.
           LIST="$(pnpm exec asar list webapp.asar | tr '\\' '/')"
-          for f in /noise/dfn/v3/pkg/df_bg.wasm /config.json; do
+          for f in /noise/dfn/v3/pkg/df_bg.wasm \
+                   /noise/vendor/dpdfnet.esm.js \
+                   /noise/vendor/ort/ort-wasm-simd-threaded.wasm \
+                   /noise/vendor/dpdfnet/dpdfnet2_48khz_hr/model_stateful.onnx \
+                   /config.json; do
             if ! printf '%s\n' "$LIST" | grep -qx "$f"; then
               echo "missing $f in webapp.asar" >&2
               printf '%s\n' "$LIST" | head -30

@@ -32,6 +32,8 @@ commercial licence. The builds here use the AGPL option.
 | --- | --- | --- | --- |
 | DeepFilterNet | `deep_filter` crate `v0.5.6` in FluffyChat; the DFN3 model used by it and by the web clients | MIT OR Apache-2.0 | [Rikorose/DeepFilterNet @ v0.5.6](https://github.com/Rikorose/DeepFilterNet/tree/v0.5.6) |
 | mezon-noise-suppression | `noise/vendor/dfn.esm.js`, the WASM binding around DeepFilterNet3 (`noise/vendor/LICENSE-*`) | MIT OR Apache-2.0 | [mezonai/mezon-noise-suppression](https://github.com/mezonai/mezon-noise-suppression) |
+| DPDFNet | `noise/vendor/dpdfnet.esm.js` and the stateful `dpdfnet2_48khz_hr` model zoo (`noise/dpdfnet.lock.json`, `noise/vendor/LICENSE-DPDFNET.txt`) | Apache-2.0 | [shimondoodkin/DPDFNet @ 2e6a8aa](https://github.com/shimondoodkin/DPDFNet/tree/2e6a8aac54e8d431d632b2e04947ffdc7af4641c) |
+| onnxruntime-web | `noise/vendor/ort/*`, the WASM runtime the DPDFNet backend runs on (`noise/vendor/LICENSE-ORT`) | MIT | [microsoft/onnxruntime @ 1.31.1](https://github.com/microsoft/onnxruntime) |
 
 ## Error reporting
 

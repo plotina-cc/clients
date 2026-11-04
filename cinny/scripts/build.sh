@@ -32,6 +32,9 @@ SENTRY_RELEASE="${VITE_SENTRY_RELEASE:-cinny@$(git -C "$ROOT" describe --tags --
 
 echo "==> noise assets"
 python3 "$ROOT/scripts/fetch-noise.py"
+# DPDFNet backend binaries (ort wasm + model): pinned by dpdfnet.lock.json,
+# same policy as the DFN3 assets above. Without them apply-noise.py fails.
+python3 "$(dirname "$ROOT")/noise/scripts/fetch-dpdfnet.py" --dest "$ROOT/noise"
 
 echo "==> plotina patches ($SENTRY_RELEASE)"
 cd cinny

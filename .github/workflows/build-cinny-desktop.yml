@@ -101,6 +101,40 @@ jobs:
           cp ../noise/logic.js ../noise/boot.js ../noise/cinny-ui.js noise/
           cp -a ../noise/vendor/. noise/vendor/
           python scripts/fetch-noise.py
+          # DPDFNet backend binaries (ort wasm + model): gitignored and pinned
+          # by noise/dpdfnet.lock.json, same policy as the DFN3 assets above.
+          python ../noise/scripts/fetch-dpdfnet.py --dest noise
+
+      # The noise layer is baked into the bundle; its tests must not regress.
+      # The pinned binaries are fetched first: the python suite verifies their
+      # SHA-256 digests, the node suite runs a real inference pass, and the
+      # headless smoke drives the browser pages when a chromium is available.
+      # Linux runner only: python3 and chromium are not guaranteed on Windows.
+      - name: Fetch DPDFNet assets for the tests
+        if: matrix.name == 'linux'
+        run: python3 noise/scripts/fetch-dpdfnet.py
+
+      - name: Noise tests (python)
+        if: matrix.name == 'linux'
+        run: python3 -m unittest discover -s noise/tests -p '*_test.py'
+
+      - name: Noise tests (node)
+        if: matrix.name == 'linux'
+        run: node --test noise/tests/
+
+      - name: Noise tests (headless browser)
+        if: matrix.name == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for b in chromium chromium-browser google-chrome; do
+            if command -v "$b" >/dev/null 2>&1; then export CHROME="$b"; break; fi
+          done
+          if [ -n "${CHROME:-}" ]; then
+            bash noise/tests/run-headless.sh
+          else
+            echo "::notice::no chromium binary on this runner; headless smoke skipped"
+          fi
 
       - name: Apply the Sentry init
         working-directory: cinny
@@ -198,6 +232,10 @@ jobs:
           grep -q 'noise/boot.js' upstream/cinny/dist/public/element-call/index.html
           test -f upstream/cinny/dist/noise/dfn/v3/pkg/df_bg.wasm
           test -f upstream/cinny/dist/noise/vendor/dfn.esm.js
+          test -f upstream/cinny/dist/noise/vendor/dpdfnet.esm.js
+          test -f upstream/cinny/dist/noise/vendor/ort/ort.wasm.bundle.min.mjs
+          test -f upstream/cinny/dist/noise/vendor/ort/ort-wasm-simd-threaded.wasm
+          test -f upstream/cinny/dist/noise/vendor/dpdfnet/dpdfnet2_48khz_hr/model_stateful.onnx
           test -s upstream/cinny/dist/LICENSE-AGPL-3.0
           test -s upstream/cinny/dist/NOTICE
           grep -q 'plotina-icon.svg' upstream/cinny/dist/index.html
