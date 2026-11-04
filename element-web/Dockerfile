@@ -21,15 +21,28 @@ ARG DFN_WASM_SHA256=440b5d12b6ea7d95008736f844221d7874ee15de5cb10d3015002470fdba
 ARG DFN_MODEL_SHA256=c94d91f70911001c946e0fabb4aa9adc37045f45a03b56008cb0c8244cb63616
 
 # Model assets are fetched at build time and pinned by checksum, so the image is
-# reproducible and clients never talk to the upstream CDN at runtime.
+# reproducible and clients never talk to the upstream CDN at runtime. Build hosts
+# that cannot reach the CDN (ISP blocks) can pre-seed the gitignored noise/dfn
+# tree; the COPY below carries whatever is there (.keep files keep the
+# directories present in the build context), the fetch is skipped only when the
+# real file exists, and the checksum check always runs.
 # The base image is Alpine: no curl, BusyBox wget handles HTTPS fine.
+COPY noise/dfn/ /app/noise/dfn/
 RUN set -eux; \
-    mkdir -p /app/noise/dfn/v3/pkg /app/noise/dfn/v3/models; \
-    wget -q -O /app/noise/dfn/v3/pkg/df_bg.wasm "$DFN_BASE/pkg/df_bg.wasm"; \
+    if [ -s /app/noise/dfn/v3/pkg/df_bg.wasm ]; then \
+        echo "using pre-seeded df_bg.wasm"; \
+    else \
+        wget -q -O /app/noise/dfn/v3/pkg/df_bg.wasm "$DFN_BASE/pkg/df_bg.wasm"; \
+    fi; \
     echo "$DFN_WASM_SHA256  /app/noise/dfn/v3/pkg/df_bg.wasm" | sha256sum -c -; \
     gzip -9 -k /app/noise/dfn/v3/pkg/df_bg.wasm; \
-    wget -q -O /app/noise/dfn/v3/models/DeepFilterNet3_onnx.tar.gz "$DFN_BASE/models/DeepFilterNet3_onnx.tar.gz"; \
-    echo "$DFN_MODEL_SHA256  /app/noise/dfn/v3/models/DeepFilterNet3_onnx.tar.gz" | sha256sum -c -
+    if [ -s /app/noise/dfn/v3/models/DeepFilterNet3_onnx.tar.gz ]; then \
+        echo "using pre-seeded DeepFilterNet3 model"; \
+    else \
+        wget -q -O /app/noise/dfn/v3/models/DeepFilterNet3_onnx.tar.gz "$DFN_BASE/models/DeepFilterNet3_onnx.tar.gz"; \
+    fi; \
+    echo "$DFN_MODEL_SHA256  /app/noise/dfn/v3/models/DeepFilterNet3_onnx.tar.gz" | sha256sum -c -; \
+    rm -f /app/noise/dfn/v3/pkg/.keep /app/noise/dfn/v3/models/.keep
 
 COPY noise/logic.js /app/noise/logic.js
 COPY noise/boot.js /app/noise/boot.js

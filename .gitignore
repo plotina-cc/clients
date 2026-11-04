@@ -17,3 +17,10 @@ element-desktop/dist-stable/
 node_modules/
 e2e/test-results/
 e2e/playwright-report/
+
+# DeepFilterNet3 model assets: preseeded by the build host when its network
+# cannot reach cdn.mezon.ai; the .keep files keep the dirs in docker contexts.
+noise/dfn/v3/pkg/*
+!noise/dfn/v3/pkg/.keep
+noise/dfn/v3/models/*
+!noise/dfn/v3/models/.keep
