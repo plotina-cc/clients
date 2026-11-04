@@ -91,6 +91,12 @@ echo "==> overlay"
 "$PYTHON" "$ROOT/apply-noise.py" --webapp "$DEST" --noise "$NOISE" \
   --config "$CONFIG" --brand "Plotina Desktop"
 
+# Branding runs after the noise overlay: apply-noise.py owns the JS hooks and
+# config.json, branding.py owns the browser-facing shell (title, icons, meta,
+# error view) and must see the final index.html.
+echo "==> branding"
+"$PYTHON" "$ROOT/branding.py" --webapp "$DEST" --icons "$REPO_ROOT/branding/icons"
+
 # The webapp directory becomes webapp.asar inside the installer; the licence
 # text and the modification notice have to travel with it. Byte-identical to
 # ../LICENSE and ../NOTICE.
@@ -101,6 +107,10 @@ install -m 0644 "$REPO_ROOT/NOTICE" "$DEST/NOTICE"
 echo "==> verify"
 grep -q 'noise/boot.js' "$DEST/index.html"
 grep -q 'noise/logic.js' "$DEST/index.html"
+grep -q 'Plotina Desktop' "$DEST/index.html"
+! grep -q '>Element</title>' "$DEST/index.html"
+! grep -q 'element-app-logo' "$DEST"/bundles/*/error-view.js
+test ! -e "$DEST/mobile_guide"
 test -s "$DEST/LICENSE-AGPL-3.0"
 test -s "$DEST/NOTICE"
 test -f "$DEST/noise/vendor/dfn.esm.js"
