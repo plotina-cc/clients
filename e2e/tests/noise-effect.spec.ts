@@ -90,7 +90,11 @@ test.describe("DeepFilterNet3 in the browser", () => {
         );
       }
 
-      const level = 70; // DEFAULT_LEVEL of noise/plotina-dfn.js
+      // An arbitrary mid-range probe for the processor: this test measures
+      // that the model attenuates, not which level the app ships with. The
+      // shipped default is declared in noise/logic.js (DEFAULT_LEVEL) and is
+      // asserted value-agnostically in element-web/tests/unit.html.
+      const level = 70;
       const processor = new Processor({
         sampleRate,
         noiseReductionLevel: level,
