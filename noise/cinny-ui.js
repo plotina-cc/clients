@@ -35,6 +35,44 @@
     return level;
   }
 
+  function readBackend() {
+    try {
+      return L.resolveBackend({ stored: localStorage.getItem(L.BACKEND_KEY), search: "" });
+    } catch (e) {
+      return L.DEFAULT_BACKEND;
+    }
+  }
+
+  function writeBackend(value) {
+    var name = L.normalizeBackend(value);
+    try {
+      localStorage.setItem(L.BACKEND_KEY, name);
+    } catch (e) {
+      /* private mode */
+    }
+    // If a call frame shares this document (Cinny embeds Element Call), try
+    // the wrapper API first; otherwise the frame picks it up via "storage".
+    try {
+      var api = global.__plotinaNoise;
+      if (api && typeof api.setBackend === "function") api.setBackend(name);
+    } catch (e) {
+      /* no wrapper on this page */
+    }
+    syncBackendSelects();
+    return name;
+  }
+
+  function syncBackendSelects() {
+    var sel = document.querySelector("[data-plotina-backend]");
+    if (sel && sel.value !== readBackend()) sel.value = readBackend();
+  }
+
+  if (L.BACKEND_KEY) {
+    global.addEventListener("storage", function (e) {
+      if (e.key === null || e.key === L.BACKEND_KEY) syncBackendSelects();
+    });
+  }
+
   function findAnchor() {
     var paragraphs = document.querySelectorAll("p, span, div");
     for (var i = 0; i < paragraphs.length; i++) {
@@ -174,6 +212,41 @@
     hint.textContent = s.hint;
     hint.style.cssText = "font-size:12px;opacity:.6;margin-top:12px;";
 
+    /* Backend selector. The Cinny page itself never captures audio: the value
+       is written to the shared storage key and picked up live by boot.js in
+       the embedded Element Call frame (same origin, "storage" event). */
+    var beRow = document.createElement("div");
+    beRow.setAttribute("data-plotina-backend-row", "");
+    beRow.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:14px;";
+    var beLabel = document.createElement("span");
+    beLabel.textContent = (s.backend || "Noise suppression") + ":";
+    beLabel.style.cssText = "flex:0 0 auto;font-size:16px;";
+    var beSelect = document.createElement("select");
+    beSelect.setAttribute("data-plotina-backend", "");
+    beSelect.setAttribute("aria-label", s.backend || "Noise suppression");
+    beSelect.style.cssText =
+      "font:inherit;max-width:220px;flex:0 0 auto;border-radius:6px;padding:3px 8px;" +
+      "background:" + surface.background + ";color:" + surface.color + ";border:1px solid rgba(128,128,128,.5);";
+    if (L && L.BACKENDS) {
+      L.BACKENDS.forEach(function (id) {
+        var opt = document.createElement("option");
+        opt.value = id;
+        opt.textContent = L.BACKEND_LABELS[id];
+        beSelect.appendChild(opt);
+      });
+      beSelect.value = readBackend();
+      beSelect.addEventListener("change", function () {
+        writeBackend(beSelect.value);
+      });
+    }
+    var beNote = document.createElement("span");
+    beNote.setAttribute("data-plotina-backend-note", "");
+    beNote.textContent = L && L.strings && L.strings(lang).backendNote || "";
+    beNote.style.cssText = "flex-basis:100%;font-size:12px;opacity:.6;";
+    beRow.appendChild(beLabel);
+    beRow.appendChild(beSelect);
+    beRow.appendChild(beNote);
+
     range.addEventListener("input", function () {
       var next = writeLevel(range.value);
       value.textContent = String(next);
@@ -194,6 +267,7 @@
     card.appendChild(titleRow);
     card.appendChild(range);
     card.appendChild(hint);
+    card.appendChild(beRow);
     block.appendChild(heading);
     block.appendChild(card);
     return block;

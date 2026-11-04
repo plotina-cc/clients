@@ -1,0 +1,22 @@
+DPDFNet backend — third-party licences
+======================================
+
+Model: DPDFNet, official model zoo (https://github.com/ceva-ip/DPDFNet;
+stateful single-frame browser export hosted at
+https://github.com/shimondoodkin/DPDFNet, commit
+2e6a8aac54e8d431d632b2e04947ffdc7af4641c), Apache License 2.0 — full text in
+LICENSE-APACHE next to this file. The paper reference is "DPDFNet: Boosting
+DeepFilterNet2 via Dual-Path RNN" (arXiv:2512.16420).
+
+Files are pinned by URL + SHA-256 in noise/dpdfnet.lock.json and fetched by
+noise/scripts/fetch-dpdfnet.py; they are not committed to git (same policy as
+the DeepFilterNet3 wasm/model binaries).
+
+Runtime: onnxruntime-web 1.31.1 (https://github.com/microsoft/onnxruntime),
+MIT licence — see LICENSE-ORT.
+
+Our integration code (noise/vendor/dpdfnet.esm.js) implements the streaming
+STFT/iSTFT contract of the model's own reference driver (real_time_demo.py /
+enhance.py in the model repository): vorbis window, hop 480, FFT length 960,
+w_norm = 2*hop/win^2, stateful single-frame ONNX with all normalisation baked
+into the graph.

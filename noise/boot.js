@@ -70,6 +70,28 @@
   if (qLevel) level = L.clampLevel(qLevel[1]);
   var instances = new Set();
 
+  /* Backend selection: ?plotina-backend= > localStorage > dfn3. While a URL
+     override is present the selector reflects it but does not overwrite the
+     stored preference. */
+  var backendOverride = L.parseBackendOverride(location.search);
+  function readStoredBackend() {
+    try {
+      return localStorage.getItem(L.BACKEND_KEY);
+    } catch (e) {
+      return null;
+    }
+  }
+  var backend = L.resolveBackend({ stored: readStoredBackend(), search: location.search });
+
+  var stats = {
+    callRequests: 0, otherAudioRequests: 0, processed: 0, failed: 0, skipped: 0, retried: 0,
+    // which backend the user selected, and which one actually carried audio
+    // ("dfn3" | "dpdfnet4" | "raw")
+    requestedBackend: backend,
+    backend: backend,
+    last: "-",
+  };
+
   function setLevel(v, persist) {
     level = L.clampLevel(v);
     if (persist !== false) {
@@ -91,100 +113,207 @@
 
   /* ---------------------------------------------------------------- audio */
 
-  var modulePromise = null;
-  var moduleReady = false;
-  function loadModule() {
-    if (!modulePromise) {
-      modulePromise = import(MODULE_URL).then(
-        function (mod) {
-          moduleReady = true;
-          return mod;
-        },
-        function (e) {
-          modulePromise = null;
-          throw e;
-        },
-      );
+  /*
+   * One registry, unified backend interface:
+   *   load() -> module; def.createCore(mod) -> core implementing
+   *   initialize(), createAudioWorkletNode(ctx), setSuppressionLevel(v),
+   *   destroy(). vendor/dfn.esm.js is *not* modified; DFN3 gets an adapter
+   *   here, DPDFNet (vendor/dpdfnet.esm.js) implements the interface itself.
+   */
+  var DPDFNET_DIR = NOISE_BASE + "/vendor/dpdfnet/dpdfnet2_48khz_hr";
+  var ORT_DIR = NOISE_BASE + "/vendor/ort";
+  var BACKEND_DEFS = {
+    dfn3: {
+      moduleUrl: MODULE_URL,
+      prefetch: [ASSET_BASE + "/v3/pkg/df_bg.wasm", ASSET_BASE + "/v3/models/DeepFilterNet3_onnx.tar.gz"],
+      createCore: function (mod) {
+        var Core = mod.DeepFilterNet3Core || (mod.default && mod.default.DeepFilterNet3Core);
+        if (!Core) throw new Error("DeepFilterNet3Core is not exported by " + MODULE_URL);
+        return new Core({
+          sampleRate: 48000,
+          noiseReductionLevel: level,
+          assetConfig: { cdnUrl: ASSET_BASE },
+        });
+      },
+    },
+    dpdfnet4: {
+      moduleUrl: NOISE_BASE + "/vendor/dpdfnet.esm.js",
+      prefetch: [
+        DPDFNET_DIR + "/model_stateful.onnx",
+        DPDFNET_DIR + "/initial_states.bin",
+        ORT_DIR + "/ort.wasm.bundle.min.mjs",
+        ORT_DIR + "/ort-wasm-simd-threaded.mjs",
+        ORT_DIR + "/ort-wasm-simd-threaded.wasm",
+      ],
+      createCore: function (mod) {
+        if (!mod.createCore) throw new Error("createCore is not exported by the dpdfnet module");
+        return mod.createCore({
+          sampleRate: 48000,
+          noiseReductionLevel: level,
+          ortUrl: ORT_DIR + "/ort.wasm.bundle.min.mjs",
+          wasmUrl: ORT_DIR + "/ort-wasm-simd-threaded.wasm",
+          assetConfig: {
+            modelUrl: DPDFNET_DIR + "/model_stateful.onnx",
+            statesJsonUrl: DPDFNET_DIR + "/initial_states.json",
+            statesBinUrl: DPDFNET_DIR + "/initial_states.bin",
+          },
+        });
+      },
+    },
+  };
+
+  var modulePromises = {};
+  function loadModule(id) {
+    var def = BACKEND_DEFS[id];
+    if (!def) return Promise.reject(new Error("unknown noise backend: " + id));
+    if (!modulePromises[id]) {
+      modulePromises[id] = import(def.moduleUrl).catch(function (e) {
+        modulePromises[id] = null;
+        throw e;
+      });
     }
-    return modulePromise;
+    return modulePromises[id];
   }
 
   /* Two initialised cores are kept ready. Element Call asks for the microphone
      once on the pre-join screen and again when the call starts; with a single
-     core the preview consumed it and the call fell back to raw audio. */
+     core the preview consumed it and the call fell back to raw audio.
+     Pools are keyed by backend id; warmFailures bounds retries so a missing
+     asset directory cannot hammer the server, but every user action (a dial,
+     a backend switch) forces a fresh attempt. */
   var WARM_TARGET = 2;
-  var warmPool = [];
+  var warmPool = []; // [{id, core}]
   var warmPromise = null;
   var warmInFlight = false;
+  var warmTarget = null;
   var warmStarted = false;
   var warmError = null;
+  var warmFailures = {}; // per backend id
+  var WARM_MAX_FAILURES = 3;
 
-  function startWarm() {
-    if (warmInFlight || warmPool.length >= WARM_TARGET) return;
+  function warmPoolCount(id) {
+    var n = 0;
+    for (var i = 0; i < warmPool.length; i++) if (warmPool[i].id === id) n++;
+    return n;
+  }
+
+  function startWarm(id) {
+    if (warmInFlight || warmPoolCount(id) >= WARM_TARGET) return;
+    if ((warmFailures[id] || 0) >= WARM_MAX_FAILURES) return;
+    var def = BACKEND_DEFS[id];
+    if (!def) return;
     warmInFlight = true;
+    warmTarget = id;
     warmStarted = true;
-    try {
-      fetch(ASSET_BASE + "/v3/pkg/df_bg.wasm").catch(function () {});
-      fetch(ASSET_BASE + "/v3/models/DeepFilterNet3_onnx.tar.gz").catch(function () {});
-    } catch (e) {
-      /* best effort */
-    }
-    warmPromise = loadModule()
+    def.prefetch.forEach(function (url) {
+      try {
+        fetch(url).catch(function () {});
+      } catch (e) {
+        /* best effort */
+      }
+    });
+    warmPromise = loadModule(id)
       .then(function (mod) {
-        var Core = mod.DeepFilterNet3Core || (mod.default && mod.default.DeepFilterNet3Core);
-        if (!Core) throw new Error("DeepFilterNet3Core is not exported");
-        var core = new Core({
-          sampleRate: 48000,
-          noiseReductionLevel: level,
-          assetConfig: { cdnUrl: ASSET_BASE },
-        });
+        var core = def.createCore(mod);
         return core.initialize().then(function () {
-          return core;
+          return { id: id, core: core };
         });
       })
-      .then(function (core) {
-        warmPool.push(core);
+      .then(function (pair) {
+        warmPool.push(pair);
         window.__plotinaNoiseCoreReady = true;
       })
       .catch(function (e) {
         warmError = (e && e.message ? e.message : String(e)) || "unknown";
-        log("warm-up failed", warmError);
+        warmFailures[id] = (warmFailures[id] || 0) + 1;
+        log("warm-up failed (" + id + ")", warmError);
       })
       .then(function () {
         warmInFlight = false;
         warmPromise = null;
-        if (warmPool.length < WARM_TARGET) startWarm();
+        warmTarget = null;
+        if (warmPoolCount(id) < WARM_TARGET && backend === id) startWarm(id);
       });
   }
 
-  function warmUp() {
-    startWarm();
+  function warmUp(id, force) {
+    if (force !== false) warmFailures[id] = 0;
+    startWarm(id);
   }
 
-  /* Take one ready core and immediately start refilling the pool. */
-  function takeCore() {
-    var core = warmPool.shift() || null;
-    if (core) startWarm();
-    return core;
+  /* Take one ready core of the wanted backend and start refilling the pool
+     for the selected backend. */
+  function takeCore(id) {
+    for (var i = 0; i < warmPool.length; i++) {
+      if (warmPool[i].id === id) {
+        var pair = warmPool.splice(i, 1)[0];
+        startWarm(backend);
+        return pair.core;
+      }
+    }
+    return null;
   }
 
-  async function attachProcessor(stream, videoTracks) {
-    var mod = await loadModule();
-    var Core = mod.DeepFilterNet3Core || (mod.default && mod.default.DeepFilterNet3Core);
-    if (!Core) throw new Error("DeepFilterNet3Core is not exported by " + MODULE_URL);
+  /* Walk the fallback plan looking for a live core; give each candidate the
+     same brief warm-up window the original code used (3 s), then move on.
+     Returns {id, core} or null — null means raw audio. The decision loop is
+     the pure logic.js function; here are only the browser-side ports. */
+  function acquireCore(plan) {
+    return L.acquireBackendCore(plan, {
+      take: takeCore,
+      dead: function (id) {
+        return !warmInFlight && (warmFailures[id] || 0) >= WARM_MAX_FAILURES;
+      },
+      kick: function (id) {
+        warmUp(id, warmTarget !== id);
+      },
+      wait: function (id) {
+        if (!warmPromise) return Promise.resolve(false);
+        return Promise.race([
+          warmPromise.then(function () { return true; }, function () { return false; }),
+          new Promise(function (resolve) { setTimeout(function () { resolve(false); }, 3000); }),
+        ]);
+      },
+    });
+  }
 
+  function drainPool() {
+    warmPool.forEach(function (pair) {
+      try {
+        pair.core.destroy();
+      } catch (e) {
+        /* nothing else to do */
+      }
+    });
+    warmPool = [];
+    window.__plotinaNoiseCoreReady = false;
+  }
+
+  function setBackend(value, persist) {
+    backend = L.normalizeBackend(value);
+    if (persist !== false && !backendOverride) {
+      try {
+        localStorage.setItem(L.BACKEND_KEY, backend);
+      } catch (e) {
+        /* private mode */
+      }
+    }
+    // The warm pool holds cores of the previous backend: they would only sit
+    // there unused (and keep 25 MB of wasm/model alive), so drop them.
+    drainPool();
+    warmError = null;
+    warmStarted = false;
+    stats.requestedBackend = backend;
+    syncBackendSelect();
+    document.dispatchEvent(new CustomEvent("plotina-noise-backend", { detail: backend }));
+    warmUp(backend, true);
+  }
+
+  /* Attach an acquired, already-initialised core to the stream. Throws on any
+     problem (the core is released), and the caller falls back to raw audio. */
+  async function attachWith(id, core, stream, videoTracks) {
     var ctx = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
     try {
-      var core = takeCore();
-      if (!core) {
-        core = new Core({
-          sampleRate: 48000,
-          noiseReductionLevel: level,
-          assetConfig: { cdnUrl: ASSET_BASE },
-        });
-        await core.initialize();
-      }
-
       var node = await core.createAudioWorkletNode(ctx);
       var source = ctx.createMediaStreamSource(stream);
       var dest = ctx.createMediaStreamDestination();
@@ -225,6 +354,9 @@
       var tracks = (videoTracks || []).concat([cleanTrack]);
       return new MediaStream(tracks);
     } catch (e) {
+      if (core) {
+        try { core.destroy(); } catch (err) {}
+      }
       try { ctx.close(); } catch (err) {}
       throw e;
     }
@@ -234,7 +366,6 @@
   if (md && typeof md.getUserMedia === "function") {
     var original = md.getUserMedia.bind(md);
     md.__plotinaOriginal = original;
-    var stats = { callRequests: 0, otherAudioRequests: 0, processed: 0, failed: 0, skipped: 0, retried: 0, last: "-" };
 
     md.getUserMedia = async function (constraints) {
       var audio = constraints && constraints.audio;
@@ -248,39 +379,33 @@
       }
       stats.callRequests += 1;
       stats.last = "request";
-      if (!warmPool.length) {
-        /* The pre-join mic preview consumes the warm core, and the join request
-           arrives milliseconds later. Wait for the refill briefly instead of
-           handing back raw audio; only give up if it really is not coming. */
-        warmUp();
-        if (warmPromise) {
-          var ready = await Promise.race([
-            warmPromise.then(function () { return true; }, function () { return false; }),
-            new Promise(function (resolve) { setTimeout(function () { resolve(false); }, 3000); }),
-          ]);
-          if (!ready || !warmPool.length) {
-            stats.skipped += 1;
-            stats.last = ready ? "skipped (warm-up failed)" : "skipped (core not ready in 3s)";
-            return original(constraints);
-          }
-        } else {
-          stats.skipped += 1;
-          stats.last = "skipped (no warm-up)";
-          return original(constraints);
-        }
+
+      /* The pre-join mic preview consumes the warm core, and the join request
+         arrives milliseconds later. acquireCore waits for the refill per
+         backend of the fallback plan (3 s each), and returns null only when
+         no model core is coming: then the user gets raw audio, never a
+         blocked call. */
+      var got = await acquireCore(L.backendPlan(backend));
+      if (!got) {
+        stats.skipped += 1;
+        stats.backend = L.RAW_BACKEND;
+        if (stats.last === "request") stats.last = "skipped (no warm-up)";
+        return original(constraints);
       }
 
       return original(L.rawAudioConstraints(constraints)).then(
         function (stream) {
           var video = stream.getVideoTracks();
-          return attachProcessor(stream, video).then(
+          return attachWith(got.id, got.core, stream, video).then(
             function (processed) {
               stats.processed += 1;
-              stats.last = "processed ok";
+              stats.backend = L.resolveBackendAfterAttempt(got.id, [got.id]);
+              stats.last = "processed ok on " + got.id;
               return processed;
             },
             function (e) {
               stats.failed += 1;
+              stats.backend = L.RAW_BACKEND;
               stats.last = "processing failed: " + (e && (e.name || e.message) ? (e.name ? e.name + " " : "") + (e.message || "") : String(e)).slice(0, 90);
               log("falling back to browser audio:", e && e.message ? e.message : e);
               return stream;
@@ -393,11 +518,56 @@
     hint.textContent = s.hint;
     hint.style.cssText = "flex-basis:100%;font-size:12px;opacity:.6;margin-top:-4px;";
 
+    // Backend selector, one line under the slider: a <select> writing the
+    // storage key boot.js reads at load; the warm pool switches in setBackend().
+    var beRow = document.createElement("div");
+    beRow.setAttribute("data-plotina-backend-row", "");
+    beRow.style.cssText = "flex-basis:100%;display:flex;align-items:center;gap:8px;margin-top:8px;";
+    var beLabel = document.createElement("span");
+    beLabel.textContent = s.backend + ":";
+    var beSelect = document.createElement("select");
+    beSelect.id = "plotina-noise-backend";
+    beSelect.style.cssText = "font:inherit;background:transparent;color:inherit;border:1px solid rgba(128,128,128,.5);border-radius:6px;padding:2px 6px;";
+    beSelect.setAttribute("aria-label", s.backend);
+    L.BACKENDS.forEach(function (id) {
+      var opt = document.createElement("option");
+      opt.value = id;
+      opt.textContent = L.BACKEND_LABELS[id];
+      beSelect.appendChild(opt);
+    });
+    beSelect.value = backend;
+    beSelect.disabled = !!backendOverride;
+    beSelect.addEventListener("change", function () {
+      setBackend(beSelect.value);
+    });
+    var beNote = document.createElement("span");
+    beNote.setAttribute("data-plotina-backend-note", "");
+    beNote.style.cssText = "font-size:12px;opacity:.6;";
+    beRow.appendChild(beLabel);
+    beRow.appendChild(beSelect);
+    beRow.appendChild(beNote);
+
     row.appendChild(label);
     row.appendChild(range);
     row.appendChild(value);
     row.appendChild(hint);
+    row.appendChild(beRow);
+    syncBackendSelect();
     return row;
+  }
+
+  /* Keep every live selector in sync (settings may be rebuilt on re-render,
+     and the Cinny page / embedded call frame share the same storage key). */
+  function syncBackendSelect() {
+    var sels = document.querySelectorAll("#plotina-noise-backend");
+    for (var i = 0; i < sels.length; i++) {
+      if (sels[i].value !== backend) sels[i].value = backend;
+      sels[i].disabled = !!backendOverride;
+    }
+    var lang = document.documentElement.lang || navigator.language;
+    var text = backendOverride ? "?plotina-backend=" + backend : (L.strings(lang).backendNote || "");
+    var notes = document.querySelectorAll("[data-plotina-backend-note]");
+    for (var j = 0; j < notes.length; j++) notes[j].textContent = text;
   }
 
   function inject() {
@@ -437,22 +607,33 @@
     scheduleInject();
   }
 
-  warmUp();
+  warmUp(backend, true);
 
   /* -------------------------------------------------------------- warm-up */
 
-  var prefetched = false;
+  var prefetched = {};
   function prefetchAssets() {
-    if (prefetched) return;
-    prefetched = true;
+    if (prefetched[backend]) return;
+    prefetched[backend] = true;
     try {
-      loadModule().catch(function () {});
-      fetch(ASSET_BASE + "/v3/pkg/df_bg.wasm").catch(function () {});
-      fetch(ASSET_BASE + "/v3/models/DeepFilterNet3_onnx.tar.gz").catch(function () {});
+      loadModule(backend).catch(function () {});
+      BACKEND_DEFS[backend].prefetch.forEach(function (url) {
+        fetch(url).catch(function () {});
+      });
     } catch (e) {
       /* warming up is best-effort */
     }
   }
+
+  /* The Cinny settings page and the embedded Element Call frame share this
+     origin and therefore the backend storage key: follow cross-document
+     changes live (unless the URL pinned the backend for this page load). */
+  window.addEventListener("storage", function (e) {
+    if (backendOverride) return;
+    if (e.key !== null && e.key !== L.BACKEND_KEY) return;
+    var next = L.normalizeBackend(readStoredBackend());
+    if (next !== backend) setBackend(next, false);
+  });
 
   /* Opt-in on-screen counters: https://call.plotina.cc/room?plotina-debug=1 */
   if (/[?&]plotina-debug=1\b/.test(location.search)) {
@@ -470,7 +651,7 @@
         ? "ready"
         : (warmError ? "error: " + warmError : (warmStarted ? "warming" : "not started"));
       badge.textContent = [
-        "DFN " + state,
+        "backend " + (st.backend || "-") + (st.requestedBackend && st.requestedBackend !== st.backend ? " (fallback from " + st.requestedBackend + ")" : "") + " " + state,
         "calls " + (st.callRequests || 0),
         "processed " + (st.processed || 0),
         "skipped " + (st.skipped || 0),
@@ -488,6 +669,11 @@
     },
     setLevel: setLevel,
     defaultLevel: L.DEFAULT_LEVEL,
+    get backend() {
+      return backend;
+    },
+    setBackend: setBackend,
+    backends: L.BACKENDS,
     isSupported: function () {
       return typeof AudioContext !== "undefined" && typeof AudioWorkletNode !== "undefined";
     },

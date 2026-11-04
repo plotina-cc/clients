@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>running</title>
+</head>
+<body>
+<pre id="out">loading dpdfnet module…</pre>
+<script type="module">
+/*
+ * Headless Chromium functional smoke for the DPDFNet backend module itself:
+ * load vendor/dpdfnet.esm.js, initialize the ONNX session from the served
+ * vendor/dpdfnet + vendor/ort assets (default URLs, exactly as boot.js uses
+ * them), run 30 synthetic hops through processHop and check the audio.
+ * Requires: python3 -m http.server at the repo root + fetched assets
+ * (noise/scripts/fetch-dpdfnet.py). See noise/tests/run-headless.sh.
+ */
+const out = document.getElementById("out");
+function fail(msg) {
+  out.textContent = "FAIL " + msg;
+  document.title = "TESTS FAILED";
+}
+try {
+  const mod = await import("../vendor/dpdfnet.esm.js");
+  out.textContent = "module loaded; initializing core…\n";
+  const core = mod.createCore({ sampleRate: 48000, noiseReductionLevel: 80 });
+  const t0 = performance.now();
+  await core.initialize();
+  out.textContent += "session ready in " + Math.round(performance.now() - t0) + " ms\n";
+
+  const HOP = mod.HOP_SIZE;
+  const FRAMES = 30;
+  let bad = 0, energy = 0, peak = 0, sizeOk = true;
+  let s = 24680;
+  const rnd = () => ((s = (s * 1103515245 + 12345) % 2147483648), s / 1073741824 - 1);
+  const t1 = performance.now();
+  for (let h = 0; h < FRAMES; h++) {
+    const hop = new Float32Array(HOP);
+    for (let i = 0; i < HOP; i++) {
+      const n = h * HOP + i;
+      hop[i] = 0.3 * Math.sin(2 * Math.PI * 440 * n / 48000) + 0.08 * rnd();
+    }
+    const enh = await core.processHop(hop);
+    if (!enh || enh.length !== HOP) { sizeOk = false; break; }
+    for (let i = 0; i < enh.length; i++) {
+      const v = enh[i];
+      if (!Number.isFinite(v)) bad++;
+      energy += v * v;
+      if (Math.abs(v) > peak) peak = Math.abs(v);
+    }
+  }
+  const dt = Math.round(performance.now() - t1);
+  const rms = Math.sqrt(energy / (FRAMES * HOP));
+  out.textContent +=
+    "frames=" + FRAMES + " infer=" + dt + "ms nonfinite=" + bad +
+    " rms=" + rms.toFixed(5) + " peak=" + peak.toFixed(4) + "\n";
+
+  if (bad !== 0) throw new Error("non-finite samples: " + bad);
+  if (!sizeOk) throw new Error("hop size wrong");
+  if (!(rms > 0)) throw new Error("output is silent");
+  if (core.stats.backend !== "dpdfnet4") throw new Error("stats.backend wrong: " + JSON.stringify(core.stats));
+  out.textContent += "PASS dpdfnet headless inference\n";
+  document.title = "TESTS OK";
+  core.destroy();
+} catch (e) {
+  fail((e && e.message) || String(e));
+}
+</script>
+</body>
+</html>
