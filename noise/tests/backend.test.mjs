@@ -170,6 +170,18 @@ test("acquireBackendCore: everything dead -> null (raw audio)", async () => {
 test("existing level logic untouched", () => {
   assert.equal(L.LEVEL_KEY, "plotina.noise.level");
   assert.equal(L.clampLevel(150), 100);
-  assert.equal(L.clampLevel("nope"), 60);
+  // The fallback is the default that logic.js declares, whatever number that
+  // happens to be: asserting a literal here would pin tuning, not behaviour.
+  assert.equal(L.clampLevel("nope"), L.DEFAULT_LEVEL);
   assert.equal(L.shouldProcess({ audio: { noiseSuppression: true } }), true);
+});
+
+test("DEFAULT_LEVEL exists and is applied", () => {
+  assert.equal(typeof L.DEFAULT_LEVEL, "number", "DEFAULT_LEVEL must be a number");
+  assert.ok(Number.isInteger(L.DEFAULT_LEVEL), `DEFAULT_LEVEL must be an integer, got ${L.DEFAULT_LEVEL}`);
+  assert.ok(L.DEFAULT_LEVEL >= 0 && L.DEFAULT_LEVEL <= 100, `DEFAULT_LEVEL must be inside 0..100, got ${L.DEFAULT_LEVEL}`);
+  assert.equal(L.clampLevel(L.DEFAULT_LEVEL), L.DEFAULT_LEVEL, "the default must survive its own clamp");
+  for (const junk of [undefined, null, "", "nope", NaN]) {
+    assert.equal(L.clampLevel(junk), L.DEFAULT_LEVEL, `clampLevel(${String(junk)})`);
+  }
 });

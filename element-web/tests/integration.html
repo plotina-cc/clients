@@ -59,15 +59,18 @@ const VOICE_MSG = {
     result.bootLoaded = !!window.__plotinaNoise;
     result.support = window.__plotinaNoise && window.__plotinaNoise.isSupported();
     result.defaultLevel = window.__plotinaNoise && window.__plotinaNoise.defaultLevel;
+    // Whatever logic.js declares is what this page must measure: no literal
+    // level here, so retuning the default never needs a test change.
+    const DEF = result.defaultLevel;
 
     result.rms_voicemsg = await measure(VOICE_MSG, 2000);
-    result.rms_call_60 = await measure(CALL, 2000);
+    result.rms_call_default = await measure(CALL, 2000);
 
     window.__plotinaNoise.setLevel(0);
     result.rms_call_0 = await measure(CALL, 2000);
-    window.__plotinaNoise.setLevel(60);
+    window.__plotinaNoise.setLevel(DEF);
 
-    result.ratio_60 = result.rms_call_60 / (result.rms_voicemsg || 1);
+    result.ratio_default = result.rms_call_default / (result.rms_voicemsg || 1);
     result.ratio_0 = result.rms_call_0 / (result.rms_voicemsg || 1);
     result.ok = true;
   } catch (e) {

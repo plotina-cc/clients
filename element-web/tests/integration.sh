@@ -65,20 +65,32 @@ timeout 90 "$CHROME" --headless=new --no-sandbox --disable-gpu --disable-dev-shm
   "http://127.0.0.1:${PORT}/integration.html" >/dev/null 2>&1 || true
 
 sleep 1
-python3 - "$LOG" <<'PY'
-import json, sys, urllib.parse
-lines = [l for l in open(sys.argv[1]) if "data=" in l]
+python3 - "$LOG" "$ROOT" <<'PY'
+import json, os, re, sys, urllib.parse
+log, root = sys.argv[1], sys.argv[2]
+lines = [l for l in open(log) if "data=" in l]
 if not lines:
     print("integration: no result (page did not report)"); sys.exit(1)
 d = json.loads(urllib.parse.unquote(lines[-1].split("data=", 1)[1]))
-for k in ("bootLoaded", "support", "defaultLevel", "rms_voicemsg", "rms_call_60", "rms_call_0", "ratio_60", "ratio_0", "error"):
+
+# The contract is "the default exists and is applied", not a specific number:
+# take the level logic.js actually declares instead of pinning one here.
+src = open(os.path.join(root, "..", "noise", "logic.js")).read()
+m = re.search(r"var DEFAULT_LEVEL\s*=\s*(\d+)", src)
+if not m:
+    print("integration: DEFAULT_LEVEL not declared in noise/logic.js"); sys.exit(1)
+declared = int(m.group(1))
+print(f"  declared default = {declared}")
+
+for k in ("bootLoaded", "support", "defaultLevel", "rms_voicemsg", "rms_call_default", "rms_call_0", "ratio_default", "ratio_0", "error"):
     if k in d: print(f"  {k} = {d[k]}")
 ok = (
     d.get("bootLoaded") is True
     and d.get("support") is True
-    and d.get("defaultLevel") == 60
-    and d.get("ratio_60", 1) < 0.5   # call audio is suppressed
-    and d.get("ratio_0", 0) > 0.8    # level 0 is a passthrough
+    and 0 <= declared <= 100
+    and d.get("defaultLevel") == declared   # the wrapper applies that default
+    and d.get("ratio_default", 1) < 0.5      # call audio is suppressed
+    and d.get("ratio_0", 0) > 0.8            # level 0 is a passthrough
 )
 print("integration:", "OK" if ok else "FAILED")
 sys.exit(0 if ok else 1)
