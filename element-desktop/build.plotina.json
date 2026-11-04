@@ -1,7 +1,7 @@
 {
-    "appId": "cc.plotina.element",
-    "name": "plotina-element",
-    "productName": "Plotina Element",
+    "appId": "cc.plotina.desktop",
+    "name": "plotina-desktop",
+    "productName": "Plotina Desktop",
     "description": "Element for plotina.cc with DeepFilterNet3 noise suppression",
     "protocols": [
         "io.element.desktop",

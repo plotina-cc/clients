@@ -30,6 +30,13 @@ The delta is applied to the webapp after it is unpacked:
   `<script src="noise/logic.js"></script><script src="noise/boot.js" defer></script>`
   to `index.html` — the same two files the web image loads, the wrapper on
   `getUserMedia` plus the level slider in Settings → Voice and Video.
+- `branding.py` turns the Element shell into the Plotina one: title,
+  application-name and theme-color (#17795A) in `index.html`, our favicon and
+  apple-touch-icon instead of the `vector-icons` links, a local `og:image`,
+  the error-view logo swapped for `plotina-512.png`, `manifest.json` renamed,
+  and the `mobile_guide/` (an install page for phones the desktop never shows)
+  deleted. `apply-noise.py --brand` only sets the `brand` key of
+  `config.json` (the in-app name); this is the browser-facing half.
 - `../element-web/config.json` becomes the webapp's `config.json` with
   `web_base_url` added (context-menu links point at chat.plotina.cc) and
   `sentry.dsn` filled from `SENTRY_DSN`; `update_base_url` is dropped, so the
@@ -46,10 +53,11 @@ The delta is applied to the webapp after it is unpacked:
 ```
 UPSTREAM_TAG              element-web tag we build against
 webapp.lock.json          release tarball URL + sha256 (tag must match UPSTREAM_TAG)
-build.plotina.json        electron-builder variant: appId cc.plotina.element,
-                          package name plotina-element, productName Plotina Element
+build.plotina.json        electron-builder variant: appId cc.plotina.desktop,
+                          package name plotina-desktop, productName Plotina Desktop
 apply-noise.py            webapp overlay + config.json
-scripts/prepare-webapp.sh tarball -> overlay -> .build/webapp
+branding.py               webapp shell branding: title, icons, meta, error view
+scripts/prepare-webapp.sh tarball -> overlay -> branding -> .build/webapp
 scripts/build.sh          clone, install, asar, installers -> dist-stable/
 ```
 
@@ -108,7 +116,7 @@ There is no auto-update and nothing to point at a feed:
   starts the updater on the remaining platforms.
 
 A new version is a new installer, installed over the old one. Profiles are
-separate from upstream Element (`plotina-element` as the app name), so both can
+separate from upstream Element (`plotina-desktop` as the app name), so both can
 be installed side by side.
 
 ## Verifying a build by hand
