@@ -2,6 +2,10 @@ node_modules/
 target/
 dist/
 cinny/noise/
+# DPDFNet backend binaries: pinned by noise/dpdfnet.lock.json and fetched by
+# noise/scripts/fetch-dpdfnet.py (same policy as the DeepFilterNet3 assets).
+noise/vendor/ort/
+noise/vendor/dpdfnet/
 upstream/
 *.log
 __pycache__/

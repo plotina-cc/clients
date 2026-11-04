@@ -1,0 +1,37 @@
+{
+  "vendor/ort/ort.wasm.bundle.min.mjs": {
+    "url": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort.wasm.bundle.min.mjs",
+    "sha256": "51bd7168175767324ab0acfcfc4ca94a096a3826e3ebac9ccc4f195eb865f8dd",
+    "note": "onnxruntime-web 1.31.1, CPU/wasm build with the ESM glue bundled; MIT licence (see vendor/LICENSE-ORT)."
+  },
+  "vendor/ort/ort-wasm-simd-threaded.mjs": {
+    "url": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort-wasm-simd-threaded.mjs",
+    "sha256": "30ed0b5cd1182ede931fea448afb567d4dc705ec957af09f108a2be5f770dac3",
+    "note": "Emscripten loader stub the bundle dynamically imports at runtime; must sit next to the bundle."
+  },
+  "vendor/ort/ort-wasm-simd-threaded.wasm": {
+    "url": "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/ort-wasm-simd-threaded.wasm",
+    "sha256": "4b884c203b0fa48d057be3332c65513ff85aa3c5bddd6946acc0fab7ecda001d",
+    "note": "The wasm binary the bundle loads at runtime. 14.8 MB; without cross-origin isolation ort falls back to single-threaded use, which is what an Element Web tab gets anyway."
+  },
+  "vendor/dpdfnet/dpdfnet2_48khz_hr/model_stateful.onnx": {
+    "url": "https://raw.githubusercontent.com/shimondoodkin/DPDFNet/2e6a8aac54e8d431d632b2e04947ffdc7af4641c/model_zoo/stateful/dpdfnet2_48khz_hr/model_stateful.onnx",
+    "sha256": "865efd68eb5ecea36cf936633a1922e16445d69178d22f1957eb5ead1bf13e3a",
+    "note": "Official DPDFNet model zoo (Apache-2.0): stateful single-frame 48 kHz export, matches the DeepFilterNet-style spec_real streaming interface our worklet drives. Commit pinned in the URL."
+  },
+  "vendor/dpdfnet/dpdfnet2_48khz_hr/initial_states.bin": {
+    "url": "https://raw.githubusercontent.com/shimondoodkin/DPDFNet/2e6a8aac54e8d431d632b2e04947ffdc7af4641c/model_zoo/stateful/dpdfnet2_48khz_hr/initial_states.bin",
+    "sha256": "711adffba273ba0a8f0cf629d437ce05d943fa55e560df8606bb3741ac408345",
+    "note": "float32 little-endian state snapshot (RNN/GRU hidden, conv buffers, running normalisers)."
+  },
+  "vendor/dpdfnet/dpdfnet2_48khz_hr/initial_states.json": {
+    "url": "https://raw.githubusercontent.com/shimondoodkin/DPDFNet/2e6a8aac54e8d431d632b2e04947ffdc7af4641c/model_zoo/stateful/dpdfnet2_48khz_hr/initial_states.json",
+    "sha256": "f69624fca30e1611ba53c9da0e16206d738fe3414d23cc4daa3194762b9d9a00",
+    "note": "name/shape/offset table for the .bin above, in ONNX input order after 'spec'."
+  },
+  "vendor/dpdfnet/dpdfnet2_48khz_hr/config.ini": {
+    "url": "https://raw.githubusercontent.com/shimondoodkin/DPDFNet/2e6a8aac54e8d431d632b2e04947ffdc7af4641c/model_zoo/stateful/dpdfnet2_48khz_hr/config.ini",
+    "sha256": "b6e2124ae9b09214ceb1d79a1d957dd2e075ab62147f1f416386c81435537de0",
+    "note": "sample_rate=48000, win_len=960, hop_size=480, freq_bins=481, interface=spec_real, 13 state tensors."
+  }
+}

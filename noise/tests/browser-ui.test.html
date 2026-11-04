@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>running</title>
+</head>
+<body>
+<pre id="out">running</pre>
+<!-- Fake the settings anchor boot.js looks for, then load the real scripts. -->
+<div id="anchor-row"><span>Подавление шума</span><input type="checkbox" checked></div>
+<script src="../logic.js"></script>
+<script src="../boot.js" defer></script>
+<script>
+/*
+ * Headless integration smoke (run by noise/tests/run-headless.sh):
+ * boot.js inside a real Chromium — selector renders, switches backends,
+ * persists to localStorage, and the ?plotina-backend= override wins.
+ * Load with ?plotina-backend=dpdfnet4 to exercise the override path.
+ */
+const results = [];
+function test(name, fn) {
+  try {
+    const r = fn();
+    if (r && typeof r.then === "function") throw new Error("async test in sync harness");
+    results.push("PASS " + name);
+  } catch (e) {
+    results.push("FAIL " + name + " :: " + (e && e.message ? e.message : e));
+  }
+}
+const override = /[?&]plotina-backend=([a-z0-9_-]+)/i.exec(location.search);
+
+function finish() {
+  document.getElementById("out").textContent = results.join("\n");
+  const fails = results.filter((r) => r.indexOf("FAIL") === 0).length;
+  document.title = fails ? "TESTS FAILED (" + fails + ")" : "TESTS OK";
+}
+
+function waitForRow(done) {
+  let waited = 0;
+  const tick = () => {
+    if (document.getElementById("plotina-noise-backend")) return done();
+    waited += 250;
+    if (waited > 4000) { results.push("FAIL selector row never injected"); return done(); }
+    setTimeout(tick, 250);
+  };
+  setTimeout(tick, 250);
+}
+
+waitForRow(() => {
+  const L = window.PlotinaNoiseLogic;
+
+  test("boot.js is loaded", () => {
+    if (!window.__plotinaNoise) throw new Error("no __plotinaNoise");
+  });
+
+  test("selector exists with both options", () => {
+    const sel = document.getElementById("plotina-noise-backend");
+    if (!sel || sel.options.length !== 2) throw new Error("selector missing or wrong options");
+    if (sel.options[0].value !== "dfn3" || sel.options[1].value !== "dpdfnet4") {
+      throw new Error("unexpected options");
+    }
+  });
+
+  test("stats expose the requested backend", () => {
+    const st = window.__plotinaNoiseStats;
+    if (!st || typeof st.requestedBackend !== "string") throw new Error("stats.requestedBackend missing");
+  });
+
+  if (override && override[1] === "dpdfnet4") {
+    test("?plotina-backend=dpdfnet4 overrides storage", () => {
+      if (window.__plotinaNoise.backend !== "dpdfnet4") {
+        throw new Error("backend is " + window.__plotinaNoise.backend);
+      }
+      const sel = document.getElementById("plotina-noise-backend");
+      if (!sel.disabled) throw new Error("selector must be disabled under a URL override");
+    });
+  } else {
+    test("default backend is dfn3", () => {
+      if (window.__plotinaNoise.backend !== "dfn3") throw new Error("backend=" + window.__plotinaNoise.backend);
+    });
+    test("switching the selector persists dpdfnet4 to storage", () => {
+      const sel = document.getElementById("plotina-noise-backend");
+      sel.value = "dpdfnet4";
+      sel.dispatchEvent(new Event("change"));
+      if (localStorage.getItem(L.BACKEND_KEY) !== "dpdfnet4") throw new Error("storage not written");
+      if (window.__plotinaNoise.backend !== "dpdfnet4") throw new Error("backend not applied");
+      sel.value = "dfn3";
+      sel.dispatchEvent(new Event("change"));
+      if (window.__plotinaNoise.backend !== "dfn3") throw new Error("switch back failed");
+    });
+  }
+  finish();
+});
+</script>
+</body>
+</html>
