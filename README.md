@@ -6,22 +6,27 @@ without the user touching a setting.
 
 ## Clients
 
-- **Plotina Web** — the browser client at `chat.plotina.cc` (Element Web)
-- **Plotina Desktop** — Linux and Windows builds of the same client (Element Desktop)
-- **Plotina Lite Web** — the lighter browser client at `lite.plotina.cc` (Cinny)
-- **Plotina Lite Desktop** — its desktop build
-- **Element Call** — the call UI at `call.plotina.cc`
-- **Plotina Mobile** — Android (FluffyChat)
-- **Plotina X** — Android (Element X)
+- **Plotina Web** — the browser client at `chat.plotina.cc` (fork of Element Web)
+- **Plotina Desktop** — Linux and Windows builds of the same client (fork of Element Desktop)
+- **Plotina Lite Web** — the lighter browser client at `lite.plotina.cc` (fork of Cinny)
+- **Plotina Lite Desktop** — its desktop build (fork of Cinny Desktop)
+- **Plotina Call** — the call UI at `call.plotina.cc` (fork of Element Call)
+- **Plotina Mobile** — Android (fork of FluffyChat)
+- **Plotina X** — Android (fork of Element X)
+
+Every entry above is an unofficial fork of the named upstream project.
+Plotina is not affiliated with or endorsed by Element Creations, the FluffyChat
+project or the Cinny project; those names are used only to describe the code
+each build is based on.
 
 ## What is baked in
 
 - **Server.** Sign-in and rooms come from `plotina.cc`; the account service is
   `account.plotina.cc`. Nothing to type on first launch.
-- **Calls.** Element Call lives at `call.plotina.cc`. Element X opens it by
-  default, so calls there run on our deployment too.
+- **Calls.** Plotina Call (a fork of Element Call) lives at `call.plotina.cc`.
+  Plotina X opens it by default, so calls there run on our deployment too.
 - **Noise suppression.** DeepFilterNet3 is applied to the microphone before the
-  track is published — in the browsers, in the desktop apps and in Element X's
+  track is published — in the browsers, in the desktop apps and in Plotina X's
   call view. It is on by default and there is nothing to install; the level can
   be changed while a call is running, from the control in the call view.
 
