@@ -205,6 +205,9 @@ jobs:
           # 0013: no PostHog analytics and no Sentry reporting.
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0013-plotina-analytics-off.patch"
 
+      - name: Install Pillow for the icon script
+        run: python3 -m pip install --quiet pillow
+
       - name: Apply Plotina launcher icons
         run: python3 element-x/scripts/apply-plotina-icons.py upstream/element-x
 
