@@ -62,7 +62,8 @@ echo "==> variant"
 cp "$ROOT/build.plotina.json" variant.json
 
 # Upstream's src/updater.ts only drives Squirrel, which our NSIS packaging
-# never installs; swap in our own GitHub-releases updater before compiling.
+# never installs; swap in our own GitHub-releases updater (Windows NSIS +
+# Linux AppImage) before compiling.
 cp "$ROOT/desktop/updater.ts" src/updater.ts
 
 echo "==> installers"

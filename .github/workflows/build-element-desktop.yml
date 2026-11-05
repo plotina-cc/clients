@@ -56,6 +56,25 @@ jobs:
             echo "::notice::no chromium binary on this runner; headless smoke skipped"
           fi
 
+  # desktop/updater.ts is compiled into the packaged app for BOTH platforms;
+  # its Linux swap/verify logic runs here against the real live feed (the last
+  # test downloads the AppImage the published latest-linux.yml names).
+  # Node >= 22.18 is required: the test imports the .ts source directly.
+  updater-tests:
+    name: updater tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Linux AppImage updater tests
+        working-directory: element-desktop/desktop
+        run: node --test tests/
+
   # One webapp for both platforms: the desktop shell embeds a fixed asar, so the
   # overlay has to be applied once and handed to the packaging jobs.
   webapp:
@@ -460,7 +479,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [build, windows-smoke]
+    needs: [build, windows-smoke, updater-tests]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -494,7 +513,7 @@ jobs:
 
             Шумоподавление включено по умолчанию (уровень 70), настраивается в Настройки → Голос и видео.
             Windows: установщик не подписан, SmartScreen попросит подтверждение. Работают автообновления: приложение проверяет релизы plotina-cc/clients (latest.yml), скачанный установщик сверяется по sha512; подпись Authenticode у обновлений нет — проверка подписи намеренно отключена.
-            Linux: AppImage или deb (Debian/Ubuntu). Автообновлений нет — новая версия ставится поверх вручную (latest-linux.yml публикуется на будущее).
+            Linux: AppImage или deb (Debian/Ubuntu). AppImage обновляется сам: приложение проверяет latest-linux.yml в релизах plotina-cc/clients, скачивает новый образ, сверяет sha512, заменяет запущенный файл (atomic rename) и предлагает перезапуск; если папка недоступна для записи — сохраняет проверенный образ в Downloads и печатает путь. Обновления не подписаны, проверка — sha512 из релиза. Для deb: sudo apt update && sudo apt upgrade.
             macOS не собирается.
 
             Исходники этой сборки — в этом репозитории (AGPL-3.0): upstream-тег element-web из element-desktop/UPSTREAM_TAG плюс оверлей element-desktop/.
