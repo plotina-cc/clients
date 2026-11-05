@@ -121,6 +121,14 @@ case "$(uname -s)" in
 esac
 npm run tauri -- build --config "$OVERLAY" --bundles "$BUNDLES"
 
+# Tauri keeps the upstream maintainer in the deb control file and would show
+# it in package managers; reuse the desktop post-processor with our name.
+for deb in src-tauri/target/release/bundle/deb/*.deb; do
+  [ -f "$deb" ] || continue
+  PRODUCT_NAME="Plotina Lite Desktop" \
+    "$ROOT/../element-desktop/scripts/fix-deb-branding.sh" "$deb"
+done
+
 echo
 echo "done:"
 find src-tauri/target/release/bundle -maxdepth 2 -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \) -printf '  %p (%s bytes)\n'

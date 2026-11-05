@@ -12,6 +12,8 @@
 set -euo pipefail
 
 DEB="${1:?usage: fix-deb-branding.sh <file.deb>}"
+# PRODUCT_NAME controls the menu entry; the desktop and lite packages differ.
+PRODUCT_NAME="${PRODUCT_NAME:-Plotina Desktop}"
 [ -f "$DEB" ] || { echo "fix-deb-branding: $DEB not found" >&2; exit 1; }
 command -v dpkg-deb >/dev/null 2>&1 || {
   echo "fix-deb-branding: dpkg-deb missing; cannot rewrite $DEB" >&2
@@ -49,7 +51,7 @@ PY
 for entry in "$ROOT/pkg/usr/share/applications/"*.desktop; do
   [ -f "$entry" ] || continue
   sed -i \
-    -e 's/^Name=.*/Name=Plotina Desktop/' \
+    -e "s/^Name=.*/Name=${PRODUCT_NAME}/" \
     -e 's/^Comment=.*/Comment=Matrix client for plotina.cc/' \
     "$entry"
 done

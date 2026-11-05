@@ -290,6 +290,17 @@ jobs:
         working-directory: cinny/upstream
         run: npm run tauri -- build --config "${{ github.workspace }}/cinny/tauri.plotina.json" --bundles ${{ matrix.bundles }}
 
+      - name: Rewrite deb branding
+        if: matrix.name == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          for deb in cinny/upstream/src-tauri/target/release/bundle/deb/*.deb; do
+            PRODUCT_NAME="Plotina Lite Desktop" \
+              bash "${{ github.workspace }}/element-desktop/scripts/fix-deb-branding.sh" "$deb"
+          done
+
       - name: Stage artifacts with stable names
         shell: bash
         run: |
