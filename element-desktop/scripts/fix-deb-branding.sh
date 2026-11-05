@@ -44,6 +44,8 @@ for field, value in values.items():
         text += f"{field}: {value}\n"
 # Upstream's archive keyring is not ours and dpkg would warn on every install.
 text = re.sub(r"^Recommends: element-io-archive-keyring\n", "", text, flags=re.M)
+# electron-builder leaves the synopsis empty; apt shows a blank line otherwise.
+text = re.sub(r"^Description: *\n", "Description: Matrix client for plotina.cc\n", text, flags=re.M)
 path.write_text(text, encoding="utf-8")
 PY
 
@@ -56,5 +58,7 @@ for entry in "$ROOT/pkg/usr/share/applications/"*.desktop; do
     "$entry"
 done
 
-dpkg-deb -b "$ROOT/pkg" "$DEB" >/dev/null
+# dpkg-deb 1.22 defaults to zstd, which Ubuntu 22.04's dpkg cannot read;
+# keep the xz compression electron-builder used.
+dpkg-deb -b -Zxz "$ROOT/pkg" "$DEB" >/dev/null
 echo "fix-deb-branding: $DEB rewritten (Vendor/Maintainer/Homepage, Name)"
