@@ -198,6 +198,9 @@ jobs:
           # so upstream's Element icon would be packaged unless we overwrite it.
           cp "${{ github.workspace }}/element-desktop/build/icon.png" build/icon.png
           cp "${{ github.workspace }}/element-desktop/build/icon.ico" build/icon.ico
+          # app-update.yml comes from package.json's publish block, which still
+          # names vector-im/element-web; point it at our releases first.
+          python3 "${{ github.workspace }}/element-desktop/scripts/point-updater.py"
           pnpm run build --publish never $TARGETS
 
       - name: Rewrite deb branding
