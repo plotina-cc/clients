@@ -85,10 +85,10 @@ index cc058d0f..9588b8f1 100644
      /**
 diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt
 new file mode 100644
-index 00000000..b750ff39
+index 00000000..38f6beef
 --- /dev/null
 +++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt
-@@ -0,0 +1,164 @@
+@@ -0,0 +1,169 @@
 +/*
 + * Plotina: the in-app updater's manifest side.
 + *
@@ -122,6 +122,7 @@ index 00000000..b750ff39
 + * ```
 + */
 +data class UpdateInfo(
++    val packageName: String,
 +    val versionName: String,
 +    val versionCode: Long,
 +    val apkUrl: String,
@@ -131,6 +132,9 @@ index 00000000..b750ff39
 +) {
 +    fun toJson(): String = JSONObject()
 +        .put("client", "x")
++        // The package travels too: [fromJson] insists on it, and the daily check hands its parsed
++        // manifest to the Activity, where it is parsed exactly like a fresh one.
++        .put("package", packageName)
 +        .put("versionName", versionName)
 +        .put("versionCode", versionCode)
 +        .put("apkUrl", apkUrl)
@@ -156,6 +160,7 @@ index 00000000..b750ff39
 +            val sha256 = json.getString("sha256").lowercase()
 +            if (!Regex("^[0-9a-f]{64}$").matches(sha256)) return null
 +            UpdateInfo(
++                packageName = manifestPackage,
 +                versionName = json.getString("versionName"),
 +                versionCode = json.getLong("versionCode"),
 +                apkUrl = apkUrl,
@@ -255,10 +260,10 @@ index 00000000..b750ff39
 +}
 diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt
 new file mode 100644
-index 00000000..d9776009
+index 00000000..bc6f9fba
 --- /dev/null
 +++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt
-@@ -0,0 +1,406 @@
+@@ -0,0 +1,447 @@
 +/*
 + * Plotina: the in-app updater's screen. A small dialog over the app: check the manifest, ask,
 + * download, verify sha256 + size, and hand the file to the system installer. No third-party
@@ -306,11 +311,15 @@ index 00000000..d9776009
 +import java.io.File
 +import java.security.MessageDigest
 +import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.Job
 +import kotlinx.coroutines.delay
 +import kotlinx.coroutines.isActive
 +import kotlinx.coroutines.launch
 +import kotlinx.coroutines.withContext
 +import timber.log.Timber
++
++/** One row of a DownloadManager query, read before the cursor closes. */
++private data class DownloadRow(val status: Int, val done: Long, val total: Long)
 +
 +/**
 + * Reached two ways: the About screen's "Check for updates" row (always shows a result), and the
@@ -335,6 +344,7 @@ index 00000000..d9776009
 +    private var pendingInfo: UpdateInfo? = null
 +    private var downloadId: Long = -1L
 +    private var apkFile: File? = null
++    private var pollJob: Job? = null
 +
 +    override fun onCreate(savedInstanceState: Bundle?) {
 +        super.onCreate(savedInstanceState)
@@ -351,23 +361,21 @@ index 00000000..d9776009
 +    override fun onResume() {
 +        super.onResume()
 +        // The user may have just allowed "install unknown apps" in the system settings we opened.
-+        if (uiState == UiState.NeedPermission && packageManager.canRequestPackageInstalls()) {
++        if (uiState == UiState.NeedPermission && mayInstallPackages()) {
 +            pendingInfo?.let { startDownload(it) }
 +        }
 +    }
 +
 +    private fun handleIntent(intent: Intent) {
 +        if (intent.getBooleanExtra(EXTRA_INSTALL_RESULT, false)) {
-+            onInstallResult(
-+                intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE),
-+                intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE),
-+            )
++            onInstallResult(intent)
 +            return
 +        }
-+        // While one flow is visibly running, a repeat start just brings it forward.
++        // While one flow is visibly running, a repeat start just brings it forward. Checking is
++        // deliberately absent: it is the state a fresh Activity opens in, and returning early on it
++        // here would leave the dialog "Checking" forever without ever looking at this intent.
 +        if (uiState is UiState.Downloading || uiState is UiState.Verifying ||
-+            uiState is UiState.Installing || uiState is UiState.NeedPermission ||
-+            uiState is UiState.Checking
++            uiState is UiState.Installing || uiState is UiState.NeedPermission
 +        ) {
 +            return
 +        }
@@ -409,7 +417,7 @@ index 00000000..d9776009
 +    }
 +
 +    private fun confirmAndDownload(info: UpdateInfo) {
-+        if (!packageManager.canRequestPackageInstalls()) {
++        if (!mayInstallPackages()) {
 +            // Ask before the bytes move: the installer is the only dead end a user should hit.
 +            uiState = UiState.NeedPermission
 +            return
@@ -444,31 +452,37 @@ index 00000000..d9776009
 +     * DownloadManager and keeps running, with its own notification, if the dialog goes away.
 +     */
 +    private fun pollDownload(info: UpdateInfo) {
-+        lifecycleScope.launch {
++        pollJob?.cancel()
++        pollJob = lifecycleScope.launch {
 +            val manager = ContextCompat.getSystemService(this@PlotinaUpdateActivity, DownloadManager::class.java)
 +                ?: return@launch
 +            while (isActive) {
-+                val status = manager.query(DownloadManager.Query().setFilterById(downloadId)).use { cursor ->
-+                    if (!cursor.moveToFirst()) return@use DownloadManager.STATUS_FAILED
-+                    cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
++                // One query, one read: status and progress from the same row. A download that is
++                // gone again (cancelled, evicted) yields no row, and that is a failure to show -
++                // not a Cursor ISE to crash on.
++                val row = manager.query(DownloadManager.Query().setFilterById(downloadId)).use { cursor ->
++                    if (!cursor.moveToFirst()) {
++                        null
++                    } else {
++                        DownloadRow(
++                            status = cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)),
++                            done = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)),
++                            total = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)),
++                        )
++                    }
 +                }
-+                when (status) {
++                when (row?.status) {
 +                    DownloadManager.STATUS_SUCCESSFUL -> {
 +                        verifyAndInstall(info)
 +                        return@launch
 +                    }
-+                    DownloadManager.STATUS_FAILED -> {
++                    DownloadManager.STATUS_FAILED, null -> {
 +                        uiState = UiState.Message(getString(R.string.plotina_update_error_download))
 +                        return@launch
 +                    }
 +                    else -> {
-+                        manager.query(DownloadManager.Query().setFilterById(downloadId)).use { cursor ->
-+                            val total = cursor.takeIf { it.moveToFirst() }
-+                                ?.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)) ?: -1L
-+                            val done = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
-+                            val percent = if (total > 0) ((done * 100) / total).toInt().coerceIn(0, 100) else 0
-+                            uiState = UiState.Downloading(info, percent)
-+                        }
++                        val percent = if (row.total > 0) ((row.done * 100) / row.total).toInt().coerceIn(0, 100) else 0
++                        uiState = UiState.Downloading(info, percent)
 +                    }
 +                }
 +                delay(400)
@@ -477,6 +491,9 @@ index 00000000..d9776009
 +    }
 +
 +    private fun cancelDownload() {
++        // Stop polling first: the removed download would otherwise answer its last query with the
++        // "vanished" row and show an error over the state we are restoring.
++        pollJob?.cancel()
 +        ContextCompat.getSystemService(this, DownloadManager::class.java)?.remove(downloadId)
 +        pendingInfo?.let { uiState = UiState.Available(it) }
 +    }
@@ -494,7 +511,7 @@ index 00000000..d9776009
 +                uiState = UiState.Message(getString(R.string.plotina_update_error_mismatch))
 +                return@launch
 +            }
-+            if (!packageManager.canRequestPackageInstalls()) {
++            if (!mayInstallPackages()) {
 +                uiState = UiState.NeedPermission
 +                return@launch
 +            }
@@ -504,7 +521,7 @@ index 00000000..d9776009
 +
 +    private fun launchInstaller(info: UpdateInfo, file: File) {
 +        lifecycleScope.launch(Dispatchers.IO) {
-+            val outcome = runCatching {
++            val outcome = runCatching<Unit> {
 +                val installer = packageManager.packageInstaller
 +                val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
 +                    setSize(info.size)
@@ -529,7 +546,7 @@ index 00000000..d9776009
 +                            .putExtra(EXTRA_INSTALL_RESULT, true),
 +                        flags,
 +                    )
-+                    installer.commit(sessionId, callback.intentSender)
++                    session.commit(callback.intentSender)
 +                }
 +            }
 +            withContext(Dispatchers.Main) {
@@ -543,16 +560,37 @@ index 00000000..d9776009
 +        }
 +    }
 +
-+    private fun onInstallResult(status: Int, message: String?) {
++    private fun onInstallResult(result: Intent) {
++        val status = result.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)
++        if (status == PackageInstaller.STATUS_PENDING_USER_ACTION) {
++            // The installer wants a confirmation screen of its own, and posts the Intent that opens
++            // it into our callback Intent under EXTRA_INTENT: nobody else may start it, so without
++            // this hop the install would just hang. (PackageInstaller has no public constant here.)
++            @Suppress("DEPRECATION")
++            val confirm = result.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
++            if (confirm != null) {
++                runCatching { startActivity(confirm) }
++                    .onFailure { Timber.tag("PlotinaUpdate").w(it, "installer confirmation did not open") }
++                uiState = UiState.Installing
++                return
++            }
++        }
 +        apkFile?.delete()
 +        uiState = when (status) {
 +            PackageInstaller.STATUS_SUCCESS -> UiState.Message(getString(R.string.plotina_update_installed))
-+            PackageInstaller.STATUS_PENDING_USER_ACTION -> UiState.Installing
 +            else -> UiState.Message(
-+                getString(R.string.plotina_update_error_install, message.orEmpty()),
++                getString(R.string.plotina_update_error_install, result.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE).orEmpty()),
 +            )
 +        }
 +    }
++
++    /**
++     * Whether this app may hand packages to the installer. Below API 26 the permission is the
++     * global "unknown sources" switch and there is no per-app screen to open: assume yes and let
++     * the installer itself prompt, the pre-Android-8 way.
++     */
++    private fun mayInstallPackages(): Boolean =
++        Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()
 +
 +    private fun openInstallPermissionSettings() {
 +        val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.fromParts("package", packageName, null))
@@ -567,6 +605,15 @@ index 00000000..d9776009
 +    }
 +
 +    @Composable
++    private fun ResultDialog(text: String) {
++        AlertDialog(
++            onDismissRequest = ::finish,
++            text = { Text(text) },
++            confirmButton = { TextButton(onClick = ::finish) { Text(stringResource(R.string.plotina_update_close)) } },
++        )
++    }
++
++    @Composable
 +    private fun UpdaterDialog() {
 +        when (val state = uiState) {
 +            UiState.Checking -> AlertDialog(
@@ -578,6 +625,7 @@ index 00000000..d9776009
 +            UiState.Verifying -> AlertDialog(
 +                onDismissRequest = {},
 +                text = { Text(stringResource(R.string.plotina_update_verifying)) },
++                confirmButton = {}, // the hash of a 200 MB file is not a moment for buttons
 +            )
 +
 +            UiState.Installing -> AlertDialog(
@@ -586,11 +634,9 @@ index 00000000..d9776009
 +                confirmButton = { TextButton(onClick = ::finish) { Text(stringResource(R.string.plotina_update_close)) } },
 +            )
 +
-+            is UiState.UpToDate, is UiState.Message -> AlertDialog(
-+                onDismissRequest = ::finish,
-+                text = { Text(if (state is UiState.UpToDate) state.current else state.text) },
-+                confirmButton = { TextButton(onClick = ::finish) { Text(stringResource(R.string.plotina_update_close)) } },
-+            )
++            is UiState.UpToDate -> ResultDialog(state.current)
++
++            is UiState.Message -> ResultDialog(state.text)
 +
 +            is UiState.Available -> AlertDialog(
 +                onDismissRequest = ::finish,
