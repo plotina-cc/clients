@@ -245,10 +245,14 @@ class IndexHtmlTest(AppFixture):
         html = self.index()
         self.assertIn('<style id="plotina-modal-a11y">', html)
         self.assertEqual(html.count('<style id="plotina-modal-a11y">'), 1)
-        self.assertIn(".mx_AuthPage_modal{margin-bottom:50px}", html)
         self.assertIn(".mx_AuthPage_modalContent>.mx_Dialog_border"
                       "{max-height:calc(100vh - 150px)}", html)
         self.assertIn(".mx_CompleteSecurityBody{overflow-y:auto}", html)
+        # Never override the auth modal margins: the stock
+        # `margin:100px auto auto` auto bottom margin is what pins the footer
+        # gradient to the viewport bottom instead of the card (regression).
+        self.assertNotIn(".mx_AuthPage_modal{", html)
+        self.assertNotIn("margin-bottom", html)
         # The style must land after bundle.css (equal-specificity cascade)
         # and must not split the noise tag pair.
         self.assertLess(html.index(f"bundles/{BUNDLE}/bundle.css"),

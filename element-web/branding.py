@@ -86,7 +86,10 @@ NOISE_TAGS = ('<script src="/noise/logic.js"></script>'
 
 # Device-verification dialog fix, validated against the live chat.plotina.cc
 # bundle 81bff4fd060173d686ec (element-web v1.12.32), see THEME-FIX.md:
-#   * give the auth modal a bottom margin so the footer is reachable,
+#   * do NOT override .mx_AuthPage_modal margins: stock `margin:100px auto auto`
+#     keeps the auto bottom margin that pins .mx_AuthFooter (the dark gradient
+#     behind the footer links) to the viewport bottom; any explicit
+#     margin-bottom glues that gradient to the card instead of the screen edge,
 #   * replace the percentage max-height that resolves through the AuthPage
 #     flex chain (upstream assumes a fixed-position .mx_Dialog_wrapper parent)
 #     with a viewport-relative one, scoped to the CompleteSecurity Glass so
@@ -95,7 +98,6 @@ NOISE_TAGS = ('<script src="/noise/logic.js"></script>'
 #     "Sign out") always stays reachable on ~1366x768 laptops.
 MODAL_STYLE_ID = "plotina-modal-a11y"
 MODAL_CSS = (
-    ".mx_AuthPage_modal{margin-bottom:50px}"
     ".mx_AuthPage_modalContent>.mx_Dialog_border{max-height:calc(100vh - 150px)}"
     ".mx_CompleteSecurityBody{overflow-y:auto}"
 )

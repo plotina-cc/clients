@@ -78,7 +78,6 @@ MARKUP = """
 
 # ---- the fix; keep byte-identical with the block branding.py injects -------
 FIX_CSS = """\
-.mx_AuthPage_modal{margin-bottom:50px}\
 .mx_AuthPage_modalContent .mx_Dialog_border{max-height:calc(100vh - 150px);overflow-y:auto}\
 """
 

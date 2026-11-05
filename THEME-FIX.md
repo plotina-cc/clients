@@ -66,7 +66,6 @@ BASE h=768/620/560: glass clientH=417 scrollH=441 overflowY=visible
 `plotina-modal-a11y`.
 
 ```css
-.mx_AuthPage_modal{margin-bottom:50px}
 .mx_AuthPage_modalContent>.mx_Dialog_border{max-height:calc(100vh - 150px)}
 .mx_CompleteSecurityBody{overflow-y:auto}
 ```
@@ -76,6 +75,12 @@ BASE h=768/620/560: glass clientH=417 scrollH=441 overflowY=visible
 - селектор сужен `.mx_AuthPage_modalContent>`, обычные диалоги
   (`mx_Dialog_wrapper`) не затронуты;
 - `-150px` = margin-top 50/100 + 2×padding Glass (12) + footer AuthFooter ~60.
+- **маргины `.mx_AuthPage_modal` не трогать.** Стоковый `margin:100px auto auto`
+  держит нижний `auto`, который прижимает `.mx_AuthFooter` (тёмный градиент под
+  ссылками) к нижней кромке окна. Любой явный `margin-bottom` (было `50px`)
+  приклеивает этот градиент к низу карточки — на 1920×1012 футер висел на
+  `y=426…489` вместо `950…1012`. Регресс закреплён в
+  `tests/branding_test.py::test_modal_a11y_style`.
 
 После патча (та же проба):
 
