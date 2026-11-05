@@ -20,13 +20,14 @@
 # браузер продолжит открывать ссылки SSO в upstream Element.
 set -euo pipefail
 
-# =================== константы текущего релиза ==============================
-# При каждом новом релизе заменить тег vX.Y.Z-plotina-element.NN в обоих URL
-# на новый из https://github.com/plotina-cc/clients/releases — или не трогать
-# скрипт и задать окружение:
+# =================== откуда берём сборку ====================================
+# Стабильные имена на нашем зеркале, а не тег релиза: /srv/dl обновляется
+# scripts/pull-release.py из самого свежего релиза, поэтому скрипт никогда не
+# отстаёт от выпуска и не требует правки на каждый тег. Переопределяется
+# окружением:
 #   PLOTINA_DEB_URL=... PLOTINA_APPIMAGE_URL=... install-appimage.sh
-DEFAULT_DEB_URL="https://github.com/plotina-cc/clients/releases/download/v1.12.32-plotina-element.19/Plotina-Desktop.deb"
-DEFAULT_APPIMAGE_URL="https://github.com/plotina-cc/clients/releases/download/v1.12.32-plotina-element.19/Plotina-Desktop.AppImage"
+DEFAULT_DEB_URL="https://plotina.cc/dl/Plotina-Desktop.deb"
+DEFAULT_APPIMAGE_URL="https://plotina.cc/dl/Plotina-Desktop.AppImage"
 # ============================================================================
 
 DEB_URL="${PLOTINA_DEB_URL:-$DEFAULT_DEB_URL}"

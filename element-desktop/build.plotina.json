@@ -2,7 +2,7 @@
     "appId": "cc.plotina.desktop",
     "name": "plotina-desktop",
     "productName": "Plotina Desktop",
-    "description": "Element for plotina.cc with DeepFilterNet3 noise suppression",
+    "description": "Plotina Desktop — Matrix client with DeepFilterNet3 noise suppression",
     "protocols": [
         "io.element.desktop",
         "element",
@@ -15,5 +15,19 @@
             }
         }
     },
-    "icon": "build/icon.png"
+    "icon": "build/icon.png",
+    "author": {
+        "name": "Plotina",
+        "email": "support@plotina.cc"
+    },
+    "homepage": "https://plotina.cc",
+    "extraMetadata": {
+        "productName": "Plotina Desktop",
+        "description": "Plotina Desktop — Matrix client with DeepFilterNet3 noise suppression",
+        "author": {
+            "name": "Plotina",
+            "email": "support@plotina.cc"
+        },
+        "homepage": "https://plotina.cc"
+    }
 }

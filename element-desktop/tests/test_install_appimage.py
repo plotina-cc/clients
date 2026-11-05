@@ -34,10 +34,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE.parent / "scripts" / "install-appimage.sh"
 
-RELEASE_TAG = "v1.12.32-plotina-element.19"
-RELEASE_BASE = f"https://github.com/plotina-cc/clients/releases/download/{RELEASE_TAG}"
-DEFAULT_DEB_URL = f"{RELEASE_BASE}/Plotina-Desktop.deb"
-DEFAULT_APPIMAGE_URL = f"{RELEASE_BASE}/Plotina-Desktop.AppImage"
+# Stable mirror names: /srv/dl is refreshed by pull-release.py, so the script
+# must not pin a release tag.
+DEFAULT_DEB_URL = "https://plotina.cc/dl/Plotina-Desktop.deb"
+DEFAULT_APPIMAGE_URL = "https://plotina.cc/dl/Plotina-Desktop.AppImage"
 
 FIXTURE_DIR = Path(os.environ.get("PLOTINA_TEST_FIXTURE_DIR", "/tmp/plotina-appimage-fixture"))
 

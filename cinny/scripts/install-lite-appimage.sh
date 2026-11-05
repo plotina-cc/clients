@@ -21,14 +21,14 @@
 # установка пакета и ярлыка в меню.
 set -euo pipefail
 
-# =================== константы текущего релиза ==============================
-# При каждом новом релизе заменить тег vX.Y.Z-plotina-cinny.NN в обоих URL
-# на новый из https://github.com/plotina-cc/clients/releases (файлы
-# Plotina-Lite-Desktop.deb и Plotina-Lite-Desktop.AppImage) — или не трогать
-# скрипт и задать окружение:
+# =================== откуда берём сборку ====================================
+# Стабильные имена на нашем зеркале, а не тег релиза: /srv/dl обновляется
+# scripts/pull-release.py из самого свежего релиза, поэтому скрипт никогда не
+# отстаёт от выпуска и не требует правки на каждый тег. Переопределяется
+# окружением:
 #   PLOTINA_LITE_DEB_URL=... PLOTINA_LITE_APPIMAGE_URL=... install-lite-appimage.sh
-DEFAULT_DEB_URL="https://github.com/plotina-cc/clients/releases/download/v4.12.8-plotina-cinny.8/Plotina-Lite-Desktop.deb"
-DEFAULT_APPIMAGE_URL="https://github.com/plotina-cc/clients/releases/download/v4.12.8-plotina-cinny.8/Plotina-Lite-Desktop.AppImage"
+DEFAULT_DEB_URL="https://plotina.cc/dl/Plotina-Lite-Desktop.deb"
+DEFAULT_APPIMAGE_URL="https://plotina.cc/dl/Plotina-Lite-Desktop.AppImage"
 # ============================================================================
 
 DEB_URL="${PLOTINA_LITE_DEB_URL:-$DEFAULT_DEB_URL}"
