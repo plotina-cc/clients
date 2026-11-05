@@ -118,6 +118,10 @@ jobs:
         if: matrix.name == 'linux'
         run: python3 -m unittest discover -s noise/tests -p '*_test.py'
 
+      - name: Cinny branding tests (python)
+        if: matrix.name == 'linux'
+        run: python3 -m unittest discover -s cinny/tests -p 'test_*.py'
+
       - name: Noise tests (node)
         if: matrix.name == 'linux'
         run: node --test noise/tests/*.test.mjs

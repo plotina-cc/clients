@@ -3,8 +3,9 @@
 
 Usage: branding.py --dist <cinny/dist> [--brand "Plotina Lite Web"] [--public-url URL]
 
-This runs after apply-noise.py. It owns only the browser-facing shell:
-icons, HTML metadata and the web app manifest. Noise injection and the AGPL
+This runs after apply-noise.py. It owns the browser-facing shell: icons,
+HTML metadata, the web app manifest, and one pinned bundle default — fresh
+users must get "follow the system theme". Noise injection and the AGPL
 files stay in apply-noise.py.
 """
 import argparse
@@ -16,6 +17,51 @@ from pathlib import Path
 
 DESCRIPTION = "Матрикс-клиент для сообщества Плотина."
 ICON_SIZES = (32, 48, 64, 128, 192, 512)
+
+# Theme default guard. Cinny ships a "Use System Theme" setting (localStorage
+# key "settings", merged over a defaults object on first run). Upstream's
+# pinned build (cinny@1e6412ed, cinny-desktop v4.12.8) already defaults it
+# to true, so a fresh visitor follows prefers-color-scheme: Dark when the
+# system is dark, Light otherwise, and the Dark theme is what a dark system
+# gets. We pin that in the minified bundle instead of trusting it: if a
+# future build flips the default back to off, every new user would be stuck
+# on Light regardless of the OS. The guard replaces the off form
+# (`useSystemTheme:!1` / `useSystemTheme:false`) with the on form; the
+# minifier writes the boolean, so both spellings are literal tokens.
+THEME_SYSTEM_ON_REPL = "useSystemTheme:!0"
+THEME_SYSTEM_OFF_RE = re.compile(r"useSystemTheme\s*:\s*(?:!1|false)")
+THEME_SYSTEM_ON_RE = re.compile(r"useSystemTheme\s*:\s*(?:!0|true)")
+
+
+def apply_theme_default(js: str) -> tuple[str, int]:
+    """Pin "follow the system theme" to on in one minified JS source.
+
+    Returns the source and the number of defaults flipped (0 when the
+    bundle is already on). Raises ValueError when no settings default is
+    present at all: silently passing would hand out an unpinned default.
+    """
+    out, hits = THEME_SYSTEM_OFF_RE.subn(THEME_SYSTEM_ON_REPL, js)
+    if not THEME_SYSTEM_ON_RE.search(out):
+        raise ValueError("no useSystemTheme settings default in this JS")
+    return out, hits
+
+
+def pin_system_theme(dist: Path) -> int:
+    """Apply apply_theme_default() to the dist's JS chunks; write changes."""
+    assets = dist / "assets"
+    seen = hits_total = 0
+    for path in sorted(assets.glob("*.js")) if assets.is_dir() else []:
+        src = path.read_text(encoding="utf-8")
+        if not (THEME_SYSTEM_OFF_RE.search(src) or THEME_SYSTEM_ON_RE.search(src)):
+            continue
+        out, hits = apply_theme_default(src)
+        seen += 1
+        if hits:
+            path.write_text(out, encoding="utf-8")
+            hits_total += hits
+    if seen == 0:
+        sys.exit("branding: no useSystemTheme default in any dist asset; upstream changed")
+    return hits_total
 
 
 def replace_meta(html: str, attribute: str, name: str, value: str) -> str:
@@ -101,7 +147,8 @@ def main() -> None:
     if not (dist / "index.html").is_file():
         sys.exit(f"branding: {dist} does not look like a Cinny dist")
     rebrand(dist, args.brand, args.public_url)
-    print(f"branded: {dist} as {args.brand}")
+    hits = pin_system_theme(dist)
+    print(f"branded: {dist} as {args.brand}; system-theme default pinned ({hits} flip(s))")
 
 
 if __name__ == "__main__":
