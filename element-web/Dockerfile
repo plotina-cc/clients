@@ -163,6 +163,8 @@ RUN set -eux; \
     grep -q 'content="https://chat.plotina.cc/plotina-512.png"' /app/index.html; \
     grep -q 'href="/plotina-icon.svg"' /app/index.html; \
     grep -q 'href="/plotina-icon-192.png"' /app/index.html; \
+    grep -q 'plotina-modal-a11y' /app/index.html; \
+    grep -q 'sign_out_before_verify' /app/i18n/ru.*.json; \
     ! grep -q 'Element requires JavaScript' /app/index.html; \
     ! grep -q 'vector-icons/' /app/index.html; \
     ! grep -q 'element-app-logo' /app/bundles/*/error-view.js; \
