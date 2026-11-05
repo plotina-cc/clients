@@ -14,6 +14,7 @@ set -euo pipefail
 
 APP="${1:?usage: fix-appimage-updater.sh <file.AppImage>}"
 [ -f "$APP" ] || { echo "fix-appimage-updater: $APP not found" >&2; exit 1; }
+APP="$(readlink -f "$APP")"
 command -v mksquashfs >/dev/null 2>&1 || {
   echo "fix-appimage-updater: mksquashfs missing (install squashfs-tools)" >&2
   exit 1
@@ -58,8 +59,8 @@ fi
 head -c "$OFFSET" "$APP" > "$WORK/runtime"
 (
   cd "$WORK"
-  mksquashfs squashfs-root app.squashfs -root-owned -noappend -comp zstd \
-    -Xcompression-level 15 >/dev/null
+  # The AppImage runtime in upstream builds only accepts xz and zlib.
+  mksquashfs squashfs-root app.squashfs -root-owned -noappend -comp xz >/dev/null
 )
 cat "$WORK/runtime" "$WORK/app.squashfs" > "$APP.new"
 chmod 755 "$APP.new"
