@@ -9,6 +9,27 @@
 (function (global) {
   "use strict";
 
+  // Desktop shell (Tauri) only: the webview serves the app from
+  // http://localhost:<port>, so a plain <a href="https://plotina.cc"> click
+  // tries to navigate that webview and the system browser never opens.
+  // Upstream only forwards target=_blank windows through on_new_window, so
+  // route external links through window.open; on the web this branch is dead
+  // and links keep their normal navigation.
+  if (global.__TAURI_INTERNALS__) {
+    document.addEventListener(
+      "click",
+      function (event) {
+        var node = event.target;
+        while (node && node.tagName !== "A") node = node.parentNode;
+        if (!node || !node.href) return;
+        if (node.origin === global.location.origin) return;
+        event.preventDefault();
+        global.open(node.href, "_blank");
+      },
+      true,
+    );
+  }
+
   var L = global.PlotinaNoiseLogic;
   if (!L) {
     console.info("[plotina-noise] logic.js is missing; Cinny slider stays disabled");

@@ -69,6 +69,19 @@ python3 "$ROOT/scripts/sentry-sourcemaps.py" --dist dist \
 
 echo "==> patch"
 cd ..
+# Desktop shell patches live next to the frontend ones but apply to the
+# cinny-desktop checkout (git root), not to its cinny submodule.
+for PATCH in "$ROOT"/desktop-patches/*.patch; do
+  if git apply --check "$PATCH" 2>/dev/null; then
+    git apply "$PATCH"
+    echo "applied: $(basename "$PATCH")"
+  elif git apply -R --check "$PATCH" 2>/dev/null; then
+    echo "already applied: $(basename "$PATCH")"
+  else
+    echo "build.sh: $PATCH does not apply; upstream source changed" >&2
+    exit 1
+  fi
+done
 cp "$ROOT/config.json" config.json
 python3 "$ROOT/apply-noise.py" --dist cinny/dist --noise "$ROOT/noise"
 python3 "$ROOT/branding.py" --dist cinny/dist --brand "Plotina Lite Desktop"

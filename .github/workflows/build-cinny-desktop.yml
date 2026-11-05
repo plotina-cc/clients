@@ -152,6 +152,12 @@ jobs:
             git -C upstream/cinny apply --check "$patch"
             git -C upstream/cinny apply "$patch"
           done
+          # Desktop shell patches apply to the cinny-desktop checkout itself
+          # (window title), not to its frontend submodule.
+          for patch in "$PWD"/desktop-patches/*.patch; do
+            git -C upstream apply --check "$patch"
+            git -C upstream apply "$patch"
+          done
 
       - name: Build Cinny web
         working-directory: cinny/upstream/cinny
