@@ -11,8 +11,18 @@ a container:
 Scope (and nothing else):
 
   * index.html — <title>, apple-mobile-web-app-title, application-name,
-    theme-color, og:image, the icon/ apple-touch-icon link set, and the
-    noscript sentence.
+    theme-color, og:image, the icon/ apple-touch-icon link set, the
+    noscript sentence, and the <style> block that keeps the
+    device-verification dialog (mx_CompleteSecurityBody, shown right after
+    the first login) inside the viewport on short screens. Upstream caps
+    its Glass frame with .mx_Dialog_border{max-height:calc(100% - 48px)},
+    which resolves against the AuthPage flex chain and cuts off the button
+    row ("Sign out") without giving anything a scrollbar; the injected
+    block replaces that cap with a viewport-relative one and makes the
+    card scroll internally. See THEME-FIX.md at the repository root.
+  * i18n/ru.*.json — the "after new login" verification strings that are
+    still missing from upstream Russian (added only where absent, so a
+    future upstream translation wins).
   * bundles/*/error-view.js — the Element app logo path and its alt text.
   * config.json — branding.welcome_background_url (created when the baked
     image config has no branding block yet).
@@ -53,6 +63,50 @@ WELCOME_BG = "/plotina-bg.png"
 
 ICON_LINK = f'<link rel="icon" type="image/svg+xml" href="{ICON_SVG}">'
 TOUCH_LINK = f'<link rel="apple-touch-icon" sizes="192x192" href="{ICON_192}">'
+
+# The two noise <script> tags the Dockerfile inserts before this script runs;
+# rebrand_index() anchors the modal style right in front of them when they are
+# there (and before </head> otherwise) so the tag pair itself stays byte-identical.
+NOISE_TAGS = ('<script src="/noise/logic.js"></script>'
+              '<script src="/noise/boot.js" defer></script>')
+
+# Device-verification dialog fix, validated against the live chat.plotina.cc
+# bundle 81bff4fd060173d686ec (element-web v1.12.32), see THEME-FIX.md:
+#   * give the auth modal a bottom margin so the footer is reachable,
+#   * replace the percentage max-height that resolves through the AuthPage
+#     flex chain (upstream assumes a fixed-position .mx_Dialog_wrapper parent)
+#     with a viewport-relative one, scoped to the CompleteSecurity Glass so
+#     ordinary dialogs keep their own geometry,
+#   * scroll the white card internally so the button row ("Use recovery key",
+#     "Sign out") always stays reachable on ~1366x768 laptops.
+MODAL_STYLE_ID = "plotina-modal-a11y"
+MODAL_CSS = (
+    ".mx_AuthPage_modal{margin-bottom:50px}"
+    ".mx_AuthPage_modalContent>.mx_Dialog_border{max-height:calc(100vh - 150px)}"
+    ".mx_CompleteSecurityBody{overflow-y:auto}"
+)
+MODAL_BLOCK = f'<style id="{MODAL_STYLE_ID}">{MODAL_CSS}</style>'
+
+# Russian strings the upstream ru locale still lacks for the
+# after-new-login verification dialog (keys per element-web's hierarchical
+# i18n JSON). Inserted only where absent: once upstream ships its own
+# translation, rebrand_locales() stops touching it.
+LOCALE_OVERRIDES: dict[str, dict] = {
+    "ru": {
+        "action": {
+            "sign_out_before_verify": "Выйти",
+        },
+        "encryption": {
+            "verification": {
+                "no_other_devices":
+                    "Этот параметр недоступен, потому что у вас нет других устройств",
+                "no_recovery_key":
+                    "Этот параметр недоступен, потому что вы ещё не настроили "
+                    "ключ восстановления",
+            },
+        },
+    },
+}
 
 
 class BrandingError(RuntimeError):
@@ -100,6 +154,18 @@ def rebrand_index(html: str) -> str:
     html = html.replace("Sorry, Element requires JavaScript to be enabled.",
                         f"{BRAND} requires JavaScript to be enabled.")
 
+    # Modal a11y style: drop a previously injected block first so re-running
+    # on an already-branded tree is a no-op, then insert exactly one, directly
+    # in front of the noise tags (which must stay byte-identical) or before
+    # </head> on a stock tree. After bundle.css/theme-*.css in every case, so
+    # the brand rules win the cascade at equal specificity.
+    html = re.sub(r'<style id="' + re.escape(MODAL_STYLE_ID)
+                  + r'">.*?</style>', "", html, flags=re.S)
+    if NOISE_TAGS in html:
+        html = html.replace(NOISE_TAGS, MODAL_BLOCK + NOISE_TAGS, 1)
+    else:
+        html = html.replace("</head>", MODAL_BLOCK + "</head>", 1)
+
     for expected in (
         f"<title>{BRAND}</title>",
         f'<meta name="apple-mobile-web-app-title" content="{BRAND}">',
@@ -109,9 +175,13 @@ def rebrand_index(html: str) -> str:
         ICON_LINK,
         TOUCH_LINK,
         f"{BRAND} requires JavaScript to be enabled.",
+        MODAL_BLOCK,
     ):
         if expected not in html:
             raise BrandingError(f"index.html: {expected!r} missing after rebrand")
+    if html.count(MODAL_BLOCK) != 1:
+        raise BrandingError("index.html: the modal a11y style is not present "
+                            "exactly once")
     for forbidden in (
         "<title>Element</title>",
         'content="Element"',
@@ -159,6 +229,65 @@ def rebrand_config(config: Path) -> bool:
     return True
 
 
+def _add_missing(dst: dict, src: dict, path: str = "") -> list[str]:
+    """Recursively copy leaf strings from *src* into *dst* where absent.
+
+    Returns the dotted keys that were added. Existing upstream translations
+    are never overwritten, so this stays a no-op once Crowdin catches up.
+    """
+    added: list[str] = []
+    for key, value in src.items():
+        here = f"{path}|{key}" if path else key
+        if isinstance(value, dict):
+            target = dst.get(key)
+            if not isinstance(target, dict):
+                target = {}
+                dst[key] = target
+            added.extend(_add_missing(target, value, here))
+        elif key not in dst:
+            dst[key] = value
+            added.append(here)
+    return added
+
+
+def rebrand_locales(i18n: Path) -> list[str]:
+    """Fill the known-missing Russian verification strings in /app/i18n.
+
+    i18n/languages.json maps a language to its hashed filename (e.g.
+    "ru.a625131.json"); the JSON itself is served with no-cache + ETag, so
+    the content is patched in place under the existing name.
+    """
+    manifest_file = i18n / "languages.json"
+    if not manifest_file.is_file():
+        raise BrandingError(f"i18n/languages.json: {manifest_file} does not "
+                            "exist; upstream i18n layout moved")
+    try:
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BrandingError(f"i18n/languages.json: cannot parse: {exc}") from exc
+    actions: list[str] = []
+    for lang, overrides in LOCALE_OVERRIDES.items():
+        name = manifest.get(lang)
+        if not name:
+            raise BrandingError(f"i18n/languages.json: no entry for {lang!r}")
+        path = i18n / name
+        if not path.is_file():
+            raise BrandingError(f"i18n: {lang} file {name} is missing from {i18n}")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise BrandingError(f"i18n/{name}: cannot parse: {exc}") from exc
+        if not isinstance(data, dict):
+            raise BrandingError(f"i18n/{name}: top level is not an object")
+        added = _add_missing(data, overrides)
+        if added:
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=4) + "\n",
+                            encoding="utf-8")
+            for dotted in added:
+                actions.append(f"i18n/{name}: added {dotted.split('|')[-1]!r}")
+    return actions
+
+
 def apply(app: Path) -> list[str]:
     """Brand the given webapp directory; return human-readable actions."""
     index = app / "index.html"
@@ -168,12 +297,12 @@ def apply(app: Path) -> list[str]:
     actions: list[str] = []
 
     before = index.read_text(encoding="utf-8")
-    noise_tag = ('<script src="/noise/logic.js"></script>'
-                 '<script src="/noise/boot.js" defer></script>')
+    noise_tag = NOISE_TAGS
     index.write_text(rebrand_index(before), encoding="utf-8")
     if noise_tag in before and noise_tag not in index.read_text(encoding="utf-8"):
         raise BrandingError("index.html: the noise overlay tags vanished")
-    actions.append("index.html rebranded (title, metas, icons, og:image, noscript)")
+    actions.append("index.html rebranded (title, metas, icons, og:image, "
+                   "noscript, modal a11y style)")
 
     error_views = sorted((app / "bundles").glob("*/error-view.js"))
     if not error_views:
@@ -183,6 +312,8 @@ def apply(app: Path) -> list[str]:
                                                             errors="replace")),
                          encoding="utf-8")
     actions.append(f"{len(error_views)} error-view chunk(s) rebranded")
+
+    actions.extend(rebrand_locales(app / "i18n"))
 
     if rebrand_config(app / "config.json"):
         actions.append("config.json: branding.welcome_background_url set")

@@ -76,6 +76,32 @@ class AppFixture(unittest.TestCase):
 
         shutil.copyfile(FIXTURES / "config.json", self.app / "config.json")
 
+        # The /app/i18n tree, same shape as the shipped one: a
+        # languages.json manifest pointing at hashed locale files. This ru
+        # fixture reproduces the real upstream gaps for the after-new-login
+        # verification dialog (no sign_out_before_verify, no no_other_devices,
+        # no no_recovery_key) while carrying strings that must survive.
+        i18n = self.app / "i18n"
+        i18n.mkdir()
+        self.ru_name = "ru.deadbeef.json"
+        self.en_name = "en_EN.cafe123.json"
+        ru = {
+            "action": {"sign_out": "Удалить это устройство"},
+            "encryption": {"verification": {
+                "use_recovery_key": "Используйте recovery key",
+                "confirm_identity_title": "Подтвердите свою цифровую личность",
+            }},
+        }
+        (i18n / "languages.json").write_text(json.dumps(
+            {"en": self.en_name, "ru": self.ru_name}, indent=4) + "\n",
+            encoding="utf-8")
+        (i18n / self.ru_name).write_text(json.dumps(
+            ru, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
+        (i18n / self.en_name).write_text(json.dumps(
+            {"action": {"sign_out_before_verify": "Sign out"}}, indent=4) + "\n",
+            encoding="utf-8")
+        self.en_before = (i18n / self.en_name).read_bytes()
+
         # Stock logo payload.
         (logos / "element-logo.svg").write_text("<svg>OLD</svg>", encoding="utf-8")
         (logos / "element-app-logo.png").write_bytes(b"old-png")
@@ -103,6 +129,10 @@ class AppFixture(unittest.TestCase):
 
     def logos(self) -> Path:
         return self.app / "themes" / "element" / "img" / "logos"
+
+    def ru(self) -> dict:
+        return json.loads((self.app / "i18n" / self.ru_name).read_text(
+            encoding="utf-8"))
 
 
 class IndexHtmlTest(AppFixture):
@@ -160,6 +190,22 @@ class IndexHtmlTest(AppFixture):
         self.assertEqual(html.count(NOISE_TAG), 1)
         self.assertIn(NOISE_TAG + "</head>", html)
 
+    def test_modal_a11y_style(self) -> None:
+        self.brand()
+        html = self.index()
+        self.assertIn('<style id="plotina-modal-a11y">', html)
+        self.assertEqual(html.count('<style id="plotina-modal-a11y">'), 1)
+        self.assertIn(".mx_AuthPage_modal{margin-bottom:50px}", html)
+        self.assertIn(".mx_AuthPage_modalContent>.mx_Dialog_border"
+                      "{max-height:calc(100vh - 150px)}", html)
+        self.assertIn(".mx_CompleteSecurityBody{overflow-y:auto}", html)
+        # The style must land after bundle.css (equal-specificity cascade)
+        # and must not split the noise tag pair.
+        self.assertLess(html.index(f"bundles/{BUNDLE}/bundle.css"),
+                        html.index('<style id="plotina-modal-a11y">'))
+        self.assertLess(html.index('<style id="plotina-modal-a11y">'),
+                        html.index(NOISE_TAG))
+
 
 class ErrorViewTest(AppFixture):
     def test_logo_path_and_alt(self) -> None:
@@ -174,6 +220,50 @@ class ErrorViewTest(AppFixture):
         self.brand()
         self.assertEqual(self.other_chunk.read_bytes(), self.other_before)
         self.assertIn("Element Call", self.other_chunk.read_text(encoding="utf-8"))
+
+
+class LocaleTest(AppFixture):
+    def test_missing_strings_added(self) -> None:
+        self.brand()
+        ru = self.ru()
+        self.assertEqual(ru["action"]["sign_out_before_verify"], "Выйти")
+        ver = ru["encryption"]["verification"]
+        self.assertIn("no_other_devices", ver)
+        self.assertIn("no_recovery_key", ver)
+        self.assertTrue(ver["no_other_devices"].startswith("Этот параметр"))
+
+    def test_existing_translations_survive(self) -> None:
+        self.brand()
+        ru = self.ru()
+        self.assertEqual(ru["action"]["sign_out"], "Удалить это устройство")
+        self.assertEqual(ru["encryption"]["verification"]["use_recovery_key"],
+                         "Используйте recovery key")
+        self.assertEqual(ru["encryption"]["verification"]["confirm_identity_title"],
+                         "Подтвердите свою цифровую личность")
+
+    def test_english_locale_untouched(self) -> None:
+        self.brand()
+        en = self.app / "i18n" / self.en_name
+        self.assertEqual(en.read_bytes(), self.en_before)
+
+    def test_second_run_adds_nothing(self) -> None:
+        self.brand()
+        before = (self.app / "i18n" / self.ru_name).read_bytes()
+        proc = self.run_branding()
+        self.assertEqual(proc.returncode, 0, msg=proc.stdout + proc.stderr)
+        self.assertEqual((self.app / "i18n" / self.ru_name).read_bytes(), before)
+
+    def test_missing_manifest_fails_loudly(self) -> None:
+        (self.app / "i18n" / "languages.json").unlink()
+        proc = self.run_branding()
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("i18n", proc.stderr)
+
+    def test_missing_ru_file_fails_loudly(self) -> None:
+        (self.app / "i18n" / self.ru_name).unlink()
+        proc = self.run_branding()
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn(self.ru_name, proc.stderr)
 
 
 class ConfigJsonTest(AppFixture):
@@ -227,6 +317,7 @@ class StrictnessTest(AppFixture):
         after = self.index()
         self.assertEqual(after, before)
         self.assertEqual(after.count('href="/plotina-icon.svg"'), 1)
+        self.assertEqual(after.count('<style id="plotina-modal-a11y">'), 1)
 
     def test_moved_upstream_title_fails_loudly(self) -> None:
         broken = Path(self._tmp.name) / "broken"
