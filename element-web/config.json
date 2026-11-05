@@ -6,6 +6,7 @@
     }
   },
   "brand": "Plotina Web",
+  "update_base_url": "https://github.com/plotina-cc/clients/releases",
   "disable_guests": true,
   "show_labs_settings": false,
   "features": {},

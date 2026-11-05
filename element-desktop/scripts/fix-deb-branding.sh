@@ -77,8 +77,10 @@ done
 
 # dpkg-deb 1.22 defaults to zstd, which Ubuntu 22.04's dpkg cannot read;
 # keep the xz compression electron-builder used.
-# electron-builder takes app-update.yml from upstream's publish block; without
-# this the shipped updater keeps looking for vector-im/element-web releases.
+# Belt-and-braces only since the workflow switched to build-time
+# --config.publish.* overrides: the yml already names plotina-cc/clients, this
+# sed is a no-op. (We cannot re-pack the AppImage the same way: that would
+# change the bytes behind the sha512 latest-linux.yml publishes for it.)
 for update_yml in "$ROOT"/pkg/opt/*/resources/app-update.yml; do
   [ -f "$update_yml" ] || continue
   sed -i \

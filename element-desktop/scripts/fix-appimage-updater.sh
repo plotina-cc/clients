@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# LEGACY: only use this to repoint OLD Plotina AppImages built before the
+# CI switched to build-time --config.publish.* overrides. New builds write
+# app-update.yml with owner plotina-cc / repo clients directly, and
+# re-packing the squashfs after the fact changes the bytes behind the sha512
+# that latest-linux.yml publishes, breaking download verification.
+#
 # Repoint the updater inside a built AppImage at plotina-cc/clients.
 #
 # electron-builder writes resources/app-update.yml from upstream's publish

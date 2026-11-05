@@ -21,10 +21,13 @@ and chat.plotina.cc run the same code. `WEBAPP_DIR` lets a build use an unpacked
 
 ## What our delta is
 
-No upstream source is patched. Upstream supports exactly this: a `webapp`
-directory (or `webapp.asar`) next to `apps/desktop`, packed by
-`pnpm run asar-webapp` and loaded from the `vector://vector/webapp/` protocol.
-The delta is applied to the webapp after it is unpacked:
+No upstream *webapp* source is patched, with one deliberate exception in the
+Electron shell: `desktop/updater.ts` replaces `apps/desktop/src/updater.ts`
+at build time (see *Windows auto-update* below). Everything else rides on
+supported seams: a `webapp` directory (or `webapp.asar`) next to
+`apps/desktop`, packed by `pnpm run asar-webapp` and loaded from the
+`vector://vector/webapp/` protocol. The delta is applied to the webapp after
+it is unpacked:
 
 - `apply-noise.py` copies `../noise/` into the webapp and adds
   `<script src="noise/logic.js"></script><script src="noise/boot.js" defer></script>`
@@ -40,9 +43,11 @@ The delta is applied to the webapp after it is unpacked:
   `apply-noise.py --brand` only sets the `brand` key of
   `config.json` (the in-app name); this is the browser-facing half.
 - `../element-web/config.json` becomes the webapp's `config.json` with
-  `web_base_url` added (context-menu links point at chat.plotina.cc) and
-  `sentry.dsn` filled from `SENTRY_DSN`; `update_base_url` is dropped, so the
-  shell never asks Element for updates. Upstream's `apps/desktop` reads that same
+  `web_base_url` added (context-menu links point at chat.plotina.cc),
+  `sentry.dsn` filled from `SENTRY_DSN`, and `update_base_url` kept as the
+  on-switch for our Windows updater (see *Windows auto-update* below — the
+  feed itself comes from `resources/app-update.yml`). Upstream's `apps/desktop`
+  reads that same
   file: the main process calls `Sentry.init()` when `sentry.dsn` is present and
   the renderer's `initSentry()` runs from the config it receives over IPC, so
   both halves report to GlitchTip. A build without a usable DSN fails instead of
@@ -57,12 +62,72 @@ UPSTREAM_TAG              element-web tag we build against
 webapp.lock.json          release tarball URL + sha256 (tag must match UPSTREAM_TAG)
 build.plotina.json        electron-builder variant: appId cc.plotina.desktop,
                           package name plotina-desktop, productName Plotina Desktop
+                          (the publish block here is ignored by upstream's
+                          electron-builder.ts; CI forces it with --config.*)
+desktop/updater.ts        replaces apps/desktop/src/updater.ts: our Windows
+                          auto-updater (GitHub releases + latest.yml + sha512)
 apply-noise.py            webapp overlay + config.json
 branding.py               webapp shell branding: title, icons, meta, error view,
                           plus the shared web fixes (../element-web/webapp_fixes.py)
 scripts/prepare-webapp.sh tarball -> overlay -> branding -> .build/webapp
 scripts/build.sh          clone, install, asar, installers -> dist-stable/
 ```
+
+## Windows auto-update
+
+Upstream's `src/updater.ts` drives Electron's built-in autoUpdater, which on
+Windows is Squirrel: it needs the `Update.exe` that a `squirrel` installer
+ships. We package `nsis`, so upstream's updater always bails out with
+"Squirrel not found", and upstream does not depend on `electron-updater` at
+all — the `resources/app-update.yml` that electron-builder packs is inert
+unless something reads it. `desktop/updater.ts` is that something. It is
+copied over `apps/desktop/src/updater.ts` before compiling (CI step "Apply
+Plotina desktop sources", and scripts/build.sh).
+
+How a build becomes updatable, end to end:
+
+- The build passes `--config.publish.provider/owner/repo/releaseType` on the
+  CLI. CLI dot-overrides beat both upstream's `electron-builder.ts` config and
+  the github-publish inference from package.json `repository`
+  (vector-im/element-web); that is why `build.plotina.json`'s own publish
+  block never worked (upstream's config builder whitelists variant fields and
+  drops it). Verified against electron-builder 26.16.1: NSIS, deb and AppImage
+  all carry `owner: plotina-cc` / `repo: clients` without any post-build
+  patching (post-patching is now forbidden: the AppImage used to be re-packed
+  after the fact, which silently broke the sha512 that `latest-linux.yml`
+  publishes for it).
+- Tag builds derive a per-build app version from the tag
+  (`v1.12.32-plotina-desktop.30` -> `VERSION=1.12.32-plotina.30`) so two
+  Plotina builds at the same upstream base are distinguishable. It must be a
+  semver prerelease: a 4-segment `1.12.32.30` gets mangled by electron-builder
+  into `1.12.3-2.30` inside latest.yml.
+- electron-builder emits `dist/latest.yml` (+ `.exe.blockmap`,
+  `latest-linux.yml` for the AppImage); the workflow stages them **unrenamed**
+  and uploads them as release assets, because latest.yml references the
+  installer by filename.
+- The updater polls `api.github.com/repos/<owner>/<repo>/releases` (from
+  app-update.yml), fetches `latest.yml` from the newest releases that carry
+  one, compares numeric version tokens with `app.getVersion()`, downloads the
+  installer, verifies its sha512, and runs it with `/S --updated`. Renderer
+  IPC channels (`check_updates`, `install_update`, `update-downloaded`) are
+  unchanged, so the webapp Settings UI keeps working.
+- The `windows smoke` job silently installs the built setup.exe on a Windows
+  runner, asserts the installed `resources/app-update.yml` names
+  plotina-cc/clients, checks `Plotina-Desktop.exe` exists, launches the app,
+  proves the process survives, and prints the installed version. The release
+  job needs it.
+
+Security trade-off (also commented in desktop/updater.ts): nothing is signed.
+Authenticode verification is skipped **explicitly** by our updater, not by
+accident. Note that electron-updater v6 (bundled with electron-builder
+26.16.1) skips verification silently whenever app-update.yml has no
+publisherName, while electron-updater v7 / electron-builder v27 *fail closed*
+without a way to bake `verifyUpdateCodeSignature: false` through the 26.16.1
+publish schema — another reason to own the updater code. Update authenticity
+therefore rests on TLS to GitHub plus the release's sha512: whoever can write
+to plotina-cc/clients releases can ship any binary that installs silently.
+Users also see SmartScreen prompts (first run and updates) until the
+installer is code-signed.
 
 ## Parity with Element Web
 

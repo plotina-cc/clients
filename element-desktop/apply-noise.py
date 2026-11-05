@@ -10,8 +10,9 @@ runtime, so this one overlay works both here and on the web.
 
 Also writes config.json into the webapp: the homeserver/branding from
 element-web/config.json plus the desktop-only web_base_url. update_base_url is
-removed on purpose -- without it the Electron shell never asks Element for an
-update.
+kept on purpose: without a non-empty value electron-main.ts never starts the
+updater (our Windows builds use the Plotina updater in desktop/updater.ts,
+whose feed comes from resources/app-update.yml, not from this URL).
 
 The config is expected to come from element-web/scripts/render-config.py, which
 fills sentry.dsn from SENTRY_DSN; a config without a usable sentry block fails
@@ -94,8 +95,13 @@ def write_config(src: Path, dst: Path, brand: str | None = None) -> None:
     sentry = config.get("sentry")
     if not isinstance(sentry, dict) or not str(sentry.get("dsn") or "").strip():
         sys.exit(f"apply-noise: {src} has no sentry.dsn; the desktop app would never report to GlitchTip")
-    if config.pop("update_base_url", None) is not None:
-        print("dropped update_base_url: our builds never follow Element's update feed")
+    if config.get("update_base_url"):
+        # electron-main.ts only calls our updater when the shell config has a
+        # non-empty update_base_url; the actual feed (owner/repo) comes from
+        # resources/app-update.yml, so the URL itself is just the on-switch.
+        print(f"kept update_base_url={config['update_base_url']!r}: Windows auto-update is enabled")
+    elif sys.platform == "win32":
+        print("WARNING: update_base_url missing; electron-main will not start the updater")
     if brand:
         config["brand"] = brand
     for change in make_branding_paths_relative(config):

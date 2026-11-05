@@ -61,41 +61,65 @@ console.log("asar config.json sentry:", s.dsn.replace(/\/\/[^@]+@/, "//<key>@"),
 echo "==> variant"
 cp "$ROOT/build.plotina.json" variant.json
 
+# Upstream's src/updater.ts only drives Squirrel, which our NSIS packaging
+# never installs; swap in our own GitHub-releases updater before compiling.
+cp "$ROOT/desktop/updater.ts" src/updater.ts
+
 echo "==> installers"
-# electron-builder#5721: hard links break the build inside some containers.
+# GNU tar and some containers hate hard links (electron-builder#5721).
 export USE_HARD_LINKS=false
 case "$(uname -s)" in
-  Linux)                TARGETS=(-l appimage deb) ;;
-  MINGW*|MSYS*|CYGWIN*) TARGETS=(-w nsis) ;;
+  Linux)                TARGETS=(-l appimage deb)
+                        PUB=(--config.appImage.artifactName='Plotina-Desktop-${version}.AppImage') ;;
+  MINGW*|MSYS*|CYGWIN*) TARGETS=(-w nsis)
+                        PUB=(--config.win.executableName=Plotina-Desktop '--config.nsis.artifactName=Plotina-Desktop-${version}-setup.exe') ;;
   *)
     echo "build.sh: unsupported platform $(uname -s); macOS is not built for lack of a signing identity" >&2
     exit 1
     ;;
 esac
-VARIANT_PATH=variant.json pnpm run build --publish never "${TARGETS[@]}"
+# Upstream's electron-builder.ts ignores the variant's publish block, so the
+# github publish target is forced via CLI dot-overrides (they beat the config
+# file and the "repository" field inference). Set VERSION="<base>-plotina.N"
+# (semver prerelease only; a 4-segment version gets mangled by
+# electron-builder) so successive builds have distinct app versions.
+VARIANT_PATH=variant.json pnpm run build --publish never "${TARGETS[@]}" \
+  --config.publish.provider=github \
+  --config.publish.owner=plotina-cc \
+  --config.publish.repo=clients \
+  --config.publish.releaseType=release \
+  "${PUB[@]}"
 
-# electron-builder keeps upstream's deb Vendor/Maintainer/Homepage and writes
-# the executable name into the menu entry; rewrite both before staging.
+# The deb keeps upstream's Vendor/Maintainer/Homepage and menu name; rewrite
+# those in the built package (app-update.yml is already ours since the build
+# publishes directly to plotina-cc/clients — repacking an AppImage after the
+# fact would break the sha512 that latest-linux.yml just published, so we
+# assert the metadata instead of patching it).
 for deb in dist/*.deb; do
   [ -f "$deb" ] || continue
   "$HERE/fix-deb-branding.sh" "$deb"
 done
 
-# The AppImage embeds the same app-update.yml; repack it when squashfs-tools
-# is around (CI always installs it).
-for image in dist/*.AppImage; do
-  [ -f "$image" ] || continue
-  if command -v mksquashfs >/dev/null 2>&1; then
-    "$HERE/fix-appimage-updater.sh" "$image"
-  else
-    echo "build.sh: mksquashfs missing; $image still points at upstream updates" >&2
-  fi
-done
-
-echo "==> stable names"
-mkdir -p "$ROOT/dist-stable"
+# Verify the packaged updater config instead of patching it after the fact:
+# re-packing the AppImage would change the bytes behind the sha512 that
+# latest-linux.yml publishes for it.
+echo "==> updater metadata check"
 shopt -s nullglob
-for f in dist/*.AppImage; do cp "$f" "$ROOT/dist-stable/Plotina-Desktop.AppImage"; done
-for f in dist/*.deb;      do cp "$f" "$ROOT/dist-stable/Plotina-Desktop.deb"; done
-for f in dist/*.exe;      do cp "$f" "$ROOT/dist-stable/Plotina-Desktop-setup.exe"; done
+case "$(uname -s)" in
+  Linux) unpacked=dist/linux-unpacked; meta=dist/latest-linux.yml ;;
+  *)     unpacked=dist/win-unpacked;   meta=dist/latest.yml ;;
+esac
+if [ -d "$unpacked" ]; then
+  yml="$unpacked/resources/app-update.yml"
+  grep -qx 'owner: plotina-cc' "$yml" || { echo "build.sh: $yml is not ours" >&2; exit 1; }
+  grep -qx 'repo: clients' "$yml" || { echo "build.sh: $yml is not ours" >&2; exit 1; }
+  grep -qE 'vector-im|element-web' "$yml" && { echo "build.sh: $yml still references upstream" >&2; exit 1; } || true
+  [ -s "$meta" ] || { echo "build.sh: $meta missing; updater metadata was not generated" >&2; exit 1; }
+fi
+
+echo "==> stage (names must match latest*.yml, so no renaming)"
+mkdir -p "$ROOT/dist-stable"
+for f in dist/*.exe dist/*.exe.blockmap dist/*.AppImage dist/*.AppImage.blockmap dist/*.deb dist/latest.yml dist/latest-linux.yml; do
+  cp "$f" "$ROOT/dist-stable/"
+done
 ls -lh "$ROOT/dist-stable"
