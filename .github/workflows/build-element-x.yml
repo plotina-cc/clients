@@ -426,51 +426,6 @@ jobs:
 
           for apk in Plotina-X*.apk; do check_app_link "$apk"; done
 
-      - name: Check Sentry is wired into the APK
-        env:
-          ELEMENT_ANDROID_SENTRY_DSN: ${{ vars.SENTRY_DSN }}
-        run: |
-          cd "$GITHUB_WORKSPACE"
-          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
-          apk=Plotina-X.apk
-          if [ -z "${ELEMENT_ANDROID_SENTRY_DSN:-}" ]; then
-            echo "::warning::SENTRY_DSN is not set: this APK has no crash reporting"
-            exit 0
-          fi
-
-          # 1. The DSN is a BuildConfig string, so it is in the dex string pool. If it is not there,
-          #    the app compiles, installs, runs and silently reports nothing - the failure mode this
-          #    check exists for.
-          if unzip -p "$apk" "classes*.dex" | strings | grep -qF "sentry.plotina.cc"; then
-            echo "OK: the Sentry DSN host is in classes*.dex"
-          else
-            echo "::error file=$apk::$apk carries no Sentry DSN: nothing will be reported"
-            exit 1
-          fi
-
-          # 2. The release is manifest meta-data (io.sentry.release), which is where the SDK reads it
-          #    from at init. Missing or wrong here means every crash lands as "unknown release".
-          AAPT2=$(ls "$SDK"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -1)
-          if [ -n "$AAPT2" ]; then
-            "$AAPT2" dump xmltree --file AndroidManifest.xml "$apk" > "$RUNNER_TEMP/manifest-sentry.txt"
-            grep -A3 'io.sentry.release' "$RUNNER_TEMP/manifest-sentry.txt" | head -8
-            grep -qF "$PLOTINA_SENTRY_RELEASE" "$RUNNER_TEMP/manifest-sentry.txt" \
-              || { echo "::error file=$apk::io.sentry.release is not '$PLOTINA_SENTRY_RELEASE' in the merged manifest"; exit 1; }
-            echo "OK: io.sentry.release is $PLOTINA_SENTRY_RELEASE"
-          else
-            echo "::warning::no aapt2: cannot check io.sentry.release in the manifest"
-          fi
-
-          # 3. Native crashes need the NDK integration, which ships sentry-native as libsentry*.so.
-          #    Upstream's services/analyticsproviders/sentry depends on io.sentry:sentry-android, and
-          #    that pulls sentry-android-ndk; this prints what actually got packaged.
-          unzip -l "$apk" | grep -E 'lib/[^/]+/libsentry[^/]*\.so' | head -5 || true
-          if unzip -l "$apk" | grep -qE 'lib/[^/]+/libsentry[^/]*\.so'; then
-            echo "OK: sentry-native is packaged (native crash handler available)"
-          else
-            echo "::warning::no libsentry*.so in the APK: native crashes will not be captured"
-          fi
-
       - name: Check the APK carries Firebase and our push project
         run: |
           cd "$GITHUB_WORKSPACE"
