@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -188,6 +189,28 @@ class TarballBrandingTest(unittest.TestCase):
         # Exactly one occurrence keeps upstream's name: the logo's aria-label.
         self.assertEqual(js.count("Element Call"), branding.KNOWN_LEFTOVERS)
         self.assertIn("Element Call", js)
+
+    def test_theme_defaults_to_dark(self):
+        """The rule pinned in branding.py against the real release bundle.
+
+        Upstream reads ``?theme=`` with no fallback (``null``); the branded
+        dist must read it with ``??`dark``` so a parameter-less open is dark
+        at the parse site itself, not just at the one CSS class the current
+        build happens to pick for ``null``.
+        """
+        pristine = next(iter((self.pristine / "assets").glob("index-*.js")))
+        before = pristine.read_text(encoding="utf-8")
+        self.assertIn("theme:n.getParam(`theme`),", before)
+        self.assertNotIn("getParam(`theme`)??", before)
+
+        run(str(EC / "branding.py"), str(self.dist))
+        js = (self.dist / "assets" / "index-FUQuguOr.js").read_text(encoding="utf-8")
+        self.assertIn("theme:n.getParam(`theme`)??`dark`", js)
+        self.assertEqual(re.findall(r"getParam\(`theme`\)(?!\?\?)", js), [])
+        self.assertNotIn("getParam(`theme`)??`light`", js)
+        # The background fallback next door must not drift: the rule appends
+        # to the theme literal only, it does not rewrap the neighbourhood.
+        self.assertIn("background:n.getEnumParam(`background`,Eve)??`gradient`", js)
 
     def test_icon_files(self) -> None:
         run(str(EC / "branding.py"), str(self.dist))

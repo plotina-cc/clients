@@ -27,6 +27,7 @@ F.info(`Element Call v0.26.1`)
 t=(0,R.jsx)(QR,{href:`https://element.io/privacy`,children:`Privacy Policy`})
 (0,R.jsx)(QR,{href:`https://element.io/cookie-policy`,children:`Cookie Policy`})
 this.localisedMessageValues={linkUrl:`https://docs.element.io/latest/element-server-suite-pro/configuring-components/configuring-matrix-rtc/#sfu-connectivity-troubleshooting`}
+theme:n.getParam(`theme`),background:n.getEnumParam(`background`,Eve)??`gradient`,
 """
 
 # The same literals as they appear in the upstream TypeScript sources: single
@@ -43,4 +44,5 @@ console.info('Element Call 0.26.1')
 href="https://element.io/privacy"
 href="https://element.io/cookie-policy"
 url='https://docs.element.io/latest/element-server-suite-pro/configuring-components/configuring-matrix-rtc/'
+theme:n.getParam('theme'),
 """
