@@ -36,6 +36,12 @@
           "primary-color": "#17795a"
         },
         "compound": {
+          "--cpd-color-text-primary": "#101418",
+          "--cpd-color-text-secondary": "#656d77",
+          "--cpd-color-bg-canvas-default": "#ffffff",
+          "--cpd-color-bg-canvas-disabled": "#f7f9fa",
+          "--cpd-color-bg-subtle-primary": "#e1e6ec",
+          "--cpd-color-border-interactive-secondary": "#bdc4cc",
           "--cpd-color-text-action-accent": "#17795a",
           "--cpd-color-icon-accent-tertiary": "#17795a",
           "--cpd-color-bg-action-primary-rest": "#17795a"
@@ -49,6 +55,12 @@
           "primary-color": "#7ee2b8"
         },
         "compound": {
+          "--cpd-color-text-primary": "#ebeef2",
+          "--cpd-color-text-secondary": "#808994",
+          "--cpd-color-bg-canvas-default": "#1b1d22",
+          "--cpd-color-bg-canvas-disabled": "#23262b",
+          "--cpd-color-bg-subtle-primary": "#26282d",
+          "--cpd-color-border-interactive-secondary": "#3c3f44",
           "--cpd-color-text-action-accent": "#7ee2b8",
           "--cpd-color-icon-accent-tertiary": "#7ee2b8",
           "--cpd-color-bg-action-primary-rest": "#7ee2b8"

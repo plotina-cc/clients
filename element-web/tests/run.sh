@@ -51,6 +51,16 @@ for page in unit.html cinny-ui.test.html; do
   esac
 done
 
+# Python suites in one discover run: branding_test.py (the brand pass over a
+# fixture /app) and test_theme_tokens.py (the Compound-token contract for
+# setting_defaults.custom_themes in config.json).
+echo "--- python unit tests"
+if python3 -m unittest discover -s "$HERE" -p '*test*.py' 2>&1; then
+  echo "    OK"
+else
+  status=1
+fi
+
 if [ "$status" -ne 0 ]; then
   echo "unit tests: FAILED"
   exit 1
