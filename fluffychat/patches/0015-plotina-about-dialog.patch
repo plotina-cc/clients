@@ -1,0 +1,112 @@
+diff --git a/lib/pages/settings/settings_view.dart b/lib/pages/settings/settings_view.dart
+index 702e2e1..d1d8d9c 100644
+--- a/lib/pages/settings/settings_view.dart
++++ b/lib/pages/settings/settings_view.dart
+@@ -203,7 +203,7 @@ class SettingsView extends StatelessWidget {
+             ListTile(
+               leading: const Icon(Icons.info_outline_rounded),
+               title: Text(L10n.of(context).about),
+-              onTap: () => PlatformInfos.showDialog(context),
++              onTap: () => PlatformInfos.showAppInfoDialog(context),
+             ),
+             Divider(color: theme.dividerColor),
+             ListTile(
+diff --git a/lib/utils/platform_infos.dart b/lib/utils/platform_infos.dart
+index c4a8a04..0c2f20e 100644
+--- a/lib/utils/platform_infos.dart
++++ b/lib/utils/platform_infos.dart
+@@ -56,53 +56,64 @@ abstract class PlatformInfos {
+     return version;
+   }
+ 
+-  static Future<void> showDialog(BuildContext context) async {
++  static Future<void> showAppInfoDialog(BuildContext context) async {
+     final l10n = L10n.of(context);
+     final version = await PlatformInfos.getVersion();
+     if (!context.mounted) return;
+-    showAboutDialog(
++    // Plotina: showAboutDialog always adds Flutter's licence page, which is a
++    // wall of upstream copyright notices. A plain dialog keeps the useful
++    // bits (version, source, logs, configs) and drops that page.
++    showDialog<void>(
+       context: context,
+-      children: [
+-        Text(l10n.versionWithNumber(version)),
+-        TextButton.icon(
+-          onPressed: () => launchUrlString(AppConfig.sourceCodeUrl),
+-          icon: const Icon(Icons.source_outlined),
+-          label: Text(l10n.sourceCode),
++      builder: (dialogContext) => AlertDialog(
++        title: Row(
++          children: [
++            ClipRRect(
++              borderRadius: BorderRadius.circular(64),
++              child: Image.asset(
++                './assets/logo/mini/logo_mini.png',
++                width: 40,
++                height: 40,
++              ),
++            ),
++            const SizedBox(width: 12),
++            Expanded(child: Text(AppSettings.applicationName.value)),
++          ],
+         ),
+-        Builder(
+-          builder: (innerContext) {
+-            return TextButton.icon(
++        content: Column(
++          mainAxisSize: MainAxisSize.min,
++          children: [
++            Text(l10n.versionWithNumber(version)),
++            TextButton.icon(
++              onPressed: () => launchUrlString(AppConfig.sourceCodeUrl),
++              icon: const Icon(Icons.source_outlined),
++              label: Text(l10n.sourceCode),
++            ),
++            TextButton.icon(
+               onPressed: () {
++                Navigator.of(dialogContext).pop();
+                 context.go('/logs');
+-                Navigator.of(innerContext).pop();
+               },
+               icon: const Icon(Icons.list_outlined),
+               label: Text(l10n.logs),
+-            );
+-          },
+-        ),
+-        Builder(
+-          builder: (innerContext) {
+-            return TextButton.icon(
++            ),
++            TextButton.icon(
+               onPressed: () {
++                Navigator.of(dialogContext).pop();
+                 context.go('/configs');
+-                Navigator.of(innerContext).pop();
+               },
+               icon: const Icon(Icons.settings_applications_outlined),
+               label: Text(l10n.advancedConfigs),
+-            );
+-          },
+-        ),
+-      ],
+-      applicationIcon: ClipRRect(
+-        borderRadius: BorderRadius.circular(64),
+-        child: Image.asset(
+-          './assets/logo/mini/logo_mini.png',
+-          width: 64,
+-          height: 64,
++            ),
++          ],
+         ),
++        actions: [
++          TextButton(
++            onPressed: () => Navigator.of(dialogContext).pop(),
++            child: Text(l10n.close),
++          ),
++        ],
+       ),
+-      applicationName: AppSettings.applicationName.value,
+     );
+   }
+ }

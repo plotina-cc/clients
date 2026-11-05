@@ -101,6 +101,7 @@ jobs:
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0009-plotina-application-id.patch"
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0010-plotina-visible-strings.patch"
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0011-plotina-locales.patch"
+          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0012-plotina-about-minimal.patch"
 
   build:
     needs: patches
@@ -198,6 +199,8 @@ jobs:
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0010-plotina-visible-strings.patch"
           # 0011: keep only the two maintained UI locales in the APK.
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0011-plotina-locales.patch"
+          # 0012: About shows only the open-source licence list, not upstream legal links.
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0012-plotina-about-minimal.patch"
 
       - name: Apply Plotina launcher icons
         run: python3 element-x/scripts/apply-plotina-icons.py upstream/element-x

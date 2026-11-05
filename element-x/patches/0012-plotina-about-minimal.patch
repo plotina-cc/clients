@@ -1,0 +1,17 @@
+diff --git a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/ElementLegal.kt b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/ElementLegal.kt
+index 0f3c25a..2b6a89d 100644
+--- a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/ElementLegal.kt
++++ b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/ElementLegal.kt
+@@ -28,9 +28,7 @@ sealed class ElementLegal(
+ }
+ 
+ fun getAllLegals(): ImmutableList<ElementLegal> {
+-    return persistentListOf(
+-        ElementLegal.Copyright,
+-        ElementLegal.AcceptableUsePolicy,
+-        ElementLegal.PrivacyPolicy,
+-    )
++    // Plotina: the three upstream entries open element.io legal pages, which
++    // are not ours. The About screen keeps only the open-source licence list.
++    return persistentListOf()
+ }
