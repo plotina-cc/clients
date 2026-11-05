@@ -293,6 +293,8 @@ jobs:
       - name: Rewrite deb branding
         if: matrix.name == 'linux'
         shell: bash
+        env:
+          PLOTINA_REVISION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           shopt -s nullglob

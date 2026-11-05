@@ -217,6 +217,8 @@ jobs:
         if: matrix.name == 'linux'
         working-directory: element-desktop/.build/element-web/apps/desktop
         shell: bash
+        env:
+          PLOTINA_REVISION: ${{ github.ref_name }}
         run: |
           # electron-builder keeps upstream's Vendor/Maintainer/Homepage and
           # the executable name in the menu entry; rewrite both in the built

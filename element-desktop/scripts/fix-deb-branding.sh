@@ -14,6 +14,10 @@ set -euo pipefail
 DEB="${1:?usage: fix-deb-branding.sh <file.deb>}"
 # PRODUCT_NAME controls the menu entry; the desktop and lite packages differ.
 PRODUCT_NAME="${PRODUCT_NAME:-Plotina Desktop}"
+# Build counter appended to the Debian revision so successive builds are
+# distinct versions (an apt repository cannot hold two packages that share a
+# Version, and rollback needs the previous one).
+PLOTINA_REVISION="${PLOTINA_REVISION##*.}"
 [ -f "$DEB" ] || { echo "fix-deb-branding: $DEB not found" >&2; exit 1; }
 command -v dpkg-deb >/dev/null 2>&1 || {
   echo "fix-deb-branding: dpkg-deb missing; cannot rewrite $DEB" >&2
@@ -32,11 +36,24 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
+import os
+
 values = {
     "Vendor": "Plotina <thebob3r@gmail.com>",
     "Maintainer": "Plotina <thebob3r@gmail.com>",
     "Homepage": "https://plotina.cc",
 }
+revision = os.environ.get("PLOTINA_REVISION", "").strip()
+if revision:
+    match = re.search(r"^Version: *(\S+)", text, flags=re.M)
+    if match and "-plotina." not in match.group(1):
+        text = re.sub(
+            r"^Version: *(\S+)",
+            rf"Version: \1-plotina.{revision}",
+            text,
+            count=1,
+            flags=re.M,
+        )
 for field, value in values.items():
     if re.search(rf"^{field}:", text, flags=re.M):
         text = re.sub(rf"^{field}:.*$", f"{field}: {value}", text, flags=re.M)
