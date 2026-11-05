@@ -24,3 +24,4 @@ noise/dfn/v3/pkg/*
 !noise/dfn/v3/pkg/.keep
 noise/dfn/v3/models/*
 !noise/dfn/v3/models/.keep
+test-results/

@@ -1,17 +1,27 @@
-// T1 — «следуй системной теме» (Element Web 1.12.32, chat.plotina.cc).
+// T1/T7 — «следуй системной теме» (Element Web 1.12.32, chat.plotina.cc).
 //
-// Что проверяет: свежий посетитель (пустый localStorage) при
-// prefers-color-scheme: dark должен получить ТЁМНЫЙ фон и СВЕТЛЫЙ текст,
-// то есть читаемый контраст. Сейчас падает: Element применяет светлый
-// custom-theme (Plotina Mint, is_dark:false) к фону, а цвет текста
-// наследуется с <html>, чьи compound-токены переключает медиа-запрос
-// @media (prefers-color-scheme: dark) в bundle.css. Корень и патч — в
-// THEMES.md (раздел «Root cause» и «Минимальный патч»).
+// Что проверяет: свежий посетитель (пустой localStorage) при
+// prefers-color-scheme: dark должен получить ТЁМНЫЙ фон И СВЕТЛЫЙ текст И
+// контраст >= 4.5. До фикса падал по всем трём: фон был светлый (Config
+// pin'ит custom-Plotina Mint), а цвет текста наследовался с <html> из-за
+// мёртвого var(--timeline-text-color) без fallback в theme-*-custom.css
+// (корень и патчи — THEMES.md).
+//
+// После деплоя ветки theme/css-fallback зелёная целиком:
+//   * /plotina-theme.js (init-скрипт) пишет mx_local_settings.theme =
+//     "custom-Plotina Mint Dark" при тёмной ОС у посетителя без сохранённой
+//     темы → фон тёмный;
+//   * CSS-патч branding.py даёт тексту fallback на --cpd-color-text-primary,
+//     который резолвится по классу cpd-theme-* на body (т.е. по выбранной
+//     теме, а не по ОС) → текст светлый на тёмном фоне, контраст ~16.9:1.
+// Первый ассерт (seed в localStorage) дополнительно проверяет, что init-тег
+// реально вставлен и отрабатывает ДО bundle.js.
 //
 // Как запускать (Playwright настроен в e2e/, браузеры установлены):
 //   cd e2e && npm ci
 //   cd .. && NODE_PATH=$PWD/e2e/node_modules e2e/node_modules/.bin/playwright test probe-theme.spec.ts
-// URL переопределяется переменной окружения PLOTINA_CHAT_URL.
+// URL переопределяется переменной окружения PLOTINA_CHAT_URL
+// (например http://127.0.0.1:8098/ — локальная симуляция собранного dist).
 
 import { test, expect } from "@playwright/test";
 
@@ -58,6 +68,17 @@ test.describe("system dark theme (fresh visitor)", () => {
       const hs = getComputedStyle(document.documentElement);
       const bgL = luminance(rgbOf(bs.backgroundColor));
       const fgL = luminance(rgbOf(bs.color));
+      // Init-скрипт /plotina-theme.js сидит DEVICE-уровневую тему в тот же
+      // JSON-блоб mx_local_settings, который реально читает SettingsStore
+      // (проверено по init.js чанку: LocalSettingsHandler.getValue →
+      // getObject("mx_local_settings")["theme"]; голого ключа "mx_theme"
+      // Element не читает).
+      let storedTheme: string | null = null;
+      try {
+        storedTheme = JSON.parse(localStorage.getItem("mx_local_settings") ?? "null")?.theme ?? null;
+      } catch {
+        storedTheme = null;
+      }
       return {
         bodyClass: document.body.className,
         bg: bs.backgroundColor,
@@ -65,6 +86,7 @@ test.describe("system dark theme (fresh visitor)", () => {
         bgLum: bgL,
         textLum: fgL,
         contrast: (Math.max(bgL, fgL) + 0.05) / (Math.min(bgL, fgL) + 0.05),
+        storedTheme,
         // Диагностикa корня бага (THEMES.md): цвет body — наследуемое
         // значение с <html>, потому что var(--timeline-text-color) в
         // theme-*-custom.css не определён (IACVT). На <html> он системный:
@@ -78,7 +100,17 @@ test.describe("system dark theme (fresh visitor)", () => {
     });
     console.log("theme readout:", JSON.stringify(readout, null, 2));
 
-    // 1) Фон тёмный: сейчас rgb(255,255,255) — фейл №1, «фон не следует системе».
+    // 0) Тёмная ОС + свежий профиль → init-скрипт должен был засидить
+    //    парную ТЁМНУЮ custom-тему до старта бандла (часть 2 фикса).
+    expect
+      .soft(
+        readout.storedTheme,
+        `mx_local_settings.theme должен быть "custom-Plotina Mint Dark" ` +
+          `(сид /plotina-theme.js при prefers-color-scheme: dark), сейчас ${JSON.stringify(readout.storedTheme)}`,
+      )
+      .toBe("custom-Plotina Mint Dark");
+
+    // 1) Фон тёмный (следствие сида: ThemeWatcher применяет Dark-custom).
     expect
       .soft(
         readout.bgLum,
@@ -87,8 +119,8 @@ test.describe("system dark theme (fresh visitor)", () => {
       )
       .toBeLessThan(0.5);
 
-    // 2) Текст светлый — проходит уже сейчас (это и есть вторая половина бага:
-    //    светлый текст тёмной темы, но не на тёмном фоне).
+    // 2) Текст светлый — после CSS-фолбэка резолвится по --cpd-color-text-primary
+    //    выбранной (тёмной) темы, а не наследуется с <html> от ОС.
     expect
       .soft(
         readout.textLum,
@@ -96,7 +128,7 @@ test.describe("system dark theme (fresh visitor)", () => {
       )
       .toBeGreaterThan(0.5);
 
-    // 3) Итог: читаемый контраст WCAG AA. Сейчас ~1.05:1 (#ebeef2 на #fff).
+    // 3) Итог: читаемый контраст WCAG AA (после обоих патчей ~16.9:1).
     expect(
       readout.contrast,
       `контраст текст/фон должен быть >= 4.5, сейчас ${readout.contrast.toFixed(2)}:1 ` +
