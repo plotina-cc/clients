@@ -74,6 +74,13 @@ case "$(uname -s)" in
 esac
 VARIANT_PATH=variant.json pnpm run build --publish never "${TARGETS[@]}"
 
+# electron-builder keeps upstream's deb Vendor/Maintainer/Homepage and writes
+# the executable name into the menu entry; rewrite both before staging.
+for deb in dist/*.deb; do
+  [ -f "$deb" ] || continue
+  "$HERE/fix-deb-branding.sh" "$deb"
+done
+
 echo "==> stable names"
 mkdir -p "$ROOT/dist-stable"
 shopt -s nullglob
