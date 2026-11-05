@@ -194,6 +194,10 @@ jobs:
           TARGETS: ${{ matrix.targets }}
         run: |
           cp "${{ github.workspace }}/element-desktop/build.plotina.json" variant.json
+          # electron-builder resolves the "icon" from the app's build directory,
+          # so upstream's Element icon would be packaged unless we overwrite it.
+          cp "${{ github.workspace }}/element-desktop/build/icon.png" build/icon.png
+          cp "${{ github.workspace }}/element-desktop/build/icon.ico" build/icon.ico
           pnpm run build --publish never $TARGETS
 
       - name: Stage artifacts with stable names
@@ -231,8 +235,19 @@ jobs:
           merge-multiple: true
           path: dist
 
+      - name: Work out the release title
+        id: release_title
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          base="${TAG#v}"
+          echo "name=Plotina Desktop ${base%%-plotina-*}" >> "$GITHUB_OUTPUT"
+
       - uses: softprops/action-gh-release@v2
         with:
+          # Human-facing title only: never the tag, which carries the upstream
+          # client name and the plotina release counter.
+          name: ${{ steps.release_title.outputs.name }}
           files: dist/*
           # Releases here share a tag namespace with the other clients, so the
           # generated changelog would compare against an unrelated product.

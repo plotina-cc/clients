@@ -536,10 +536,22 @@ jobs:
           done
           exit "$failed"
 
+      - name: Work out the release title
+        if: startsWith(github.ref, 'refs/tags/')
+        id: release_title
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          base="${TAG#v}"
+          echo "name=Plotina X ${base%%-plotina-*}" >> "$GITHUB_OUTPUT"
+
       - name: Publish the release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
+          # Human-facing title only: never the tag, which carries the upstream
+          # client name and the plotina release counter.
+          name: ${{ steps.release_title.outputs.name }}
           files: Plotina-X*.apk
           # Tag namespace is shared with the other clients in this repository, so generated notes
           # would paste an unrelated changelog.

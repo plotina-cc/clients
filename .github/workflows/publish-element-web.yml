@@ -123,9 +123,21 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Work out the release title
+        if: startsWith(github.ref, 'refs/tags/')
+        id: release_title
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          base="${TAG#v}"
+          echo "name=Plotina Web ${base%%-plotina-*}" >> "$GITHUB_OUTPUT"
+
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
+          # Human-facing title only: never the tag, which carries the upstream
+          # client name and the plotina release counter.
+          name: ${{ steps.release_title.outputs.name }}
           files: dist/element-web-config.json
           body: |
             Runtime `config.json` for Element Web ${{ steps.image.outputs.version }} on

@@ -5,6 +5,17 @@
   "build": {
     "beforeBuildCommand": ""
   },
+  "app": {
+    "windows": [
+      {
+        "title": "Plotina Lite Desktop",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600
+      }
+    ]
+  },
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": false,

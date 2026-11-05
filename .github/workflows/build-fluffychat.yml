@@ -567,8 +567,12 @@ jobs:
           - Two APKs: arm64-v8a (most phones) and armeabi-v7a (older devices).
           - Source: `https://github.com/plotina-cc/clients` at this tag plus upstream `krille-chan/fluffychat` at the tag in `fluffychat/UPSTREAM_TAG`. Full set and rebuild steps: `SOURCE.md` (AGPL-3.0-or-later upstream, AGPL-3.0 patch layer).
           EOF
+          # Title is the human-facing product name plus the base version only:
+          # the tag carries the upstream client name and release counter.
+          BASE="${TAG#v}"
+          BASE="${BASE%%-plotina-*}"
           gh release view "$TAG" > /dev/null 2>&1 ||
-            gh release create "$TAG" --title "Plotina Mobile $TAG" --notes-file "$BODY"
+            gh release create "$TAG" --title "Plotina Mobile ${BASE}" --notes-file "$BODY"
           gh release upload "$TAG" "$APK_NAME" "$APK_NAME_ARMV7" --clobber
           # The release is the deliverable, so prove both APKs are on it.
           for asset in "$APK_NAME" "$APK_NAME_ARMV7"; do
