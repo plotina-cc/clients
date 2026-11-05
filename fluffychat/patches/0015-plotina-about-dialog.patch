@@ -1,3 +1,16 @@
+diff --git a/lib/pages/intro/intro_page.dart b/lib/pages/intro/intro_page.dart
+index d9586c7..980336f 100644
+--- a/lib/pages/intro/intro_page.dart
++++ b/lib/pages/intro/intro_page.dart
+@@ -74,7 +74,7 @@ class IntroPage extends StatelessWidget {
+                 ),
+               ),
+               PopupMenuItem(
+-                onTap: () => PlatformInfos.showDialog(context),
++                onTap: () => PlatformInfos.showAppInfoDialog(context),
+                 child: Row(
+                   mainAxisSize: .min,
+                   spacing: 12,
 diff --git a/lib/pages/settings/settings_view.dart b/lib/pages/settings/settings_view.dart
 index 702e2e1..d1d8d9c 100644
 --- a/lib/pages/settings/settings_view.dart
@@ -110,3 +123,16 @@ index c4a8a04..0c2f20e 100644
      );
    }
  }
+diff --git a/lib/widgets/layouts/login_scaffold.dart b/lib/widgets/layouts/login_scaffold.dart
+index 36bc490..dcbdd4f 100644
+--- a/lib/widgets/layouts/login_scaffold.dart
++++ b/lib/widgets/layouts/login_scaffold.dart
+@@ -133,7 +133,7 @@ class _PrivacyButtons extends StatelessWidget {
+               child: Text(L10n.of(context).privacy, style: shadowTextStyle),
+             ),
+             TextButton(
+-              onPressed: () => PlatformInfos.showDialog(context),
++              onPressed: () => PlatformInfos.showAppInfoDialog(context),
+               child: Text(L10n.of(context).about, style: shadowTextStyle),
+             ),
+           ],
