@@ -4,8 +4,10 @@ Plotina's Android build of [FluffyChat](https://github.com/krille-chan/fluffycha
 with DeepFilterNet3 (DFN3) denoising on outgoing call audio, on by default, no
 user action.
 
-**Status:** building in CI. `v2.11.3-plotina-fluffy.8` is the first release with
-FCM push and per-ABI splits; earlier tags shipped the same denoiser as one fat APK.
+**Status:** building in CI. `v2.11.3-plotina-fluffy.19` adds the in-app Plotina
+logos, a reachable "Sign in" button and the `cc.plotina.fluffychat` OIDC scheme
+that MAS requires; `.8` was the first release with FCM push and per-ABI splits;
+earlier tags shipped the same denoiser as one fat APK.
 The DFN3 path below was read from the pinned upstream, flutter_webrtc and
 deep_filter sources and is covered by the APK-content check, but nobody has
 listened to a call on a device yet.
@@ -39,6 +41,7 @@ plotina_dfn/                       Flutter plugin (Android only)
 scripts/build-android.sh           same steps as CI, run locally
 scripts/fetch-model.sh             downloads the model, SHA-256 pinned
 patches/0012-plotina-intro-buttons.patch  intro "Sign in" always on-screen (see below)
+patches/0013-plotina-oidc-scheme.patch    SSO scheme cc.plotina.fluffychat (MAS)
 tests/intro_plotina_test.dart      Flutter widget regression test for 0012
 ```
 
