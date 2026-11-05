@@ -7,7 +7,7 @@ index 3e3a13a..bb76f2e 100644
                      <Box gap="100" alignItems="End">
                        <Text size="H3">Plotina Lite Web</Text>
 -                      <Text size="T200">v4.12.8</Text>
-+                      <Text size="T200">v4.12.8-plotina.6</Text>
++                      <Text size="T200">v4.12.8</Text>
                      </Box>
 -                    <Text>Yet another matrix client.</Text>
 +                    <Text>Матрикс-клиент для сообщества Плотина.</Text>
@@ -61,12 +61,12 @@ index 1f92449..8f2e9b6 100644
          as="a"
          size="T300"
 -        href="https://github.com/ajbura/cinny/releases"
-+        href="https://github.com/plotina-cc/clients/releases/tag/v4.12.8-plotina-cinny.6"
++        href="https://github.com/plotina-cc/clients/releases"
          target="_blank"
          rel="noreferrer"
        >
 -        v4.12.8
-+        v4.12.8-plotina.6
++        v4.12.8
        </Text>
        <Text
          as="a"
@@ -92,12 +92,12 @@ index abc3db2..461c3cb 100644
 +                Матрикс-клиент для сообщества Плотина.{' '}
                  <a
 -                  href="https://github.com/cinnyapp/cinny/releases"
-+                  href="https://github.com/plotina-cc/clients/releases/tag/v4.12.8-plotina-cinny.6"
++                  href="https://github.com/plotina-cc/clients/releases"
                    target="_blank"
                    rel="noreferrer noopener"
                  >
 -                  v4.12.8
-+                  v4.12.8-plotina.6
++                  v4.12.8
                  </a>
                </span>
              }

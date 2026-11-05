@@ -44,13 +44,13 @@ Static files on the edge (`/srv/cinny`), built by
 `.github/workflows/build-cinny-web.yml` and unpacked there unchanged: the
 workflow takes the tag from `UPSTREAM_TAG`, applies the patches in `patches/`
 (Sentry and the source link), embeds `noise/` (models fetched and verified
-against `noise.lock.json`) and uploads `plotina-cinny-web.tar.gz` with
+against `noise.lock.json`) and uploads `plotina-lite-web.tar.gz` with
 `build-info.json` next to it (release, upstream tag, the repository commit and
 the Cinny commit, run).
 
 ```bash
-sha256sum -c plotina-cinny-web.tar.gz.sha256
-sudo mkdir -p /srv/cinny.new && sudo tar -xzf plotina-cinny-web.tar.gz -C /srv/cinny.new
+sha256sum -c plotina-lite-web.tar.gz.sha256
+sudo mkdir -p /srv/cinny.new && sudo tar -xzf plotina-lite-web.tar.gz -C /srv/cinny.new
 sudo chown -R bob3r:bob3r /srv/cinny.new
 sudo sh -c 'mv /srv/cinny /srv/cinny.bak-$(date +%Y%m%d-%H%M%S) && mv /srv/cinny.new /srv/cinny'
 ```
@@ -97,7 +97,7 @@ VITE_SENTRY_RELEASE="cinny@4.12.8" \
 ```
 
 The release is `cinny@<version>` — `cinny@4.12.8` for upstream tag v4.12.8 —
-and a tag of this repository is used as is (`cinny@v4.12.8-plotina-cinny.4`),
+and a tag of this repository is used as is (`cinny@v4.12.8-plotina-lite-desktop.4`),
 which is the string the desktop build reports. `build.sh` falls back to
 `cinny@<upstream tag>-local` on a checkout that is not at a tag. Events land in
 the `web-clients` project with environment `production` and the tag
