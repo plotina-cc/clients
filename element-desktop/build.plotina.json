@@ -29,5 +29,11 @@
             "email": "support@plotina.cc"
         },
         "homepage": "https://plotina.cc"
+    },
+    "publish": {
+        "provider": "github",
+        "owner": "plotina-cc",
+        "repo": "clients",
+        "releaseType": "release"
     }
 }

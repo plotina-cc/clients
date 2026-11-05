@@ -60,5 +60,15 @@ done
 
 # dpkg-deb 1.22 defaults to zstd, which Ubuntu 22.04's dpkg cannot read;
 # keep the xz compression electron-builder used.
+# FPM writes upstream's maintainer into the changelog trailer; dpkg shows it
+# in apt changelog output.
+for changelog in "$ROOT"/pkg/usr/share/doc/*/changelog.gz; do
+  [ -f "$changelog" ] || continue
+  tmp="$changelog.tmp"
+  gzip -dc "$changelog" \
+    | sed 's/Element <support@element\.io>/Plotina <support@plotina.cc>/g' \
+    | gzip -9n > "$tmp" && mv "$tmp" "$changelog"
+done
+
 dpkg-deb -b -Zxz "$ROOT/pkg" "$DEB" >/dev/null
 echo "fix-deb-branding: $DEB rewritten (Vendor/Maintainer/Homepage, Name)"
