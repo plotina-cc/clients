@@ -72,9 +72,6 @@ case "$(uname -s)" in
     exit 1
     ;;
 esac
-# app-update.yml is generated from package.json's publish block, which still
-# names vector-im/element-web; point it at our releases first.
-python3 "$HERE/point-updater.py"
 VARIANT_PATH=variant.json pnpm run build --publish never "${TARGETS[@]}"
 
 # electron-builder keeps upstream's deb Vendor/Maintainer/Homepage and writes
