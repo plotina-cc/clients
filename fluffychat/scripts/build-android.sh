@@ -50,8 +50,9 @@ echo "building the $variant variant"
 # Android versionCode for the in-app updater. The release tag carries the
 # build number (v2.11.3-plotina-mobile.23 -> 23); a local checkout of an
 # untagged commit builds .0. Override with PLOTINA_BUILD=<n>, e.g. to produce
-# an APK that must install over a released one. The formula and its limits
-# are documented in scripts/version-code.py; CI computes it the same way.
+# an APK that must install over a released one. The formula, its digit limits
+# and the ABI digit Flutter's --split-per-abi adds on top are documented in
+# scripts/version-code.py; CI computes the same numbers.
 base_version="$(sed -n 's/^version: \([0-9][0-9.]*\)+.*/\1/p' pubspec.yaml)"
 if [ -z "${PLOTINA_BUILD:-}" ]; then
   ref="$(git -C "$here" describe --tags --match 'v*plotina-mobile.*' --abbrev=0 2>/dev/null || true)"
@@ -61,7 +62,10 @@ if [ -z "${PLOTINA_BUILD:-}" ]; then
   esac
 fi
 build_number="$(python3 "$here/scripts/version-code.py" "$base_version" "$PLOTINA_BUILD")"
-echo "versionCode $build_number ($base_version, build $PLOTINA_BUILD)"
+echo "build number $build_number ($base_version, build $PLOTINA_BUILD)"
+for abi in arm64-v8a armeabi-v7a; do
+  echo "  --split-per-abi makes the $abi APK versionCode $(python3 "$here/scripts/version-code.py" "$base_version" "$PLOTINA_BUILD" "$abi")"
+done
 # Optional manifest URL override for testing the updater against a local
 # server, e.g. PLOTINA_UPDATE_URL=http://10.0.2.2:8000/update-mobile.json.
 update_args=()

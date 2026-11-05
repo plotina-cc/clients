@@ -19,7 +19,7 @@ listened to a call on a device yet.
 | Tag | `v2.11.3` (`UPSTREAM_TAG`), commit `6fc4920` |
 | Flutter | `3.47.8` (upstream `.fvmrc`) |
 | Call stack | `livekit_client` 2.13.1, `flutter_webrtc` 1.6.2+hotfix.4 (both from `pubspec.lock`) |
-| Patch | seven: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.fluffychat` (`patches/`) |
+| Patch | sixteen: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.mobile`, `0008`-`0011` Plotina name/label/links/visible strings, `0012` intro buttons, `0013` OIDC scheme, `0014` no upstream support, `0015` About dialog, `0016` in-app updater (`patches/`) |
 
 ## What is in this directory
 
@@ -174,17 +174,20 @@ CI step fails the build if any of that is missing.
 ## Building
 
 CI: `.github/workflows/build-fluffychat.yml`, triggered by a tag matching
-`v*-plotina-fluffy.*` (for example `v2.11.3-plotina-fluffy.1`) or by
+`v*-plotina-mobile.*` (for example `v2.11.3-plotina-mobile.22`) or by
 `workflow_dispatch`. The client-specific suffix matters: this repository also
 builds Cinny, and the generic `v*-plotina.*` pattern used to start every client's
 workflow at once.
 
 The job clones upstream at the tag in `UPSTREAM_TAG`, applies the patches in
 name order, builds the Rust library for arm64-v8a / armeabi-v7a / x86_64 with
-`cargo ndk`, then runs `flutter build apk --split-per-abi`. Two of the three
-splits are published: **`Plotina-FluffyChat.apk`** (arm64-v8a, what every recent
-phone needs) and **`Plotina-FluffyChat-armv7.apk`** (older devices); x86_64 stays
-with emulators.
+`cargo ndk`, then runs `flutter build apk --split-per-abi --build-number
+<versionCode>` (the tag suffix, see "In-app updater"). Two of the three
+splits are published: **`Plotina-Mobile.apk`** (arm64-v8a, what every recent
+phone needs, and what the updater downloads) and
+**`Plotina-Mobile-armv7.apk`** (older devices, manual install); x86_64 stays
+with emulators. Alongside them the release carries **`update-mobile.json`**, and
+`scripts/publish-clients.sh` copies all three to `https://plotina.cc/dl/`.
 
 ### Signing
 
@@ -232,9 +235,12 @@ every release:
 
 ```json
 {"client":"mobile","package":"cc.plotina.mobile","versionName":"2.11.3",
- "versionCode":2110323,"apkUrl":"https://plotina.cc/dl/Plotina-Mobile.apk",
+ "versionCode":2112323,"apkUrl":"https://plotina.cc/dl/Plotina-Mobile.apk",
  "sha256":"<hex>","size":<bytes>,"notes":"<short ru text>"}
 ```
+
+(`versionCode` here is the arm64 APK's own number, build 23 plus Flutter's ABI
+digit — see "versionCode grows with every build" below.)
 
 Flow (`lib/utils/updater/plotina_updater.dart`, native half
 `android/app/src/main/kotlin/…/PlotinaUpdaterChannel.kt`):
@@ -276,21 +282,38 @@ release tag rather than from upstream's `2.11.3+3574` (which repeats). With
 (`v2.11.3-plotina-mobile.23` → 23):
 
 ```
-versionCode = major * 1_000_000 + minor * 10_000 + patch * 100 + N
+build number = major * 1_000_000 + minor * 10_000 + patch * 100 + N
 2.11.3 + build 23 → 2*1000000 + 11*10000 + 3*100 + 23 = 2110323
 ```
 
-`minor < 100`, `patch < 100` and `0 ≤ N < 100`, and `scripts/version-code.py`
-exits non-zero outside those slots, so a mistake fails the build instead of
-emitting a versionCode that sorts below an older one. Untagged local builds use
-`N = 0`, which never offers an update over a released APK. CI computes it from
+**The APK does not carry that number.** `--split-per-abi` makes Flutter's
+Gradle plugin write `abi * 1000 + build number` into each split
+(`FlutterPlugin.kt`; `armeabi-v7a` 1, `arm64-v8a` 2, `x86_64` 4), so the arm64
+APK of build 23 reports **2112323** and the armv7 one **2111323** — the released
+`.22` APKs show the same offset (build 32 → 2032 / 1032). The app compares its
+own PackageManager versionCode with `update-mobile.json`, so the manifest
+publishes the *arm64 APK's* number, read back out of the built APK; the two
+families never compare against each other because 32-bit devices are pointed at
+the armv7 APK by hand.
+
+`minor < 100`, `patch < 10` and `0 ≤ N < 100`, so `patch * 100 + N ≤ 999` can
+never carry into the ABI digit, and `scripts/version-code.py` exits non-zero
+outside those slots — a mistake fails the build instead of emitting a number
+that sorts below an older one. Untagged local builds use `N = 0`, which never
+offers an update over a released APK. CI computes the expectation from
 `GITHUB_REF_NAME`, `scripts/build-android.sh` from `git describe` (or
-`PLOTINA_BUILD=<n>`), and the workflow reads it back out of the finished APK
-with `aapt`/`apkanalyzer` and fails on a mismatch.
+`PLOTINA_BUILD=<n>`), and the workflow reads both APKs back with
+`aapt`/`apkanalyzer`, fails on a mismatch, and only then writes the manifest.
+The first run of this check caught the offset for real: it expected 2110323,
+the APK said 2112323, and the release was stopped.
 
 Point the updater at a local server while testing with
 `PLOTINA_UPDATE_URL=http://10.0.2.2:8000/update-mobile.json`
 (build-android.sh forwards it as `--dart-define`).
+
+`fluffychat/tests/updater_manifest_test.dart` covers the parser: the contract
+above, numeric strings, uppercase sha256, missing fields and garbage all either
+parse or get rejected without throwing out of the daily check.
 
 ## Licensing
 

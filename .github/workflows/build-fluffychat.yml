@@ -107,9 +107,11 @@ jobs:
       # Android versionCode for the in-app updater. It comes from the release
       # tag (v2.11.3-plotina-mobile.23), not from GITHUB_RUN_NUMBER, so every
       # APK ever published is comparable: 2*1000000 + 11*10000 + 3*100 + 23 =
-      # 2110323. The formula, its digit limits and the monotonicity argument
+      # 2110323 is the build number we pass, and `--split-per-abi` makes the
+      # APK itself carry abi*1000 + that (arm64 2112323, armv7 2111323). The
+      # formula, the digit limits, the ABI digit and the monotonicity argument
       # are documented in fluffychat/scripts/version-code.py; a local
-      # scripts/build-android.sh computes the same number.
+      # scripts/build-android.sh computes the same numbers.
       - name: Work out the Android versionCode
         id: versioncode
         working-directory: fluffychat/upstream
@@ -128,12 +130,16 @@ jobs:
             BUILD=0
           fi
           CODE="$(python3 ../scripts/version-code.py "$VERSION" "$BUILD")"
+          ARM64_CODE="$(python3 ../scripts/version-code.py "$VERSION" "$BUILD" arm64-v8a)"
+          ARMV7_CODE="$(python3 ../scripts/version-code.py "$VERSION" "$BUILD" armeabi-v7a)"
           {
             echo "version_name=$VERSION"
             echo "version_code=$CODE"
+            echo "arm64_version_code=$ARM64_CODE"
+            echo "armv7_version_code=$ARMV7_CODE"
             echo "build=$BUILD"
           } >> "$GITHUB_OUTPUT"
-          echo "versionCode $CODE ($VERSION, build $BUILD)"
+          echo "build number $CODE -> arm64 APK $ARM64_CODE, armv7 APK $ARMV7_CODE ($VERSION, build $BUILD)"
 
       # runner.temp is not available in workflow-level env, so the path is
       # decided here and exported for the upload step.
@@ -377,45 +383,69 @@ jobs:
           sha256sum "$GITHUB_WORKSPACE/$APK_NAME" "$GITHUB_WORKSPACE/$APK_NAME_ARMV7"
 
       # The updater compares versionCode values, so a silently wrong one would
-      # offer no update ever (or the same one forever). Read it back from the
-      # built APK and fail on mismatch.
+      # offer no update ever (or the same one forever). Both APKs are read back
+      # and must carry the build number of the tag plus the ABI digit Flutter's
+      # `--split-per-abi` writes into it (arm64 +2000, armv7 +1000; predicted by
+      # fluffychat/scripts/version-code.py and proven on the released .22 APKs,
+      # which report 2032/1032 for build 32). What the arm64 APK really carries
+      # is exported for the manifest step, so update-mobile.json can never
+      # publish a number that no installed app matches.
       - name: Verify the APK versionCode
+        id: apkcode
         run: |
           set -euo pipefail
-          expected="${{ steps.versioncode.outputs.version_code }}"
           SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?ANDROID_SDK_ROOT/ANDROID_HOME is not set}}"
-          found=""
           AAPT="$(ls -1 "$SDK"/build-tools/*/aapt 2>/dev/null | sort -V | tail -1 || true)"
-          if [ -n "$AAPT" ]; then
-            found="$("$AAPT" dump badging "$APK_NAME" 2>/dev/null |
-              sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" | head -1 || true)"
-          fi
-          if [ -z "$found" ]; then
-            # Newer build-tools drop the aapt1 binary; apkanalyzer is in
-            # cmdline-tools and prints the binary manifest as XML.
-            AK="$(ls -1 "$SDK"/cmdline-tools/*/bin/apkanalyzer 2>/dev/null | sort -V | tail -1 || true)"
-            [ -n "$AK" ] || { echo "::error::neither aapt nor apkanalyzer under $SDK"; exit 1; }
-            found="$("$AK" manifest print "$APK_NAME" 2>/dev/null |
-              sed -n 's/.*android:versionCode="\([0-9]*\)".*/\1/p' | head -1 || true)"
-          fi
-          echo "APK versionCode: ${found:-none}, expected $expected"
-          [ "$found" = "$expected" ] || { echo "::error::$APK_NAME carries a different versionCode"; exit 1; }
-          echo "::notice::versionCode $found verified with $(basename "${AAPT:-apkanalyzer}")"
+          AK="$(ls -1 "$SDK"/cmdline-tools/*/bin/apkanalyzer 2>/dev/null | sort -V | tail -1 || true)"
+          read_version_code() {
+            local apk="$1" found=""
+            if [ -n "$AAPT" ]; then
+              found="$("$AAPT" dump badging "$apk" 2>/dev/null |
+                sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" | head -1 || true)"
+            fi
+            if [ -z "$found" ] && [ -n "$AK" ]; then
+              # Newer build-tools drop the aapt1 binary; apkanalyzer prints the
+              # binary manifest as XML.
+              found="$("$AK" manifest print "$apk" 2>/dev/null |
+                sed -n 's/.*android:versionCode="\([0-9]*\)".*/\1/p' | head -1 || true)"
+            fi
+            [ -n "$found" ] || { echo "::error::no versionCode found in $apk (and no aapt/apkanalyzer under $SDK)"; exit 1; }
+            printf '%s' "$found"
+          }
+          arm64_found="$(read_version_code "$APK_NAME")"
+          armv7_found="$(read_version_code "$APK_NAME_ARMV7")"
+          arm64_expected="${{ steps.versioncode.outputs.arm64_version_code }}"
+          armv7_expected="${{ steps.versioncode.outputs.armv7_version_code }}"
+          echo "arm64: $arm64_found (expected $arm64_expected), armv7: $armv7_found (expected $armv7_expected)"
+          [ "$arm64_found" = "$arm64_expected" ] || { echo "::error::$APK_NAME carries a different versionCode"; exit 1; }
+          [ "$armv7_found" = "$armv7_expected" ] || { echo "::error::$APK_NAME_ARMV7 carries a different versionCode"; exit 1; }
+          {
+            echo "arm64_version_code=$arm64_found"
+            echo "armv7_version_code=$armv7_found"
+          } >> "$GITHUB_OUTPUT"
+          echo "::notice::versionCode $arm64_found / $armv7_found verified with $(basename "${AAPT:-$AK}")"
 
       # What the in-app updater fetches from https://plotina.cc/dl/
       # update-mobile.json. sha256/size describe the arm64 APK, which is what
-      # the app downloads; armeabi-v7a devices keep updating manually.
+      # the app downloads; the versionCode is the one the arm64 APK really
+      # carries (build number + Flutter's ABI digit), because that is the number
+      # an installed app reads from its own PackageManager. 32-bit devices get
+      # "download Plotina-Mobile-armv7.apk by hand" from the app itself.
       - name: Write the updater manifest
         run: |
           set -euo pipefail
           sha256="$(sha256sum "$APK_NAME" | cut -d' ' -f1)"
           size="$(stat -c%s "$APK_NAME")"
+          apk_code="${{ steps.apkcode.outputs.arm64_version_code }}"
+          predicted="${{ steps.versioncode.outputs.arm64_version_code }}"
+          [ -n "$apk_code" ] || { echo "::error::no read-back versionCode from the APK check step"; exit 1; }
+          [ "$apk_code" = "$predicted" ] || { echo "::error::read-back versionCode $apk_code != predicted $predicted"; exit 1; }
           package="$(sed -n 's/.*applicationId = "\([^"]*\)".*/\1/p' \
             fluffychat/upstream/android/app/build.gradle.kts)"
           [ -n "$package" ] || { echo "::error::no applicationId in build.gradle.kts"; exit 1; }
           export package sha256 size
           export VERSION_NAME="${{ steps.versioncode.outputs.version_name }}"
-          export VERSION_CODE="${{ steps.versioncode.outputs.version_code }}"
+          export VERSION_CODE="$apk_code"
           export NOTES="Plotina Mobile ${VERSION_NAME} (сборка ${{ steps.versioncode.outputs.build }}): улучшения и исправления."
           python3 - "$MANIFEST_NAME" <<'PY'
           import json, os, sys
