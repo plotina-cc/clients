@@ -200,6 +200,19 @@ jobs:
           cp "${{ github.workspace }}/element-desktop/build/icon.ico" build/icon.ico
           pnpm run build --publish never $TARGETS
 
+      - name: Repoint the AppImage updater
+        if: matrix.name == 'linux'
+        working-directory: element-desktop/.build/element-web/apps/desktop
+        shell: bash
+        run: |
+          # app-update.yml inside the squashfs still names vector-im/element-web.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq squashfs-tools
+          shopt -s nullglob
+          for image in dist/*.AppImage; do
+            bash "${{ github.workspace }}/element-desktop/scripts/fix-appimage-updater.sh" "$image"
+          done
+
       - name: Rewrite deb branding
         if: matrix.name == 'linux'
         working-directory: element-desktop/.build/element-web/apps/desktop

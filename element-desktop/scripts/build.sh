@@ -81,6 +81,17 @@ for deb in dist/*.deb; do
   "$HERE/fix-deb-branding.sh" "$deb"
 done
 
+# The AppImage embeds the same app-update.yml; repack it when squashfs-tools
+# is around (CI always installs it).
+for image in dist/*.AppImage; do
+  [ -f "$image" ] || continue
+  if command -v mksquashfs >/dev/null 2>&1; then
+    "$HERE/fix-appimage-updater.sh" "$image"
+  else
+    echo "build.sh: mksquashfs missing; $image still points at upstream updates" >&2
+  fi
+done
+
 echo "==> stable names"
 mkdir -p "$ROOT/dist-stable"
 shopt -s nullglob
