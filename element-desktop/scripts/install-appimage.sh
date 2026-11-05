@@ -260,7 +260,7 @@ install_appimage() {
     cat > "$desktop" <<EOF
 [Desktop Entry]
 Name=Plotina Desktop
-Comment=Element for plotina.cc
+Comment=Matrix client for plotina.cc
 Exec="$bin" --no-sandbox %U
 Terminal=false
 Type=Application
