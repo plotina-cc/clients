@@ -190,6 +190,18 @@ def apply_web_fixes(webapp: Path) -> list[str]:
     shutil.copyfile(theme_src, webapp / webapp_fixes.THEME_INIT_FILE)
     (webapp / webapp_fixes.THEME_INIT_FILE).chmod(0o644)
 
+    # config.json points branding.welcome_background_url at /plotina-bg.png
+    # (absolute on the web, where /app is the site root). apply-noise.py
+    # rewrites that URL to the relative form for vector://, so the file has to
+    # exist in the webapp root or the welcome screen silently loses its
+    # background. plotina-icon.svg (auth_header_logo_url) comes from ICONS.
+    background_src = ELEMENT_WEB / "plotina-bg.png"
+    if not background_src.is_file():
+        sys.exit(f"branding: {background_src} missing; the welcome background "
+                 "lives in ../element-web for both clients")
+    shutil.copyfile(background_src, webapp / "plotina-bg.png")
+    (webapp / "plotina-bg.png").chmod(0o644)
+
     index = webapp / "index.html"
     html = index.read_text(encoding="utf-8")
     patched = webapp_fixes.inject_modal_style(html)

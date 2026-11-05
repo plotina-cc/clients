@@ -160,5 +160,14 @@ if grep -qF 'var(--timeline-text-color)' \
   echo "prepare-webapp: a custom theme still has a bare var(--timeline-text-color)" >&2; exit 1
 fi
 grep -q 'sign_out_before_verify' "$DEST"/i18n/ru.*.json
+# Branding assets referenced by config.json must exist in the webapp root and
+# be referenced relatively: vector://vector/webapp/ 404s root-absolute paths.
+test -s "$DEST/plotina-bg.png"
+test -s "$DEST/plotina-icon.svg"
+grep -q '"welcome_background_url": "plotina-bg.png"' "$DEST/config.json"
+grep -q '"auth_header_logo_url": "plotina-icon.svg"' "$DEST/config.json"
+if grep -qE '"(welcome_background_url|auth_header_logo_url)": "/' "$DEST/config.json"; then
+  echo "prepare-webapp: config.json still points at a root-absolute branding asset" >&2; exit 1
+fi
 
 echo "webapp ready: $DEST ($(du -sh "$DEST" | cut -f1))"

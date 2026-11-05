@@ -65,6 +65,30 @@ def patch_html(path: Path) -> None:
     print(f"patched: {path}")
 
 
+BRANDING_PATH_KEYS = ("welcome_background_url", "auth_header_logo_url")
+
+
+def make_branding_paths_relative(config: dict) -> list[str]:
+    """Strip the leading slash from branding asset URLs.
+
+    The shell serves the webapp from vector://vector/webapp/, so a
+    root-absolute `/plotina-icon.svg` (correct on chat.plotina.cc, where /app
+    is the site root) resolves outside the webapp and 404s. The files are
+    copied into the webapp root by branding.py, so the relative form is the
+    one that loads.
+    """
+    branding = config.get("branding")
+    if not isinstance(branding, dict):
+        return []
+    changed = []
+    for key in BRANDING_PATH_KEYS:
+        value = branding.get(key)
+        if isinstance(value, str) and value.startswith("/") and not value.startswith("//"):
+            branding[key] = value.lstrip("/")
+            changed.append(f"branding.{key}: {value} -> {branding[key]}")
+    return changed
+
+
 def write_config(src: Path, dst: Path, brand: str | None = None) -> None:
     config = json.loads(src.read_text(encoding="utf-8"))
     sentry = config.get("sentry")
@@ -74,6 +98,8 @@ def write_config(src: Path, dst: Path, brand: str | None = None) -> None:
         print("dropped update_base_url: our builds never follow Element's update feed")
     if brand:
         config["brand"] = brand
+    for change in make_branding_paths_relative(config):
+        print(change)
     config.setdefault("web_base_url", WEB_BASE_URL)
     dst.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     url = urlparse(str(sentry["dsn"]))
