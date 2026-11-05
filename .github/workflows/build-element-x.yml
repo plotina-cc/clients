@@ -409,6 +409,8 @@ jobs:
           echo "Plotina-X.apk: package=$PKG versionCode=$VC"
           [ "$VC" = "$(( PLOTINA_VERSION_CODE_BASE * 10 + 2 ))" ] \
             || { echo "::error::Plotina-X.apk versionCode $VC is not base $PLOTINA_VERSION_CODE_BASE * 10 + 2 (arm64)"; exit 1; }
+          # The manifest must carry what the installed arm64 APK reports, ABI digit included.
+          ARM64_VERSION_CODE="$VC"
           if [ -f Plotina-X-armv7.apk ]; then
             read_pkg_vc Plotina-X-armv7.apk
             echo "Plotina-X-armv7.apk: package=$PKG versionCode=$VC"
@@ -417,14 +419,14 @@ jobs:
           fi
           sha=$(sha256sum Plotina-X.apk | cut -d' ' -f1)
           size=$(stat -c%s Plotina-X.apk)
-          # The contract in patch 0014: versionCode is the base, the app compares it against the
-          # installed code with the ABI digit removed. apkUrl is a stable name: publish-clients.sh
-          # copies release assets to the edge host under the names the app already knows, so the
-          # URL never moves with the tag.
+          # The contract in patch 0014: versionCode is the number the installed APK reports
+          # (arm64 split), not the base — the updater compares it with PackageManager. apkUrl is a
+          # stable name: publish-clients.sh copies release assets to the edge host under the names
+          # the app already knows, so the URL never moves with the tag.
           jq -n \
             --arg package "$PKG" \
             --arg versionName "$PLOTINA_VERSION_NAME" \
-            --argjson versionCode "$PLOTINA_VERSION_CODE_BASE" \
+            --argjson versionCode "$ARM64_VERSION_CODE" \
             --arg apkUrl "https://plotina.cc/dl/Plotina-X.apk" \
             --arg sha256 "$sha" \
             --argjson size "$size" \
