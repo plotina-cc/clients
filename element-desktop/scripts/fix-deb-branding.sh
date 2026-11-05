@@ -44,16 +44,20 @@ values = {
     "Homepage": "https://plotina.cc",
 }
 revision = os.environ.get("PLOTINA_REVISION", "").strip()
-if revision:
-    match = re.search(r"^Version: *(\S+)", text, flags=re.M)
-    if match and "-plotina." not in match.group(1):
-        text = re.sub(
-            r"^Version: *(\S+)",
-            rf"Version: \1-plotina.{revision}",
-            text,
-            count=1,
-            flags=re.M,
-        )
+match = re.search(r"^Version: *(\S+)", text, flags=re.M)
+if match:
+    version = match.group(1)
+    # electron-builder emits a semver prerelease revision ("1.12.32~plotina.33");
+    # a tilde sorts *below* every revision, which made apt prefer the previous
+    # build. Normalise it to a Debian revision and never append twice.
+    if "~plotina." in version:
+        version = version.replace("~plotina.", "-plotina.")
+    build = re.search(r"-plotina\.(\d+)$", version)
+    if build:
+        version = version[: build.start()] + "-plotina." + build.group(1)
+    elif revision:
+        version = f"{version}-plotina.{revision}"
+    text = re.sub(r"^Version: *\S+", f"Version: {version}", text, count=1, flags=re.M)
 for field, value in values.items():
     if re.search(rf"^{field}:", text, flags=re.M):
         text = re.sub(rf"^{field}:.*$", f"{field}: {value}", text, flags=re.M)
