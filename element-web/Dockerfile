@@ -73,6 +73,10 @@ RUN set -eux; \
     ! test -e /app/noise/tests; ! test -e /app/noise/scripts
 COPY plotina-icon.svg /app/plotina-icon.svg
 COPY plotina-512.png /app/plotina-512.png
+# First-visit theme bootstrap (THEMES.md part 2). branding.py injects the
+# <script> tag directly before the bundle loader in index.html; the payload
+# itself rides in here, same pattern as the icons.
+COPY plotina-theme.js /app/plotina-theme.js
 # plotina-icon-192.png is the apple-touch-icon target and plotina-bg.png the
 # welcome background config.json points at. Both are byte-copies of
 # branding/icons/png/green-192.png / green-256.png: element-web/ is the build
@@ -95,6 +99,7 @@ COPY plotina-512.png /app/themes/element/img/logos/element-app-logo.png
 RUN set -eux; \
     chmod 0644 /app/LICENSE-AGPL-3.0 /app/NOTICE /app/plotina-icon.svg /app/plotina-512.png \
       /app/plotina-icon-192.png /app/plotina-bg.png /app/manifest.json \
+      /app/plotina-theme.js \
       /app/themes/element/img/logos/element-app-logo.png; \
     grep -q '</head>' /app/index.html; \
     test -s /app/LICENSE-AGPL-3.0; \
@@ -103,6 +108,7 @@ RUN set -eux; \
     test -s /app/manifest.json; \
     test -f /app/config.json; \
     ls /app/bundles/*/error-view.js >/dev/null; \
+    ls /app/bundles/*/theme-*-custom.css >/dev/null; \
     test -e /app/themes/element/img/logos/element-logo.svg; \
     test -e /app/themes/element/img/logos/opengraph.png; \
     test -d /app/mobile_guide; \
@@ -164,6 +170,11 @@ RUN set -eux; \
     grep -q 'href="/plotina-icon.svg"' /app/index.html; \
     grep -q 'href="/plotina-icon-192.png"' /app/index.html; \
     grep -q 'plotina-modal-a11y' /app/index.html; \
+    test -s /app/plotina-theme.js; \
+    grep -q 'plotina-theme.js"></script><script src="bundles/' /app/index.html; \
+    ! grep -q 'var(--timeline-text-color)' /app/bundles/*/theme-*-custom.css; \
+    test "$(grep -oh 'var(--timeline-text-color,var(--cpd-color-text-primary))' \
+      /app/bundles/*/theme-*-custom.css | wc -l)" -ge 266; \
     grep -q 'sign_out_before_verify' /app/i18n/ru.*.json; \
     ! grep -q 'Element requires JavaScript' /app/index.html; \
     ! grep -q 'vector-icons/' /app/index.html; \

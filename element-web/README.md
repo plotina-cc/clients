@@ -6,9 +6,14 @@ Settings → Voice & Video.
 
 Nothing in Element's own code is patched: the image contains the stock build
 with a small Plotina overlay — the brand pass (`branding.py`, which rewrites
-`index.html`, the error-view chunk, the `config.json` branding block and the
-theme logos) plus the noise overlay (a `/noise/` directory and two `script`
-tags in `index.html`). That keeps the overlay cheap to rebase onto
+`index.html`, the error-view chunk, the two `theme-*-custom.css` sheets (the
+`--timeline-text-color` contrast fix, see THEMES.md), the `config.json`
+branding block and the theme logos) plus the noise overlay (a `/noise/`
+directory and two `script` tags in `index.html`). `branding.py` also injects
+the `/plotina-theme.js` bootstrap tag before the bundle loader so a fresh
+dark-OS visitor lands on the dark Plotina custom theme (upstream custom
+themes cannot follow `prefers-color-scheme` themselves). That keeps the
+overlay cheap to rebase onto
 a new upstream release: every brand assumption is pinned by
 `tests/branding_test.py` and a Dockerfile assertion, so a moved marker fails
 the build loudly instead of quietly serving Element branding. See "Bumping
@@ -19,10 +24,13 @@ upstream".
 ```
 config/element/
   Dockerfile              overlay image (pinned FROM; branding + noise)
-  branding.py             brand pass over /app (index.html, error-view, config, logos)
+  branding.py             brand pass over /app (index.html, error-view,
+                          theme-*-custom.css, config, logos)
   config.json             Element Web runtime config, including local Plotina logo
                           and branding.welcome_background_url (/plotina-bg.png)
   manifest.json           Plotina PWA manifest
+  plotina-theme.js        first-visit theme bootstrap: seeds mx_local_settings.theme
+                          from prefers-color-scheme before the bundle loads
   plotina-icon.svg        login-header logo used before/without config
   plotina-icon-192.png    apple-touch-icon target (branding/icons/png/green-192.png)
   plotina-bg.png          welcome background (branding/icons/png/green-256.png)
@@ -35,6 +43,7 @@ config/element/
     vendor/dpdfnet.esm.js experimental DPDFNet backend (Apache-2.0)
   tests/
     branding_test.py      brand-pass unit tests (python3 -m unittest, fixture copies)
+    theme_init.test.js    node tests for plotina-theme.js (run via branding_test.py)
     fixtures/             byte-exact upstream index.html/error-view.js/config.json
     unit.html run.sh      logic tests (headless Chromium)
     integration.html integration.sh   real audio path with a fake microphone

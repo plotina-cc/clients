@@ -35,9 +35,40 @@ BUNDLE = "7fef2be0ae8530458db3"
 NOISE_TAG = ('<script src="/noise/logic.js"></script>'
              '<script src="/noise/boot.js" defer></script>')
 
+# The theme-bootstrap tag branding.py injects itself (part 2 of the theme
+# fix); mirrored here so the tests do not import branding.py to build the
+# expectation they assert on.
+THEME_INIT_TAG = '<script src="/plotina-theme.js"></script>'
+BUNDLE_SCRIPT_TAG = f'<script src="bundles/{BUNDLE}/bundle.js"></script>'
+
+TIMELINE_BARE = "var(--timeline-text-color)"
+TIMELINE_FIXED = "var(--timeline-text-color,var(--cpd-color-text-primary))"
+TIMELINE_USES = 133  # per sheet, verified against the live v1.12.32 bundle
+
+
+def custom_theme_css() -> str:
+    """A stand-in for theme-{light,dark}-custom.css with the live shape:
+    one body rule whose background already carries a fallback, then 132
+    more rules each using the dead --timeline-text-color without one."""
+    css = ("body{background-color:var(--timeline-background-color,"
+           "var(--cpd-color-bg-canvas-default));border:0;color:"
+           + TIMELINE_BARE + "}\n")
+    css += (".mx_EventTile{color:" + TIMELINE_BARE + "}\n") * (TIMELINE_USES - 1)
+    assert css.count(TIMELINE_BARE) == TIMELINE_USES
+    return css
+
 
 def sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load_branding():
+    """branding.py is a script, not a package: load it by path."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("branding", BRANDING)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class AppFixture(unittest.TestCase):
@@ -58,6 +89,22 @@ class AppFixture(unittest.TestCase):
         (self.app / "index.html").write_text(html, encoding="utf-8")
 
         shutil.copyfile(FIXTURES / "error-view.js", bundles / "error-view.js")
+
+        # The distro ships both custom-theme sheets; each carries 133
+        # fallback-less --timeline-text-color uses (count verified against
+        # the live bundle, see THEMES.md) that branding.py must fix.
+        for name in ("theme-light-custom.css", "theme-dark-custom.css"):
+            (bundles / name).write_text(custom_theme_css(), encoding="utf-8")
+        # A non-custom sheet branding must NOT touch.
+        self.builtin_sheet = bundles / "theme-light.css"
+        self.builtin_sheet.write_text(
+            "body{color:var(--cpd-color-text-primary)}\n", encoding="utf-8")
+        self.builtin_before = self.builtin_sheet.read_bytes()
+
+        # plotina-theme.js is COPYed into /app by the Dockerfile before the
+        # brand pass runs (same contract as plotina-icon.svg).
+        shutil.copyfile(WEBAPP / "plotina-theme.js",
+                        self.app / "plotina-theme.js")
 
         # A sibling chunk that carries Element branding we deliberately keep:
         # the built-in Element Call widget and the baked release literal.
@@ -126,6 +173,9 @@ class AppFixture(unittest.TestCase):
 
     def error_view(self) -> str:
         return (self.app / "bundles" / BUNDLE / "error-view.js").read_text(encoding="utf-8")
+
+    def sheet(self, name: str) -> str:
+        return (self.app / "bundles" / BUNDLE / name).read_text(encoding="utf-8")
 
     def logos(self) -> Path:
         return self.app / "themes" / "element" / "img" / "logos"
@@ -220,6 +270,139 @@ class ErrorViewTest(AppFixture):
         self.brand()
         self.assertEqual(self.other_chunk.read_bytes(), self.other_before)
         self.assertIn("Element Call", self.other_chunk.read_text(encoding="utf-8"))
+
+
+class ThemeCustomCssTest(AppFixture):
+    """The --timeline-text-color fallback pass over the two custom sheets."""
+
+    def test_both_sheets_get_the_fallback(self) -> None:
+        self.brand()
+        for name in ("theme-light-custom.css", "theme-dark-custom.css"):
+            with self.subTest(sheet=name):
+                css = self.sheet(name)
+                self.assertNotIn(TIMELINE_BARE, css)
+                self.assertEqual(css.count(TIMELINE_FIXED), TIMELINE_USES)
+
+    def test_other_var_uses_survive(self) -> None:
+        self.brand()
+        css = self.sheet("theme-light-custom.css")
+        # The sibling background fallback was already there and must not move.
+        self.assertIn("var(--timeline-background-color,"
+                      "var(--cpd-color-bg-canvas-default))", css)
+
+    def test_builtin_sheets_untouched(self) -> None:
+        self.brand()
+        self.assertEqual(self.builtin_sheet.read_bytes(), self.builtin_before)
+
+    def test_second_run_is_a_no_op(self) -> None:
+        self.brand()
+        paths = [self.app / "bundles" / BUNDLE / n for n in
+                 ("theme-light-custom.css", "theme-dark-custom.css")]
+        before = [p.read_bytes() for p in paths]
+        proc = self.run_branding()
+        self.assertEqual(proc.returncode, 0, msg=proc.stdout + proc.stderr)
+        self.assertEqual([p.read_bytes() for p in paths], before)
+
+    def test_missing_custom_sheet_fails_loudly(self) -> None:
+        (self.app / "bundles" / BUNDLE / "theme-dark-custom.css").unlink()
+        proc = self.run_branding()
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("theme-*-custom.css", proc.stderr)
+
+    def test_custom_chunk_dir_moved_fails_loudly(self) -> None:
+        shutil.rmtree(self.app / "bundles")
+        proc = self.run_branding()
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("upstream layout moved", proc.stderr)
+
+    def test_unit_function(self) -> None:
+        branding = load_branding()
+        patched = branding.rebrand_theme_custom(custom_theme_css())
+        self.assertEqual(patched.count(TIMELINE_FIXED), TIMELINE_USES)
+        self.assertNotIn(TIMELINE_BARE, patched)
+        # Idempotent: re-running over the patched bytes is a no-op.
+        self.assertEqual(branding.rebrand_theme_custom(patched), patched)
+
+    def test_unit_function_abortive_inputs(self) -> None:
+        branding = load_branding()
+        with self.assertRaises(branding.BrandingError):
+            branding.rebrand_theme_custom(".a{color:var(--timeline-text-color)}")
+        with self.assertRaises(branding.BrandingError):
+            branding.rebrand_theme_custom("body{color:red}")  # wrong file fed in
+
+    def test_unit_function_below_minimum_fails(self) -> None:
+        branding = load_branding()
+        css = ".mx_EventTile{color:var(--timeline-text-color)}\n" * 5
+        with self.assertRaises(branding.BrandingError):
+            branding.rebrand_theme_custom(css)
+
+
+class ThemeBootstrapTest(AppFixture):
+    """The /plotina-theme.js <script> tag branding.py injects."""
+
+    def test_tag_inserted_once_before_bundle(self) -> None:
+        self.brand()
+        html = self.index()
+        self.assertEqual(html.count(THEME_INIT_TAG), 1)
+        self.assertLess(html.index(THEME_INIT_TAG),
+                        html.index(BUNDLE_SCRIPT_TAG))
+
+    def test_stock_html_without_noise_tags(self) -> None:
+        # branding.py must work on a stock tree too (the noise pair is only
+        # there in our image); the bootstrap tag anchors on bundle.js anyway.
+        html = (self.app / "index.html").read_text(encoding="utf-8")
+        (self.app / "index.html").write_text(
+            html.replace(NOISE_TAG, ""), encoding="utf-8")
+        self.brand()
+        out = self.index()
+        self.assertIn(THEME_INIT_TAG + BUNDLE_SCRIPT_TAG, out)
+
+    def test_second_run_stays_byte_stable(self) -> None:
+        self.brand()
+        before = self.index()
+        proc = self.run_branding()
+        self.assertEqual(proc.returncode, 0, msg=proc.stdout + proc.stderr)
+        after = self.index()
+        self.assertEqual(after, before)
+        self.assertEqual(after.count(THEME_INIT_TAG), 1)
+
+    def test_moved_loader_script_fails_loudly(self) -> None:
+        html = (self.app / "index.html").read_text(encoding="utf-8")
+        (self.app / "index.html").write_text(
+            html.replace(BUNDLE_SCRIPT_TAG, "<script src=\"bundle.js\"></script>"),
+            encoding="utf-8")
+        proc = self.run_branding()
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("index.html", proc.stderr)
+
+    def test_missing_init_script_fails_loudly(self) -> None:
+        # The Dockerfile COPYs plotina-theme.js first; if it is absent the
+        # injected tag would 404, so branding must abort.
+        (self.app / "plotina-theme.js").unlink()
+        proc = self.run_branding()
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("plotina-theme.js", proc.stderr)
+
+    def test_dockerfile_copies_init_script(self) -> None:
+        dockerfile = (WEBAPP / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("COPY plotina-theme.js /app/plotina-theme.js", dockerfile)
+        self.assertIn("plotina-theme.js", dockerfile.split("branding.py --app /app")[-1])
+
+
+class NodeThemeLogicTest(unittest.TestCase):
+    """plotina-theme.js must apply the dark/light choice before Element
+    boots: fresh visitors (no theme key in mx_local_settings) get the
+    custom theme matching prefers-color-scheme; everyone else is left
+    alone. Exercised with node against the CommonJS export."""
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_theme_init_logic(self) -> None:
+        proc = subprocess.run(
+            ["node", str(HERE / "theme_init.test.js"),
+             str(WEBAPP / "plotina-theme.js")],
+            capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, msg=proc.stdout + proc.stderr)
+        self.assertIn("ALL OK", proc.stdout)
 
 
 class LocaleTest(AppFixture):

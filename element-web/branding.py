@@ -12,7 +12,7 @@ Scope (and nothing else):
 
   * index.html — <title>, apple-mobile-web-app-title, application-name,
     theme-color, og:image, the icon/ apple-touch-icon link set, the
-    noscript sentence, and the <style> block that keeps the
+    noscript sentence, the <style> block that keeps the
     device-verification dialog (mx_CompleteSecurityBody, shown right after
     the first login) inside the viewport on short screens. Upstream caps
     its Glass frame with .mx_Dialog_border{max-height:calc(100% - 48px)},
@@ -20,6 +20,18 @@ Scope (and nothing else):
     row ("Sign out") without giving anything a scrollbar; the injected
     block replaces that cap with a viewport-relative one and makes the
     card scroll internally. See THEME-FIX.md at the repository root.
+    It also carries the <script src="/plotina-theme.js"> bootstrap tag,
+    inserted directly before the bundles/<hash>/bundle.js loader so it
+    runs first: it seeds mx_local_settings.theme with the Plotina custom
+    theme matching prefers-color-scheme for fresh visitors only. The file
+    itself is COPYed into /app by the Dockerfile (checked here).
+  * bundles/*/theme-light-custom.css and theme-dark-custom.css —
+    --timeline-text-color gains a var(--cpd-color-text-primary) fallback
+    at all 133 uses per sheet. Upstream references that dead legacy
+    variable WITHOUT a fallback, so `color` goes invalid-at-computed-value
+    -time and inherits the @media (prefers-color-scheme) tokens from
+    <html>: dark-OS visitors on the light custom theme get light-on-white
+    text. See THEMES.md at the repository root.
   * i18n/ru.*.json — the "after new login" verification strings that are
     still missing from upstream Russian (added only where absent, so a
     future upstream translation wins).
@@ -34,7 +46,9 @@ Explicitly out of scope:
   * The noise overlay. The two <script> tags for /noise/ are inserted by the
     Dockerfile *before* this script runs and are left byte-identical here.
   * Other bundle chunks. The built-in Element Call widget keeps its name in
-    the shipped JS; only the two error-view strings are rewritten.
+    the shipped JS; only the two error-view strings are rewritten. (The
+    theme-*-custom.css sheets are the one non-error-view bundle area the
+    brand pass edits, for the contrast fix above.)
   * /app/mobile_guide, /app/plotina-bg.png and the element-app-logo.png
     overwrite: pure file placements, owned by Dockerfile COPY/RM lines.
 
@@ -86,6 +100,25 @@ MODAL_CSS = (
     ".mx_CompleteSecurityBody{overflow-y:auto}"
 )
 MODAL_BLOCK = f'<style id="{MODAL_STYLE_ID}">{MODAL_CSS}</style>'
+
+# Custom-theme contrast fix, see THEMES.md: theme-{light,dark}-custom.css
+# use the dead legacy --timeline-text-color at 133 selectors per sheet,
+# always WITHOUT a fallback, so text colour falls through to inheritance
+# from <html> — whose tokens flip with prefers-color-scheme. The sibling
+# --timeline-background-color always carries a fallback; this restores the
+# same pattern for the text.
+TIMELINE_TEXT = "var(--timeline-text-color)"
+TIMELINE_TEXT_FIXED = "var(--timeline-text-color,var(--cpd-color-text-primary))"
+TIMELINE_TEXT_MIN_USES = 133  # per sheet at element-web v1.12.32
+REQUIRED_CUSTOM_SHEETS = frozenset({"theme-light-custom.css",
+                                    "theme-dark-custom.css"})
+
+# First-visit theme bootstrap (part 2 of the fix): the script file is
+# COPYed into /app by the Dockerfile; branding.py injects its tag directly
+# in front of the bundle loader and refuses to run without the payload.
+THEME_INIT_FILE = "plotina-theme.js"
+THEME_INIT_TAG = f'<script src="/{THEME_INIT_FILE}"></script>'
+BUNDLE_LOADER_RE = re.compile(r'<script src="bundles/[^"]+/bundle\.js"></script>')
 
 # Russian strings the upstream ru locale still lacks for the
 # after-new-login verification dialog (keys per element-web's hierarchical
@@ -166,6 +199,19 @@ def rebrand_index(html: str) -> str:
     else:
         html = html.replace("</head>", MODAL_BLOCK + "</head>", 1)
 
+    # Theme bootstrap: /plotina-theme.js must run before the bundle loader,
+    # so its tag goes directly in front of that <script>. Drop a previously
+    # injected tag first, then re-insert: a second run is byte-identical.
+    # Anchoring on the loader (not </head>) leaves the noise pair and the
+    # modal style above it exactly as they are.
+    html = html.replace(THEME_INIT_TAG, "")
+    html, loader_hits = BUNDLE_LOADER_RE.subn(
+        lambda m: THEME_INIT_TAG + m.group(0), html, 1)
+    if loader_hits != 1:
+        raise BrandingError("index.html: the bundles/<hash>/bundle.js loader "
+                            "<script> is not there to anchor the theme "
+                            "bootstrap tag; upstream index layout moved")
+
     for expected in (
         f"<title>{BRAND}</title>",
         f'<meta name="apple-mobile-web-app-title" content="{BRAND}">',
@@ -176,11 +222,15 @@ def rebrand_index(html: str) -> str:
         TOUCH_LINK,
         f"{BRAND} requires JavaScript to be enabled.",
         MODAL_BLOCK,
+        THEME_INIT_TAG,
     ):
         if expected not in html:
             raise BrandingError(f"index.html: {expected!r} missing after rebrand")
     if html.count(MODAL_BLOCK) != 1:
         raise BrandingError("index.html: the modal a11y style is not present "
+                            "exactly once")
+    if html.count(THEME_INIT_TAG) != 1:
+        raise BrandingError("index.html: the theme bootstrap tag is not present "
                             "exactly once")
     for forbidden in (
         "<title>Element</title>",
@@ -206,6 +256,35 @@ def rebrand_error_view(js: str) -> str:
     if 'src:"/plotina-512.png"' not in js:
         raise BrandingError("error-view.js: branded logo src missing after rebrand")
     return js
+
+
+def rebrand_theme_custom(css: str) -> str:
+    """Restore body text contrast in Element's custom-theme sheets.
+
+    Upstream theme-{light,dark}-custom.css reference the dead legacy variable
+    --timeline-text-color WITHOUT a fallback (133 uses, 0 definitions in the
+    whole distro), so `color` becomes invalid-at-computed-value-time and
+    inherits the @media (prefers-color-scheme) tokens from <html>: dark-OS
+    visitors see light-on-white text. The sibling --timeline-background-color
+    always carries a fallback, which is why only the text is broken. Adding
+    --cpd-color-text-primary (which resolves through the body's cpd-theme-*
+    class, i.e. the *chosen* theme) restores contrast without changing any
+    behaviour. If the variable ever becomes defined again, it wins as usual.
+    See THEMES.md.
+
+    Idempotent: patched sheets pass through unchanged. Sheets that do not
+    carry the expected 133 uses fail loudly — a moved upstream layout must
+    abort the build, not ship half-fixed CSS.
+    """
+    if TIMELINE_TEXT not in css and TIMELINE_TEXT_FIXED in css:
+        return css  # already patched; re-run is a no-op
+    out = css.replace(TIMELINE_TEXT, TIMELINE_TEXT_FIXED)
+    if TIMELINE_TEXT in out:
+        raise BrandingError("custom theme CSS: --timeline-text-color survived")
+    if out.count(TIMELINE_TEXT_FIXED) < TIMELINE_TEXT_MIN_USES:
+        raise BrandingError(f"custom theme CSS: expected >={TIMELINE_TEXT_MIN_USES} "
+                            f"fallback additions, got {out.count(TIMELINE_TEXT_FIXED)}")
+    return out
 
 
 def rebrand_config(config: Path) -> bool:
@@ -296,13 +375,17 @@ def apply(app: Path) -> list[str]:
                             "Element Web root (/app)?")
     actions: list[str] = []
 
+    init_js = app / THEME_INIT_FILE
+    if not init_js.is_file():
+        raise BrandingError(f"{init_js} missing; the Dockerfile COPYs it first")
+
     before = index.read_text(encoding="utf-8")
     noise_tag = NOISE_TAGS
     index.write_text(rebrand_index(before), encoding="utf-8")
     if noise_tag in before and noise_tag not in index.read_text(encoding="utf-8"):
         raise BrandingError("index.html: the noise overlay tags vanished")
     actions.append("index.html rebranded (title, metas, icons, og:image, "
-                   "noscript, modal a11y style)")
+                   "noscript, modal a11y style, theme bootstrap tag)")
 
     error_views = sorted((app / "bundles").glob("*/error-view.js"))
     if not error_views:
@@ -312,6 +395,25 @@ def apply(app: Path) -> list[str]:
                                                             errors="replace")),
                          encoding="utf-8")
     actions.append(f"{len(error_views)} error-view chunk(s) rebranded")
+
+    custom_sheets = sorted((app / "bundles").glob("*/theme-*-custom.css"))
+    if not custom_sheets:
+        raise BrandingError("no bundles/*/theme-*-custom.css found; upstream "
+                            "layout moved")
+    by_dir: dict[Path, set[str]] = {}
+    for sheet in custom_sheets:
+        by_dir.setdefault(sheet.parent, set()).add(sheet.name)
+    for bdir, found in sorted(by_dir.items()):
+        missing = REQUIRED_CUSTOM_SHEETS - found
+        if missing:
+            raise BrandingError(f"{bdir} is missing {' and '.join(sorted(missing))}; "
+                                "expected both bundles/*/theme-*-custom.css sheets")
+    for sheet in custom_sheets:
+        sheet.write_text(rebrand_theme_custom(
+            sheet.read_text(encoding="utf-8", errors="replace")),
+            encoding="utf-8")
+    actions.append(f"{len(custom_sheets)} custom-theme sheet(s): "
+                   "--timeline-text-color fallback added")
 
     actions.extend(rebrand_locales(app / "i18n"))
 
