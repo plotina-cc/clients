@@ -192,7 +192,7 @@ jobs:
               None,
           )
           if chosen is None:
-              sys.exit(f"{path} has no FluffyChat client to map onto {target}")
+              sys.exit(f"{path} has no Plotina Mobile client to map onto {target}")
           chosen["client_info"]["android_client_info"]["package_name"] = target
           with open(path, "w", encoding="utf-8") as handle:
               json.dump(config, handle, indent=2)

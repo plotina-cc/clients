@@ -259,7 +259,7 @@ jobs:
           cat dist/build-info.json
           du -h dist/plotina-lite-web.tar.gz
           {
-            echo "### cinny web $SENTRY_RELEASE"
+            echo "### Plotina Lite Web $SENTRY_RELEASE"
             echo '```'
             cat dist/plotina-lite-web.tar.gz.sha256
             echo '```'

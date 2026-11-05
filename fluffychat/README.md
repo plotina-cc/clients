@@ -218,7 +218,7 @@ The DSN comes from the `SENTRY_DSN` repository variable; the release is `fluffy@
 environment `production`; tracing, screenshots and PII are off.
 
 CI uploads symbols (`--split-debug-info`, R8 mapping, native libraries) with `sentry-cli` when
-`SENTRY_AUTH_TOKEN` is set and keeps them as the `Plotina-FluffyChat-symbols` artifact.
+`SENTRY_AUTH_TOKEN` is set and keeps them as the `Plotina-Mobile-symbols` artifact.
 Smoke test: build with `--dart-define=PLOTINA_SENTRY_TEST_EVENT=true`.
 
 ## Licensing

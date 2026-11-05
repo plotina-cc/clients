@@ -52,7 +52,7 @@ on:
   workflow_dispatch:
     inputs:
       upstream_tag:
-        description: "element-x-android tag (empty = the pin in element-x/pins.env)"
+        description: "Plotina X upstream tag (empty = the pin in element-x/pins.env)"
         required: false
         default: ""
 
@@ -87,7 +87,7 @@ jobs:
           # `inputs` is empty on push, and a value written to GITHUB_ENV is not visible to the
           # `env` context of the same step: stay in the shell.
           tag="${UPSTREAM_TAG:-$ELEMENT_X_TAG}"
-          echo "element-x-android: $tag"
+          echo "Plotina X: $tag"
           # LFS holds screenshot-test blobs worth hundreds of MB; the build never reads them.
           GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 --branch "$tag" \
             https://github.com/element-hq/element-x-android "$RUNNER_TEMP/element-x"

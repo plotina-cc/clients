@@ -86,7 +86,7 @@ jobs:
         if: always() && steps.credentials.outputs.ready == 'true'
         run: |
           {
-            echo "### Element Call E2E"
+            echo "### Plotina Call E2E"
             echo
             echo "Job: **${{ job.status }}** — run [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
             echo
