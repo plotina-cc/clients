@@ -18,7 +18,7 @@
     "icon": "build/icon.png",
     "author": {
         "name": "Plotina",
-        "email": "support@plotina.cc"
+        "email": "thebob3r@gmail.com"
     },
     "homepage": "https://plotina.cc",
     "extraMetadata": {
@@ -26,7 +26,7 @@
         "description": "Plotina Desktop — Matrix client with DeepFilterNet3 noise suppression",
         "author": {
             "name": "Plotina",
-            "email": "support@plotina.cc"
+            "email": "thebob3r@gmail.com"
         },
         "homepage": "https://plotina.cc"
     },

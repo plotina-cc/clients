@@ -33,8 +33,8 @@ from pathlib import Path
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
 values = {
-    "Vendor": "Plotina <support@plotina.cc>",
-    "Maintainer": "Plotina <support@plotina.cc>",
+    "Vendor": "Plotina <thebob3r@gmail.com>",
+    "Maintainer": "Plotina <thebob3r@gmail.com>",
     "Homepage": "https://plotina.cc",
 }
 for field, value in values.items():
@@ -76,7 +76,7 @@ for changelog in "$ROOT"/pkg/usr/share/doc/*/changelog.gz; do
   [ -f "$changelog" ] || continue
   tmp="$changelog.tmp"
   gzip -dc "$changelog" \
-    | sed 's/Element <support@element\.io>/Plotina <support@plotina.cc>/g' \
+    | sed 's/Element <support@element\.io>/Plotina <thebob3r@gmail.com>/g' \
     | gzip -9n > "$tmp" && mv "$tmp" "$changelog"
 done
 
