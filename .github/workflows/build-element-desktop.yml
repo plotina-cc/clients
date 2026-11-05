@@ -352,11 +352,11 @@ jobs:
           # stable ones.
           case "${{ matrix.name }}" in
             windows)
-              cp ./*-setup.exe Plotina-Desktop-setup.exe
+              cp ./*-setup.exe "$GITHUB_WORKSPACE/stable/Plotina-Desktop-setup.exe"
               ;;
             linux)
-              cp ./*.AppImage Plotina-Desktop.AppImage
-              cp ./*.deb Plotina-Desktop.deb
+              cp ./*.AppImage "$GITHUB_WORKSPACE/stable/Plotina-Desktop.AppImage"
+              cp ./*.deb "$GITHUB_WORKSPACE/stable/Plotina-Desktop.deb"
               ;;
           esac
           ls -lh "$GITHUB_WORKSPACE/stable"

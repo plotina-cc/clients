@@ -254,7 +254,7 @@ index b165c17..14f7cd3 100644
      "sharedLocation": "Общие геометки",
      "sound": "Звук",
 diff --git a/lib/pages/settings/settings_view.dart b/lib/pages/settings/settings_view.dart
-index d1d8d9c..569dfd1 100644
+index d1d8d9c..d2a81a5 100644
 --- a/lib/pages/settings/settings_view.dart
 +++ b/lib/pages/settings/settings_view.dart
 @@ -8,6 +8,7 @@ import 'package:fluffychat/config/setting_keys.dart';
@@ -265,7 +265,7 @@ index d1d8d9c..569dfd1 100644
  import 'package:fluffychat/widgets/avatar.dart';
  import 'package:fluffychat/widgets/matrix.dart';
  import 'package:go_router/go_router.dart';
-@@ -200,6 +201,14 @@ class SettingsView extends StatelessWidget {
+@@ -200,6 +201,15 @@ class SettingsView extends StatelessWidget {
                title: Text(L10n.of(context).privacy),
                onTap: () => launchUrlString(AppSettings.privacyPolicy.value),
              ),
@@ -275,7 +275,8 @@ index d1d8d9c..569dfd1 100644
 +              ListTile(
 +                leading: const Icon(Icons.system_update_alt),
 +                title: Text(L10n.of(context).checkForUpdates),
-+                onTap: () => PlotinaUpdater.checkForUpdate(context, manual: true),
++                onTap: () =>
++                    PlotinaUpdater.checkForUpdate(context, manual: true),
 +              ),
              ListTile(
                leading: const Icon(Icons.info_outline_rounded),
@@ -309,7 +310,7 @@ index 0c2f20e..2ca80af 100644
          ),
          actions: [
 diff --git a/lib/utils/show_update_snackbar.dart b/lib/utils/show_update_snackbar.dart
-index dee8b07..88ee791 100644
+index dee8b07..58bd0d9 100644
 --- a/lib/utils/show_update_snackbar.dart
 +++ b/lib/utils/show_update_snackbar.dart
 @@ -9,6 +9,7 @@ import 'package:fluffychat/config/app_config.dart';
@@ -320,25 +321,25 @@ index dee8b07..88ee791 100644
  import 'package:fluffychat/widgets/adaptive_dialogs/adaptive_dialog_action.dart';
  import 'package:http/http.dart' as http;
  import 'package:material_ui/material_ui.dart';
-@@ -26,16 +27,27 @@ abstract class UpdateNotifier {
+@@ -26,7 +27,8 @@ abstract class UpdateNotifier {
    /// displays a banner with a download link. Only for Windows, as all other
    /// platforms get updated by their store or package manager.
    static Future<void> showUpdateAvailableBanner(BuildContext context) async {
 -    if (!PlatformInfos.isWindows || !AppSettings.checkForUpdates.value) return;
--
--    final scaffoldMessenger = ScaffoldMessenger.of(context);
--    final l10n = L10n.of(context);
 +    if (!AppSettings.checkForUpdates.value) return;
 +    if (!PlatformInfos.isWindows && !PlotinaUpdater.isSupported) return;
  
-     // Check for updates at most once per day
-     final today = DateTime.now().toIso8601String().split('T').first;
+     final scaffoldMessenger = ScaffoldMessenger.of(context);
+     final l10n = L10n.of(context);
+@@ -36,6 +38,18 @@ abstract class UpdateNotifier {
      if (AppSettings.lastUpdateCheckDate.value == today) return;
      await AppSettings.lastUpdateCheckDate.setItem(today);
  
 +    // plotina.cc: no Play Store distribution - Android checks our own release
 +    // manifest (https://plotina.cc/dl/update-mobile.json) and offers to
-+    // download + install a verified APK through the system installer.
++    // download + install a verified APK through the system installer. The
++    // call stays silent when nothing newer is published or when the user
++    // already declined this exact version on the dialog.
 +    if (PlotinaUpdater.isSupported) {
 +      if (context.mounted) {
 +        await PlotinaUpdater.checkForUpdate(context, manual: false);
@@ -346,18 +347,15 @@ index dee8b07..88ee791 100644
 +      return;
 +    }
 +
-+    final scaffoldMessenger = ScaffoldMessenger.of(context);
-+    final l10n = L10n.of(context);
-+
      final String latestVersion;
      final String downloadUrl;
      try {
 diff --git a/lib/utils/updater/plotina_updater.dart b/lib/utils/updater/plotina_updater.dart
 new file mode 100644
-index 0000000..70f88d0
+index 0000000..63c2a18
 --- /dev/null
 +++ b/lib/utils/updater/plotina_updater.dart
-@@ -0,0 +1,441 @@
+@@ -0,0 +1,456 @@
 +// SPDX-FileCopyrightText: 2026 Plotina
 +//
 +// SPDX-License-Identifier: AGPL-3.0-or-later
@@ -487,6 +485,18 @@ index 0000000..70f88d0
 +    }
 +
 +    final localCode = await currentVersionCode();
++    // A versionCode we cannot read must not fall through to `<= -1`: the
++    // silent daily check would then offer the same update on every launch.
++    if (localCode <= 0) {
++      Logs().w(
++        'Updater: our own versionCode is unreadable, not offering an update',
++      );
++      if (manual) {
++        if (!context.mounted) return;
++        _showMessage(context, l10n.updateCheckFailed);
++      }
++      return;
++    }
 +    if (manifest.versionCode <= localCode) {
 +      if (manual) {
 +        final localName = (await PackageInfo.fromPlatform()).version;
@@ -612,9 +622,7 @@ index 0000000..70f88d0
 +                const SizedBox(height: 12),
 +                Text(
 +                  value == null
-+                      ? _prettySize(
-+                          file.existsSync() ? file.lengthSync() : 0,
-+                        )
++                      ? _prettySize(file.existsSync() ? file.lengthSync() : 0)
 +                      : '${(value * 100).round()} %',
 +                ),
 +              ],
@@ -723,11 +731,16 @@ index 0000000..70f88d0
 +          FilledButton.icon(
 +            onPressed: () {
 +              Navigator.of(dialogContext).pop();
-+              _channel.invokeMethod('openUnknownSourcesSettings').catchError(
-+                (e, s) {
-+                  Logs().w('Updater: cannot open the install permission page', e, s);
-+                },
-+              );
++              _channel.invokeMethod('openUnknownSourcesSettings').catchError((
++                e,
++                s,
++              ) {
++                Logs().w(
++                  'Updater: cannot open the install permission page',
++                  e,
++                  s,
++                );
++              });
 +            },
 +            icon: const Icon(Icons.settings_outlined),
 +            label: Text(l10n.updateOpenSettings),

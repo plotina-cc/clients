@@ -41,10 +41,12 @@ else
   echo "    rpm в этом релизе нет, пропускаю"
 fi
 
-# Android (Plotina X): the in-app updater reads update-x.json and downloads Plotina-X.apk from
-# this directory, so both travel under those stable names. Releases are tagged per client, so
-# both are optional here - a desktop release simply does not carry them.
-for f in Plotina-X.apk update-x.json; do
+# Android (Plotina X and Plotina Mobile): the in-app updaters read update-x.json /
+# update-mobile.json and download their APK from this directory, so these files
+# travel under exactly those names. Releases are tagged per client, so every one
+# of them is optional here - a desktop release simply does not carry them.
+for f in Plotina-X.apk update-x.json \
+         Plotina-Mobile.apk Plotina-Mobile-armv7.apk update-mobile.json; do
   if curl -sSL --fail --max-time 900 -o "$WORK/$f" "$BASE/$f" 2>/dev/null; then
     printf '    %-32s %s\n' "$f" "$(du -h "$WORK/$f" | cut -f1)"
   else
@@ -59,7 +61,8 @@ tar -C "$WORK" -cf - . | ssh "$EDGE" 'mkdir -p /tmp/dlin && tar -xf - -C /tmp/dl
   rm -rf /tmp/dlin && ls -lh /srv/dl'
 
 echo "==> проверка отдачи"
-for f in Plotina-setup.exe Plotina.AppImage Plotina.deb Plotina.rpm; do
+for f in Plotina-setup.exe Plotina.AppImage Plotina.deb Plotina.rpm \
+         Plotina-Mobile.apk update-mobile.json; do
   printf '%-22s ' "$f"
   curl -s -r 0-1023 -o /dev/null -w 'HTTP %{http_code} %{size_download}B %{content_type}\n' \
     --max-time 20 "https://plotina.cc/dl/$f"

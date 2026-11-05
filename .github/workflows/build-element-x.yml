@@ -92,18 +92,28 @@ jobs:
           GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 --branch "$tag" \
             https://github.com/element-hq/element-x-android "$RUNNER_TEMP/element-x"
           cd "$RUNNER_TEMP/element-x"
-          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0002-element-x-android-plotina-signing.patch"
-          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0004-element-x-android-plotina-call-url.patch"
-          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0005-element-x-android-plotina-app-link.patch"
-          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0006-element-x-android-plotina-account-provider.patch"
-          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0007-element-x-android-plotina-push-gateway.patch"
-          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0008-element-x-android-plotina-sentry.patch"
-          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0009-plotina-application-id.patch"
-          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0010-plotina-visible-strings.patch"
-          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0011-plotina-locales.patch"
-          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0012-plotina-about-minimal.patch"
-          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0013-plotina-analytics-off.patch"
-          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0014-plotina-self-updater.patch"
+          # Sequential, not a stack of --check runs on the pristine tree: a patch generated
+          # against the already-patched tree legitimately fails --check against pristine. Patch
+          # 0014's app/build.gradle.kts hunk carries the "no ndk.abiFilters" comment that 0002
+          # inserts, and the .25 run died on exactly that. So each patch is checked AND applied,
+          # in the build job's order, and every later patch sees the same tree the build makes.
+          for p in \
+            0002-element-x-android-plotina-signing \
+            0004-element-x-android-plotina-call-url \
+            0005-element-x-android-plotina-app-link \
+            0006-element-x-android-plotina-account-provider \
+            0007-element-x-android-plotina-push-gateway \
+            0008-element-x-android-plotina-sentry \
+            0009-plotina-application-id \
+            0010-plotina-visible-strings \
+            0011-plotina-locales \
+            0012-plotina-about-minimal \
+            0013-plotina-analytics-off \
+            0014-plotina-self-updater; do
+            patch="$GITHUB_WORKSPACE/element-x/patches/$p.patch"
+            git apply --check --verbose "$patch"
+            git apply --verbose "$patch"
+          done
 
   build:
     needs: patches

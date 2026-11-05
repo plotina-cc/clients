@@ -42,7 +42,10 @@ scripts/build-android.sh           same steps as CI, run locally
 scripts/fetch-model.sh             downloads the model, SHA-256 pinned
 patches/0012-plotina-intro-buttons.patch  intro "Sign in" always on-screen (see below)
 patches/0013-plotina-oidc-scheme.patch    SSO scheme cc.plotina.fluffychat (MAS)
-tests/intro_plotina_test.dart      Flutter widget regression test for 0012
+patches/0016-plotina-self-updater.patch   in-app updater (see "In-app updater")
+scripts/version-code.py          the versionCode formula, used by CI and by
+                                 scripts/build-android.sh
+tests/intro_plotina_test.dart    Flutter widget regression test for 0012
 ```
 
 The patch adds only this to `pubspec.yaml`:
@@ -220,6 +223,74 @@ environment `production`; tracing, screenshots and PII are off.
 CI uploads symbols (`--split-debug-info`, R8 mapping, native libraries) with `sentry-cli` when
 `SENTRY_AUTH_TOKEN` is set and keeps them as the `Plotina-Mobile-symbols` artifact.
 Smoke test: build with `--dart-define=PLOTINA_SENTRY_TEST_EVENT=true`.
+
+## In-app updater (patch `0016`)
+
+We do not ship through Google Play, so the app updates itself from
+`https://plotina.cc/dl/update-mobile.json`, written by CI next to the APKs on
+every release:
+
+```json
+{"client":"mobile","package":"cc.plotina.mobile","versionName":"2.11.3",
+ "versionCode":2110323,"apkUrl":"https://plotina.cc/dl/Plotina-Mobile.apk",
+ "sha256":"<hex>","size":<bytes>,"notes":"<short ru text>"}
+```
+
+Flow (`lib/utils/updater/plotina_updater.dart`, native half
+`android/app/src/main/kotlin/…/PlotinaUpdaterChannel.kt`):
+
+1. Once a day at start-up (from `UpdateNotifier.showUpdateAvailableBanner`,
+   the gate FluffyChat already had for Windows) and on demand from
+   **Settings → "Проверить обновления"** and the **About** dialog, the manifest
+   is fetched. `client` and `package` must match this install, or it is ignored.
+2. `versionCode` is read from the PackageManager (channel `getVersionCode`) and
+   compared. Newer → dialog with the version, the notes and the size; the
+   user's "Later" is remembered per version, so the silent check does not nag.
+3. Before downloading, `canRequestPackageInstalls()` is checked. If the user has
+   not allowed installs from this source, an explanation is shown and
+   `Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES` is opened for our package.
+4. The APK is streamed into `<cache>/updates/Plotina-Mobile.apk` while sha256
+   and size are computed, and compared with the manifest. A mismatch deletes the
+   file and aborts; a cached, already-verified file is reused instead of
+   downloaded again.
+5. The verified file is handed to the system installer as a FileProvider
+   `content://` URI (`ACTION_VIEW`,
+   `application/vnd.android.package-archive`,
+   authority `cc.plotina.mobile.updater.fileprovider`).
+
+Two things are deliberately narrower than "auto-update":
+
+- The manifest carries only the **arm64** APK. A 32-bit-only device is told to
+  fetch `Plotina-Mobile-armv7.apk` by hand instead of being offered an APK the
+  installer would reject with `INSTALL_FAILED_NO_MATCHING_ABIS`.
+- `plotina.cc/dl` is served by the edge host, not by GitHub:
+  `scripts/publish-clients.sh` copies `Plotina-Mobile.apk`,
+  `Plotina-Mobile-armv7.apk` and `update-mobile.json` out of the release. Until
+  they are published there, the check answers "could not check for updates".
+
+### versionCode grows with every build
+
+`flutter build apk --build-number` sets it, so it must be derived from the
+release tag rather than from upstream's `2.11.3+3574` (which repeats). With
+`versionName = major.minor.patch` and the tag suffix `N`
+(`v2.11.3-plotina-mobile.23` → 23):
+
+```
+versionCode = major * 1_000_000 + minor * 10_000 + patch * 100 + N
+2.11.3 + build 23 → 2*1000000 + 11*10000 + 3*100 + 23 = 2110323
+```
+
+`minor < 100`, `patch < 100` and `0 ≤ N < 100`, and `scripts/version-code.py`
+exits non-zero outside those slots, so a mistake fails the build instead of
+emitting a versionCode that sorts below an older one. Untagged local builds use
+`N = 0`, which never offers an update over a released APK. CI computes it from
+`GITHUB_REF_NAME`, `scripts/build-android.sh` from `git describe` (or
+`PLOTINA_BUILD=<n>`), and the workflow reads it back out of the finished APK
+with `aapt`/`apkanalyzer` and fails on a mismatch.
+
+Point the updater at a local server while testing with
+`PLOTINA_UPDATE_URL=http://10.0.2.2:8000/update-mobile.json`
+(build-android.sh forwards it as `--dart-define`).
 
 ## Licensing
 
