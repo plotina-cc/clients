@@ -74,6 +74,8 @@ def _lit(text: str) -> str:
 #   privacy_url         the sign-in footer's Privacy Policy link
 #   cookie_policy_url   the same footer's Cookie Policy link
 #   docs_url            the SFU-connectivity error's documentation link
+#   theme_default       the ?theme= parse site, `theme:n.getParam(`theme`)`,
+#                       given its missing-value fallback: `??`dark``
 JS_SUBS: tuple["Sub", ...] = ()
 HTML_SUBS: tuple["Sub", ...] = ()
 
@@ -209,6 +211,26 @@ JS_SUBS = (
         1,
         pattern=r"https://docs\.element\.io/latest/element-server-suite-pro/"
         r"configuring-components/configuring-matrix-rtc/[A-Za-z0-9_.#-]*",
+    ),
+    # Plotina Call opens dark. Upstream reads the only theme input, `?theme=`,
+    # bare — `theme:n.getParam(`theme`)` yields null when the parameter is
+    # absent, and the bundle carries no prefers-color-scheme fallback at all:
+    # what a null theme looks like is then whichever default some component
+    # happens to pick, one upstream `?:` flip away from light. This rule pins
+    # the answer at the parse site — `??`dark``, so every consumer of
+    # UrlParams.theme sees "dark" with no parameter, while an explicit
+    # ?theme=light still wins (`??` only fills the missing value).
+    # The (?!??) lookahead is the idempotency guard: a branded bundle no
+    # longer matches, so a second run is a no-op instead of stacking
+    # fallbacks — and the expected count is the usual abort signal if
+    # upstream ever grows a second parse site.
+    replaced(
+        "theme_default",
+        "theme:n.getParam(`theme`)",
+        "theme:n.getParam(`theme`)??`dark`",
+        1,
+        pattern=r"theme:n\.getParam\(" + Q + r"theme\1\)(?!\?\?)",
+        template=r"theme:n.getParam(\g<1>theme\g<1>)??`dark`",
     ),
 )
 

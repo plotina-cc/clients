@@ -8,6 +8,7 @@ the same counters branding.py asserts against a real dist.
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 import sys
 import tempfile
@@ -133,13 +134,17 @@ class BundleTests(unittest.TestCase):
                 "privacy_url": 1,
                 "cookie_policy_url": 1,
                 "docs_url": 1,
+                "theme_default": 1,
             },
         )
 
-    def test_total_reduction_equals_the_counters(self) -> None:
+    def test_total_reduction_equals_the_counters(self):
         before = fixtures.UNBRANDED_BUNDLE.count("Element Call")
         after = self.out.count("Element Call")
-        renamed = sum(v for k, v in self.counts.items() if not k.endswith("_url"))
+        # Only the rules that carry the product name move its count; the
+        # non-renaming rules (URLs, the theme fallback) must leave it alone.
+        renaming = {s.name for s in branding.JS_SUBS if s.renames}
+        renamed = sum(v for k, v in self.counts.items() if k in renaming)
         self.assertEqual(before - after, renamed)
 
     def test_idempotent(self) -> None:
@@ -164,6 +169,59 @@ class BundleTests(unittest.TestCase):
         self.assertIn("brand_argument", str(ctx.exception))
 
 
+class ThemeDefaultTests(unittest.TestCase):
+    """Plotina Call opens dark when the URL carries no ``?theme=``.
+
+    Upstream ships no ``prefers-color-scheme`` at all: the only theme input is
+    the URL parameter, read as ``theme:n.getParam(`theme`)`` — with no fallback,
+    ``null``. The class-application site happens to pick dark for a null theme,
+    but every other consumer sees ``null``, and one upstream ``?:`` flip would
+    silently turn the default light. branding.py therefore pins the parse site
+    itself: ``??`dark``` after the getParam call, so ``UrlParams.theme`` is
+    ``"dark"`` when the parameter is absent — and ``?theme=light`` still wins.
+    """
+
+    def setUp(self) -> None:
+        self.out, self.counts = branding.brand_js(fixtures.UNBRANDED_BUNDLE)
+
+    def test_pristine_bundle_has_no_dark_fallback(self) -> None:
+        # What the replacement buys us: upstream's parse site is bare.
+        self.assertNotIn("??`dark`", fixtures.UNBRANDED_BUNDLE)
+
+    def test_theme_parse_site_gets_the_dark_fallback(self) -> None:
+        self.assertIn("theme:n.getParam(`theme`)??`dark`", self.out)
+
+    def test_no_bare_theme_parse_survives_the_branding(self) -> None:
+        # Every getParam(`theme`) in the output carries the fallback: a site
+        # followed by anything but `??` would revert to the implicit default.
+        bare = re.findall(r"getParam\(`theme`\)(?!\?\?)", self.out)
+        self.assertEqual(bare, [])
+
+    def test_no_light_default_anywhere(self) -> None:
+        lightish = re.findall(
+            r"getParam\([`'\"`]theme[`'\"`]\)\s*(?:\?\?|\|\||\?)[\s]*[`'\"`]light",
+            self.out,
+        )
+        self.assertEqual(lightish, [])
+
+    def test_the_default_still_leaves_explicit_params_alone(self) -> None:
+        # ``??`` only fills a missing/empty value: ?theme=light must keep
+        # producing a light class downstream, so the rule may not touch the
+        # getParam call itself, only append to it.
+        self.assertIn("getParam(`theme`)", self.out)
+        self.assertNotIn("getParam(`theme`)??`light`", self.out)
+
+    def test_counter(self) -> None:
+        self.assertEqual(self.counts["theme_default"], 1)
+
+    def test_idempotent(self) -> None:
+        # A second run must not stack a second fallback onto the first.
+        again, counts = branding.brand_js(self.out)
+        self.assertEqual(again, self.out)
+        self.assertEqual(counts["theme_default"], 1)
+        self.assertEqual(again.count("??`dark`"), 1)
+
+
 class QuoteStyleTests(unittest.TestCase):
     """The minifier's quote choice is not ours to predict."""
 
@@ -181,6 +239,10 @@ class QuoteStyleTests(unittest.TestCase):
         # An unrelated assignment of the old name is left alone.
         self.assertIn('el.title = "Element Call"', out)
         self.assertEqual(counts["close_host_error"], 1)
+        # The theme fallback takes whatever quote style the minifier chose for
+        # the `theme` literal; the `dark` we append is ours to pick.
+        self.assertIn("theme:n.getParam('theme')??`dark`", out)
+        self.assertEqual(counts["theme_default"], 1)
 
 
 class DistTests(unittest.TestCase):
