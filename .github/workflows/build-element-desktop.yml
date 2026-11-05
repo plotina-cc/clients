@@ -184,6 +184,15 @@ jobs:
           '
           echo "webapp.asar carries the noise overlay and the Sentry block"
 
+      # Upstream's src/updater.ts drives Electron's Squirrel-based autoUpdater,
+      # which needs the Update.exe that a `squirrel` installer ships; our NSIS
+      # packaging has none, so it always logs "Squirrel not found" and no
+      # updater ever runs in our builds. Swap in our GitHub-releases updater.
+      - name: Apply Plotina desktop sources
+        shell: bash
+        run: |
+          cp "${{ github.workspace }}/element-desktop/desktop/updater.ts" "$SRC/apps/desktop/src/updater.ts"
+
       - name: Build installers
         working-directory: element-desktop/.build/element-web/apps/desktop
         shell: bash
@@ -198,20 +207,69 @@ jobs:
           # so upstream's Element icon would be packaged unless we overwrite it.
           cp "${{ github.workspace }}/element-desktop/build/icon.png" build/icon.png
           cp "${{ github.workspace }}/element-desktop/build/icon.ico" build/icon.ico
-          pnpm run build --publish never $TARGETS
+          # Upstream's electron-builder.ts builds its config from a whitelist of
+          # variant fields, so the publish block in build.plotina.json never
+          # reaches it, and app-update.yml falls back to the github publish
+          # config inferred from package.json "repository" (vector-im/element-web).
+          # CLI --config.* dot overrides sit on top of the file config: verified
+          # against electron-builder 26.16.1 (probe: win-unpacked/resources/app-update.yml
+          # gets owner/repo from here even with repository=vector-im/element-web).
+          PUB=(
+            --config.publish.provider=github
+            --config.publish.owner=plotina-cc
+            --config.publish.repo=clients
+            --config.publish.releaseType=release
+          )
+          if [ "${{ matrix.name }}" = "windows" ]; then
+            PUB+=(
+              --config.win.executableName=Plotina-Desktop
+              '--config.nsis.artifactName=Plotina-Desktop-${version}-setup.exe'
+            )
+          else
+            PUB+=('--config.appImage.artifactName=Plotina-Desktop-${version}.AppImage')
+          fi
+          # Tag builds get a per-build app version (v1.12.32-plotina-desktop.30 ->
+          # VERSION=1.12.32-plotina.30) so the updater can tell successive Plotina
+          # builds apart at the same upstream base. Must be semver-prerelease
+          # format: electron-builder sanitizes a 4-segment "1.12.32.30" into the
+          # nonsense "1.12.3-2.30" inside latest.yml (probe), while the prerelease
+          # form passes through byte-identical.
+          if [[ "${{ github.ref_name }}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-plotina-desktop\.([0-9]+)$ ]]; then
+            export VERSION="${BASH_REMATCH[1]}-plotina.${BASH_REMATCH[2]}"
+            echo "app VERSION=$VERSION"
+          fi
+          pnpm run build --publish never $TARGETS "${PUB[@]}"
 
-      - name: Repoint the AppImage updater
-        if: matrix.name == 'linux'
+      - name: Check updater metadata
         working-directory: element-desktop/.build/element-web/apps/desktop
         shell: bash
         run: |
-          # app-update.yml inside the squashfs still names vector-im/element-web.
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq squashfs-tools
-          shopt -s nullglob
-          for image in dist/*.AppImage; do
-            bash "${{ github.workspace }}/element-desktop/scripts/fix-appimage-updater.sh" "$image"
-          done
+          # The build-time --config.publish.* overrides must be what the
+          # packaged app actually carries; scripts/fix-appimage-updater.sh and
+          # the sed in fix-deb-branding.sh used to post-process the yml, but a
+          # post-build re-pack changes the bytes AFTER electron-builder hashed
+          # them into latest*.yml, which would break download verification.
+          # So: assert here instead of patching there.
+          set -euo pipefail
+          if [ "${{ matrix.name }}" = "windows" ]; then
+            unpacked=dist/win-unpacked
+            meta=dist/latest.yml
+          else
+            unpacked=dist/linux-unpacked
+            meta=dist/latest-linux.yml
+          fi
+          yml="$unpacked/resources/app-update.yml"
+          echo "---- $yml ----"; cat "$yml"
+          grep -qx 'provider: github' "$yml"
+          grep -qx 'owner: plotina-cc' "$yml"
+          grep -qx 'repo: clients' "$yml"
+          if grep -qE 'vector-im|element-web' "$yml"; then
+            echo "app-update.yml still references upstream" >&2
+            exit 1
+          fi
+          echo "---- $meta ----"; cat "$meta"
+          test -s "$meta"
+          ls -l dist/*.blockmap
 
       - name: Rewrite deb branding
         if: matrix.name == 'linux'
@@ -228,16 +286,35 @@ jobs:
             bash "${{ github.workspace }}/element-desktop/scripts/fix-deb-branding.sh" "$deb"
           done
 
-      - name: Stage artifacts with stable names
+      - name: Stage artifacts
         shell: bash
         run: |
           cd "$SRC/apps/desktop/dist"
           mkdir -p "$GITHUB_WORKSPACE/stable"
           shopt -s nullglob
-          for f in *.AppImage; do cp "$f" "$GITHUB_WORKSPACE/stable/Plotina-Desktop.AppImage"; done
-          for f in *.deb;      do cp "$f" "$GITHUB_WORKSPACE/stable/Plotina-Desktop.deb"; done
-          for f in *.exe;      do cp "$f" "$GITHUB_WORKSPACE/stable/Plotina-Desktop-setup.exe"; done
+          # Upload under the build names: latest.yml / latest-linux.yml refer to
+          # the installer by filename, so renaming the staged copy would make
+          # the published metadata point at a non-existent asset. The names are
+          # already stable ("Plotina-Desktop-...") via the artifactName overrides.
+          staged=0
+          for f in *.exe *.exe.blockmap *.AppImage *.AppImage.blockmap *.deb latest.yml latest-linux.yml; do
+            [ -e "$f" ] || continue
+            cp "$f" "$GITHUB_WORKSPACE/stable/"
+            staged=$((staged + 1))
+          done
+          echo "staged $staged files"
           ls -lh "$GITHUB_WORKSPACE/stable"
+          # The installer plus its checksum metadata must both be present.
+          case "${{ matrix.name }}" in
+            windows)
+              ls "$GITHUB_WORKSPACE/stable"/*-setup.exe >/dev/null
+              ls "$GITHUB_WORKSPACE/stable"/latest.yml >/dev/null
+              ;;
+            linux)
+              ls "$GITHUB_WORKSPACE/stable"/*.AppImage >/dev/null
+              ls "$GITHUB_WORKSPACE/stable"/*.deb >/dev/null
+              ;;
+          esac
 
       - name: Fail if nothing was produced
         shell: bash
@@ -249,9 +326,85 @@ jobs:
           if-no-files-found: error
           path: stable/*
 
+  # End-to-end proof the Windows pipeline ships something usable: silently
+  # install the built NSIS package on a real Windows runner, assert the
+  # installed tree carries OUR updater config and name, launch the app and
+  # verify the process actually starts. Any mismatch fails the job (and the
+  # release job, which needs it).
+  windows-smoke:
+    name: windows smoke
+    runs-on: windows-latest
+    needs: build
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: plotina-desktop-windows
+          path: pkg
+
+      - name: Check release metadata and install silently
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setups = @(Get-ChildItem pkg\Plotina-Desktop-*-setup.exe)
+          if ($setups.Count -ne 1) { throw "artifact should carry exactly one setup exe, found $($setups.Count)" }
+          $setup = $setups[0]
+          Write-Host "installer: $($setup.Name) ($([math]::Round($setup.Length/1MB)) MB)"
+          $latest = Get-Content pkg\latest.yml -Raw
+          Write-Host "---- latest.yml ----`n$latest"
+          $ref = [regex]::Match($latest, '(?m)^path:\s*(\S+)\s*$').Groups[1].Value
+          if ([string]::IsNullOrEmpty($ref)) { throw "latest.yml has no path: entry" }
+          if (-not (Test-Path "pkg\$ref")) { throw "latest.yml references $ref, which is not in the release assets" }
+          if (-not (Test-Path "pkg\$ref.blockmap")) { throw "latest.yml installer $ref has no .blockmap asset" }
+          $proc = Start-Process $setup.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "installer exited with code $($proc.ExitCode)" }
+          Write-Host "installer exited 0"
+
+      - name: Assert installed app-update.yml and executable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $roots = @(Get-ChildItem "$env:LOCALAPPDATA\Programs" -Directory -Filter 'Plotina*')
+          if ($roots.Count -lt 1) { throw "no Plotina* install directory under $env:LOCALAPPDATA\Programs" }
+          $root = $roots[0].FullName
+          Write-Host "install dir: $root"
+          $ymlPath = Join-Path $root 'resources\app-update.yml'
+          if (-not (Test-Path $ymlPath)) { throw "installed tree has no resources/app-update.yml" }
+          $yml = Get-Content $ymlPath -Raw
+          Write-Host "---- installed resources/app-update.yml ----`n$yml"
+          foreach ($want in @('provider: github', 'owner: plotina-cc', 'repo: clients')) {
+            if (-not $yml.Contains($want)) { throw "app-update.yml does not contain '$want'" }
+          }
+          if ($yml -match 'vector-im|element-web') { throw "app-update.yml still references upstream" }
+          $exe = Join-Path $root 'Plotina-Desktop.exe'
+          if (-not (Test-Path $exe)) { throw "Plotina-Desktop.exe is not installed at $exe" }
+          $vi = (Get-Item $exe).VersionInfo
+          Write-Host "installed version: FileVersion=$($vi.FileVersion) ProductVersion=$($vi.ProductVersion)"
+
+      - name: Launch the installed app and check it stays running
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = (Get-ChildItem "$env:LOCALAPPDATA\Programs" -Directory -Filter 'Plotina*')[0].FullName
+          $exe = Join-Path $root 'Plotina-Desktop.exe'
+          # runAfterFinish may or may not have started it in a silent install;
+          # make sure we have a live instance either way.
+          if (@(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue).Count -eq 0) {
+            Start-Process $exe | Out-Null
+          }
+          Start-Sleep -Seconds 25
+          $procs = @(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue)
+          if ($procs.Count -eq 0) { throw "Plotina-Desktop.exe is not running 25s after launch" }
+          Write-Host "running as PID(s): $($procs.Id -join ', '); main window title(s): $(($procs | ForEach-Object { $_.MainWindowTitle }) -join ' | ')"
+          # Reap the whole tree (renderer/GPU children share the image name).
+          & taskkill /IM Plotina-Desktop.exe /F /T 2>&1 | ForEach-Object { Write-Host $_ }
+          Start-Sleep -Seconds 3
+          $left = @(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue)
+          Write-Host "processes left after kill: $($left.Count)"
+
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: [build, windows-smoke]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -284,8 +437,8 @@ jobs:
             Сборка Plotina Desktop для plotina.cc с шумоподавлением DeepFilterNet3.
 
             Шумоподавление включено по умолчанию (уровень 70), настраивается в Настройки → Голос и видео.
-            Windows: установщик не подписан, SmartScreen попросит подтверждение.
-            Linux: AppImage или deb (Debian/Ubuntu). Автообновления нет — новая версия ставится поверх вручную.
+            Windows: установщик не подписан, SmartScreen попросит подтверждение. Работают автообновления: приложение проверяет релизы plotina-cc/clients (latest.yml), скачанный установщик сверяется по sha512; подпись Authenticode у обновлений нет — проверка подписи намеренно отключена.
+            Linux: AppImage или deb (Debian/Ubuntu). Автообновлений нет — новая версия ставится поверх вручную (latest-linux.yml публикуется на будущее).
             macOS не собирается.
 
             Исходники этой сборки — в этом репозитории (AGPL-3.0): upstream-тег element-web из element-desktop/UPSTREAM_TAG плюс оверлей element-desktop/.
