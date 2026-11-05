@@ -60,6 +60,16 @@ done
 
 # dpkg-deb 1.22 defaults to zstd, which Ubuntu 22.04's dpkg cannot read;
 # keep the xz compression electron-builder used.
+# electron-builder takes app-update.yml from upstream's publish block; without
+# this the shipped updater keeps looking for vector-im/element-web releases.
+for update_yml in "$ROOT"/pkg/opt/*/resources/app-update.yml; do
+  [ -f "$update_yml" ] || continue
+  sed -i \
+    -e 's/^owner:.*/owner: plotina-cc/' \
+    -e 's/^repo:.*/repo: clients/' \
+    "$update_yml"
+done
+
 # FPM writes upstream's maintainer into the changelog trailer; dpkg shows it
 # in apt changelog output.
 for changelog in "$ROOT"/pkg/usr/share/doc/*/changelog.gz; do
