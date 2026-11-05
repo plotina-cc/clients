@@ -1,4 +1,4 @@
-name: build-cinny-web
+name: Build Plotina Lite Web
 
 # The static web bundle served at cinny.plotina.cc. It is the same dist the
 # desktop workflow compiles into the Tauri shell, but it ships on its own
@@ -19,7 +19,7 @@ on:
         default: ""
   push:
     branches: [main]
-    tags: ["v*-plotina-cinny.*"]
+    tags: ["v*-plotina-lite-desktop.*"]
     paths: ["cinny/**", "noise/**", ".github/workflows/build-cinny-web.yml"]
 
 permissions:
@@ -115,7 +115,7 @@ jobs:
       - name: Noise tests (python)
         run: python3 -m unittest discover -s noise/tests -p '*_test.py'
 
-      - name: Cinny branding tests (python)
+      - name: Plotina Lite branding tests (python)
         run: python3 -m unittest discover -s cinny/tests -p 'test_*.py'
 
       - name: Noise tests (node)
@@ -147,7 +147,7 @@ jobs:
             git -C upstream/cinny apply "$patch"
           done
 
-      - name: Build Cinny web
+      - name: Build Plotina Lite Web
         working-directory: cinny/upstream/cinny
         shell: bash
         run: |
@@ -268,7 +268,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: plotina-cinny-web
+          name: plotina-lite-web
           path: dist/*
           if-no-files-found: error
           retention-days: 30

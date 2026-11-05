@@ -1,4 +1,4 @@
-name: build-fluffychat
+name: Build Plotina Mobile
 
 # Builds Plotina's FluffyChat APK: upstream pinned in fluffychat/UPSTREAM_TAG,
 # our patches from fluffychat/patches/, the DeepFilterNet3 plugin in
@@ -18,7 +18,7 @@ name: build-fluffychat
 on:
   workflow_dispatch:
   push:
-    tags: ["v*-plotina-fluffy.*"]
+    tags: ["v*-plotina-mobile.*"]
 
 permissions:
   contents: write

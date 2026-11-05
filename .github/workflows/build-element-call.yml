@@ -1,4 +1,4 @@
-name: build-element-call
+name: Build Plotina Call
 
 # Static build of our own Element Call at call.plotina.cc as Plotina Call:
 # upstream v0.26.1 (see element-call/pins.env) with the noise/ wrapper injected
@@ -165,7 +165,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: plotina-element-call
+          name: plotina-call
           path: dist/plotina-element-call.tar.gz
           if-no-files-found: error
           retention-days: 30
@@ -177,7 +177,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: plotina-element-call
+          name: plotina-call
           path: dist
 
       - name: Work out the release title

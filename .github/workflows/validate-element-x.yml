@@ -1,4 +1,4 @@
-name: Validate Element X configuration
+name: Validate Plotina X configuration
 
 # A full Element X build is 25-40 minutes; a configuration mistake (an abiFilters
 # clash, a variant that does not exist, a patch that no longer applies) kills it in
@@ -31,7 +31,7 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Install the SDK packages Element X compiles against
+      - name: Install the SDK packages Plotina X compiles against
         run: |
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
@@ -48,7 +48,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: element-x-android, patched
+      - name: Plotina X, patched
         run: |
           GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 --branch "$ELEMENT_X_TAG" \
             https://github.com/element-hq/element-x-android upstream/element-x

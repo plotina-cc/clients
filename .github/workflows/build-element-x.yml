@@ -39,7 +39,7 @@
 # instead. Push also needs the server side: Synapse records our gateway URL as the pusher, and
 # sygnal on push.plotina.cc holds the Firebase service account for app_id im.vector.app.android
 # (the value BuildConfig.PUSHER_APP_ID carries into the pusher registration).
-name: Build Element X (Android, Plotina)
+name: Build Plotina X (Android)
 
 on:
   push:
@@ -80,7 +80,7 @@ jobs:
         # $GITHUB_ENV takes KEY=VALUE lines only: a '#' line is rejected as "Invalid format",
         # which is how the first run of this workflow died in ten seconds.
         run: grep -Ev '^[[:space:]]*(#|$)' element-x/pins.env >> "$GITHUB_ENV"
-      - name: Patches apply to element-x-android
+      - name: Patches apply to the Plotina X pin
         env:
           UPSTREAM_TAG: ${{ inputs.upstream_tag }}
         run: |
@@ -138,7 +138,7 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Install the SDK packages Element X compiles against
+      - name: Install the SDK packages Plotina X compiles against
         run: |
           # ubuntu-latest ships the Android SDK and upstream's own CI never installs anything, so
           # nothing here may fail just because a package is already present. Do not use
@@ -169,7 +169,7 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
-      - name: element-x-android, patched
+      - name: Plotina X, patched
         run: |
           GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 --branch "$ELEMENT_X_TAG" \
             https://github.com/element-hq/element-x-android upstream/element-x

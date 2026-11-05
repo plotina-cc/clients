@@ -1,9 +1,9 @@
-name: build-cinny-desktop
+name: Build Plotina Lite Desktop
 
 on:
   workflow_dispatch:
   push:
-    tags: ["v*-plotina-cinny.*"]
+    tags: ["v*-plotina-lite-desktop.*"]
     # noise/ is baked into the bundle, so a change there must rebuild too.
     paths: ["cinny/**", "noise/**", ".github/workflows/build-cinny-desktop.yml"]
 
@@ -118,7 +118,7 @@ jobs:
         if: matrix.name == 'linux'
         run: python3 -m unittest discover -s noise/tests -p '*_test.py'
 
-      - name: Cinny branding tests (python)
+      - name: Plotina Lite branding tests (python)
         if: matrix.name == 'linux'
         run: python3 -m unittest discover -s cinny/tests -p 'test_*.py'
 
@@ -159,7 +159,7 @@ jobs:
             git -C upstream apply "$patch"
           done
 
-      - name: Build Cinny web
+      - name: Build Plotina Lite Web
         working-directory: cinny/upstream/cinny
         shell: bash
         run: |
@@ -304,7 +304,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: plotina-cinny-${{ matrix.name }}
+          name: plotina-lite-desktop-${{ matrix.name }}
           if-no-files-found: warn
           path: stable/*
 

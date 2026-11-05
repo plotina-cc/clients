@@ -1,4 +1,4 @@
-name: publish-element-web
+name: Publish Plotina Web
 
 # Element Web is not built here: we run the pinned vectorim/element-web image
 # (element-web/Dockerfile) with our noise/ overlay and a runtime config.json.
@@ -118,7 +118,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: element-web-config
+          name: plotina-web-config
           path: dist/element-web-config.json
           if-no-files-found: error
           retention-days: 30

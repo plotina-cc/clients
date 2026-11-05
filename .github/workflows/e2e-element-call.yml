@@ -1,4 +1,4 @@
-name: e2e-element-call
+name: Plotina Call E2E
 
 # Browser checks for the DeepFilterNet3 integration on call.plotina.cc.
 #
@@ -70,7 +70,7 @@ jobs:
         working-directory: e2e
         run: npx playwright install --with-deps chromium
 
-      - name: Run the Element Call checks against production
+      - name: Run the Plotina Call checks against production
         if: steps.credentials.outputs.ready == 'true'
         working-directory: e2e
         env:

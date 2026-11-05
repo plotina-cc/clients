@@ -1,9 +1,9 @@
-name: build-element-desktop
+name: Build Plotina Desktop
 
 on:
   workflow_dispatch:
   push:
-    tags: ["v*-plotina-element.*"]
+    tags: ["v*-plotina-desktop.*"]
 
 permissions:
   contents: read
@@ -84,7 +84,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: element-webapp
+          name: plotina-webapp
           path: ${{ runner.temp }}/webapp.tar.gz
           retention-days: 1
 
@@ -124,7 +124,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: element-webapp
+          name: plotina-webapp
           path: ${{ runner.temp }}/webapp
 
       - uses: pnpm/action-setup@v4
@@ -199,6 +199,19 @@ jobs:
           cp "${{ github.workspace }}/element-desktop/build/icon.png" build/icon.png
           cp "${{ github.workspace }}/element-desktop/build/icon.ico" build/icon.ico
           pnpm run build --publish never $TARGETS
+
+      - name: Rewrite deb branding
+        if: matrix.name == 'linux'
+        working-directory: element-desktop/.build/element-web/apps/desktop
+        shell: bash
+        run: |
+          # electron-builder keeps upstream's Vendor/Maintainer/Homepage and
+          # the executable name in the menu entry; rewrite both in the built
+          # package before it is staged (see scripts/fix-deb-branding.sh).
+          shopt -s nullglob
+          for deb in dist/*.deb; do
+            bash "${{ github.workspace }}/element-desktop/scripts/fix-deb-branding.sh" "$deb"
+          done
 
       - name: Stage artifacts with stable names
         shell: bash
