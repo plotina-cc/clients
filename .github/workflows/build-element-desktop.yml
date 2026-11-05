@@ -347,6 +347,18 @@ jobs:
             staged=$((staged + 1))
           done
           echo "staged $staged files"
+          # Stable aliases for /dl and the public links: the updater reads the
+          # versioned names from latest.yml, while pull-release.py expects the
+          # stable ones.
+          case "${{ matrix.name }}" in
+            windows)
+              cp ./*-setup.exe Plotina-Desktop-setup.exe
+              ;;
+            linux)
+              cp ./*.AppImage Plotina-Desktop.AppImage
+              cp ./*.deb Plotina-Desktop.deb
+              ;;
+          esac
           ls -lh "$GITHUB_WORKSPACE/stable"
           # The installer plus its checksum metadata must both be present.
           case "${{ matrix.name }}" in
