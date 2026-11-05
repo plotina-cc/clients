@@ -1,0 +1,22 @@
+diff --git a/lib/pages/intro/intro_page.dart b/lib/pages/intro/intro_page.dart
+index d9586c7..170c683 100644
+--- a/lib/pages/intro/intro_page.dart
++++ b/lib/pages/intro/intro_page.dart
+@@ -137,7 +137,16 @@ class IntroPage extends StatelessWidget {
+                               textAlign: TextAlign.center,
+                             ),
+                           ),
+-                          const Spacer(),
++                          // Plotina: do NOT bottom-anchor the buttons with a Spacer.
++                          // The Spacer pins them to the bottom of the *reported*
++                          // viewport (ConstrainedBox minHeight), which is unreachable
++                          // when the visible window is shorter than the height
++                          // Flutter lays out for (Android 16 floating/resized
++                          // windows): the scroll extent equals the reported height,
++                          // so there is no scroll range and 'Sign in' cannot be
++                          // reached. Flowing the buttons right below the description
++                          // is viewport-independent and always reachable.
++                          const SizedBox(height: 32),
+                           Padding(
+                             padding: const EdgeInsets.symmetric(horizontal: 32),
+                             child: Column(

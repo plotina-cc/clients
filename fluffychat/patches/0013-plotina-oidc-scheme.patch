@@ -1,0 +1,26 @@
+diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
+index f721c20..67b49d0 100644
+--- a/android/app/src/main/AndroidManifest.xml
++++ b/android/app/src/main/AndroidManifest.xml
+@@ -109,7 +109,7 @@
+                 <action android:name="android.intent.action.VIEW" />
+                 <category android:name="android.intent.category.DEFAULT" />
+                 <category android:name="android.intent.category.BROWSABLE" />
+-                <data android:scheme="im.fluffychat.auth" android:path="/login"/>
++                <data android:scheme="cc.plotina.fluffychat" android:path="/login"/>
+             </intent-filter>
+         </activity>
+ 
+diff --git a/lib/config/app_config.dart b/lib/config/app_config.dart
+index 57221d8..18a0768 100644
+--- a/lib/config/app_config.dart
++++ b/lib/config/app_config.dart
+@@ -31,7 +31,7 @@ abstract class AppConfig {
+       'https://ko-fi.com/post/How-to-add-a-sticker-pack-to-FluffyChat-N4N01OXATI';
+   static const String appId = 'im.fluffychat.app';
+   static const String appOpenUrlScheme = 'im.fluffychat';
+-  static const String appSsoUrlScheme = 'im.fluffychat.auth';
++  static const String appSsoUrlScheme = 'cc.plotina.fluffychat';
+   // Identifies the notification activation callback on Windows. Never change!
+   static const String windowsNotificationGuid =
+       '4894dfda-c70a-4ebc-b139-acae55f3988d';

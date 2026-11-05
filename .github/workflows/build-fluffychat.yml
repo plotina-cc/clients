@@ -67,6 +67,17 @@ jobs:
         working-directory: fluffychat
         run: python3 scripts/apply-plotina-icons.py upstream
 
+      - name: Apply Plotina in-app logo assets
+        working-directory: fluffychat
+        run: |
+          set -euo pipefail
+          python3 scripts/apply-plotina-app-assets.py upstream
+          # Fail early, not after a 30-minute build, if the copy was a no-op.
+          cmp -s plotina_assets/logo_mini.png upstream/assets/logo/mini/logo_mini.png
+          cmp -s plotina_assets/logo_mono_mini.png upstream/assets/logo/mini/logo_mono_mini.png
+          cmp -s plotina_assets/banner.png upstream/assets/logo/mini/banner.png
+          echo "in-app logos swapped to Plotina"
+
       - name: Keep only English and Russian UI languages
         working-directory: fluffychat
         run: bash scripts/keep-en-ru-l10n.sh upstream

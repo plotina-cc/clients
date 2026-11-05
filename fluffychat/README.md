@@ -38,6 +38,8 @@ plotina_dfn/                       Flutter plugin (Android only)
   rust/                            cdylib: JNI shim over libDF (`deep_filter`)
 scripts/build-android.sh           same steps as CI, run locally
 scripts/fetch-model.sh             downloads the model, SHA-256 pinned
+patches/0012-plotina-intro-buttons.patch  intro "Sign in" always on-screen (see below)
+tests/intro_plotina_test.dart      Flutter widget regression test for 0012
 ```
 
 The patch adds only this to `pubspec.yaml`:
@@ -50,6 +52,43 @@ The patch adds only this to `pubspec.yaml`:
 Gradle picks the Rust library up from
 `plotina_dfn/android/src/main/jniLibs/<abi>/libplotina_dfn.so`, so **no Gradle
 file of FluffyChat is modified**.
+
+## Intro screen: the "Sign in" button (patch 0012)
+
+On a OnePlus 13 (CPH2649, Android 16) the welcome screen showed the logo,
+subtitle and description but the login controls were not reachable. Cause, in
+upstream `lib/pages/intro/intro_page.dart`: the body is
+`LayoutBuilder -> SingleChildScrollView -> ConstrainedBox(minHeight: viewport)
+-> IntrinsicHeight -> Column(..., Spacer, buttons, SizedBox(36))`. The
+`Spacer` bottom-anchors the buttons to the *reported* layout viewport, and the
+content height is forced to exactly that viewport, so the scroll view has zero
+scroll range. When the visible window is shorter than the height Flutter lays
+out for (Android 16 floating/resized windows, stale surface metrics), the
+buttons land below the visible area and cannot be scrolled to. Two of the
+three buttons ("Create account", "Login with Matrix-ID") are additionally
+hidden by design here because patch 0002 presets `plotina.cc` as homeserver
+(`hasPresetHomeserver: true`); only "Sign in" should ever be visible in Plotina
+builds.
+
+`0012-plotina-intro-buttons.patch` replaces the `const Spacer(),` with a fixed
+`const SizedBox(height: 32),` so the buttons flow directly under the
+description: their y-position no longer depends on the reported viewport
+height, and when the content does exceed a small window the scroll extent is
+content-driven and actually scrolls.
+
+Verified with the pinned Flutter 3.47.8, not by eye:
+`git apply --check` passes against a clean `v2.11.3` clone; all twelve-plus-one
+patches apply in order; `dart analyze lib/pages/intro/` is clean; and
+`tests/intro_plotina_test.dart` (run inside a fully patched upstream checkout
+after `flutter pub get && flutter gen-l10n`) boots the real `FluffyChatApp`
+through its router and asserts, at 1440x3168@4.0 and at the user's
+1438x2411@4.0 window, that "Sign in" renders fully inside the viewport and
+within 64 dp of the description. The gap assertion is the regression gate:
+254 dp (Spacer, unpatched) vs 48 dp (patched). Note the user's screenshot is
+either an area-crop or a window shot of 1438x2411 (full screen is 1440x3168):
+the bottom ~757 px of the device are not in it, so the photo alone cannot show
+the button; the fix makes the question moot by placing the buttons right under
+the description text, which *is* inside that frame.
 
 ## Noise suppression level
 

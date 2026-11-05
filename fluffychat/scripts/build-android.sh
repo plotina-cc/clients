@@ -25,6 +25,11 @@ for patch in "$here"/patches/*.patch; do
   fi
 done
 
+# In-app logos (welcome/login/empty/lock screens, update snackbar). The
+# static PNGs live in plotina_assets/, rendered by
+# scripts/render-plotina-app-assets.py.
+python3 "$here/scripts/apply-plotina-app-assets.py" "$upstream"
+
 "$here/scripts/fetch-model.sh"
 
 : "${ANDROID_NDK_HOME:=$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/ndk/* | sort -V | tail -1)}"
