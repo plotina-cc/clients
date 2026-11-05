@@ -35,7 +35,9 @@ The delta is applied to the webapp after it is unpacked:
   apple-touch-icon instead of the `vector-icons` links, a local `og:image`,
   the error-view logo swapped for `plotina-512.png`, `manifest.json` renamed,
   and the `mobile_guide/` (an install page for phones the desktop never shows)
-  deleted. `apply-noise.py --brand` only sets the `brand` key of
+  deleted. It then applies the shared web fixes from
+  `../element-web/webapp_fixes.py` (see *Parity with Element Web* below).
+  `apply-noise.py --brand` only sets the `brand` key of
   `config.json` (the in-app name); this is the browser-facing half.
 - `../element-web/config.json` becomes the webapp's `config.json` with
   `web_base_url` added (context-menu links point at chat.plotina.cc) and
@@ -56,10 +58,42 @@ webapp.lock.json          release tarball URL + sha256 (tag must match UPSTREAM_
 build.plotina.json        electron-builder variant: appId cc.plotina.desktop,
                           package name plotina-desktop, productName Plotina Desktop
 apply-noise.py            webapp overlay + config.json
-branding.py               webapp shell branding: title, icons, meta, error view
+branding.py               webapp shell branding: title, icons, meta, error view,
+                          plus the shared web fixes (../element-web/webapp_fixes.py)
 scripts/prepare-webapp.sh tarball -> overlay -> branding -> .build/webapp
 scripts/build.sh          clone, install, asar, installers -> dist-stable/
 ```
+
+## Parity with Element Web
+
+**Rule: every fix we ship in the Element Web image must also ship in Element
+Desktop.** The shared fixes live in `../element-web/webapp_fixes.py` — one
+module, consumed by both branding scripts (the PARITY RULE comment at its top
+states the same):
+
+- the `--timeline-text-color` -> `var(--cpd-color-text-primary)` fallback in
+  both `bundles/*/theme-*-custom.css` sheets (light text on light background
+  for dark-OS visitors), aborting if a sheet is missing or the 133-use count
+  drops;
+- the `plotina-modal-a11y` style block keeping the device-verification dialog
+  inside the viewport, injected into `index.html` exactly once and never with
+  a `.mx_AuthPage_modal` margin override (stock margins pin the auth footer
+  to the viewport bottom);
+- `plotina-theme.js`, the first-visit theme bootstrap. The file lives in
+  `element-web/` for both clients: the web image COPYs it into `/app` and
+  loads it with an absolute src; `branding.py` copies it from
+  `../element-web` into the webapp root and references it **relatively**,
+  because the shell serves the webapp from `vector://vector/webapp/` — the
+  same rule as the noise tags;
+- the missing `ru` verification strings merged into `i18n/ru.*.json`, only
+  where absent.
+
+The guards are `tests/test_webapp_fixes.py` (it feeds identical CSS/HTML
+through both entry points and asserts byte-identical fix output) and the
+parity greps in the `==> verify` step of `scripts/prepare-webapp.sh`, which
+mirror the checks the web Dockerfile runs after its brand pass. When you add
+a fix, put it in `webapp_fixes.py`, wire it into both branding scripts and
+extend that test — never fork a fix into one client.
 
 ## Building
 

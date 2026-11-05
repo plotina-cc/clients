@@ -153,12 +153,15 @@ RUN set -eux; \
 # the opengraph.png removal — runs through the tested branding.py instead of
 # scattered seds. The base image is Alpine without python3, so the interpreter
 # comes in as a virtual package and leaves again: the final image ships none.
-# branding.py itself goes to /tmp, never into the served /app.
+# branding.py and the shared webapp_fixes.py it imports (the same module
+# element-desktop/branding.py consumes — see its PARITY RULE header) go to
+# /tmp, never into the served /app.
 COPY branding.py /tmp/branding.py
+COPY webapp_fixes.py /tmp/webapp_fixes.py
 RUN set -eux; \
     apk add --no-cache --virtual .branding python3; \
     python3 /tmp/branding.py --app /app; \
-    rm -f /tmp/branding.py; \
+    rm -f /tmp/branding.py /tmp/webapp_fixes.py; \
     apk del .branding; \
     rm -rf /app/mobile_guide; \
     chmod 0644 /app/themes/element/img/logos/element-logo.svg; \

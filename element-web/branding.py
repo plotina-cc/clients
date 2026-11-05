@@ -52,6 +52,12 @@ Explicitly out of scope:
   * /app/mobile_guide, /app/plotina-bg.png and the element-app-logo.png
     overwrite: pure file placements, owned by Dockerfile COPY/RM lines.
 
+The four web fixes (custom-theme contrast fallback, plotina-modal-a11y
+style, plotina-theme.js bootstrap, ru locale fills) live in the shared
+module webapp_fixes.py; element-desktop/branding.py consumes the same
+code, and element-desktop/tests/test_webapp_fixes.py proves the parity
+— see the PARITY RULE comment at the top of that file.
+
 Every replacement is followed by an assertion on the end state, so an upstream
 change that moves a marker fails the build loudly instead of quietly serving
 the Element brand again. Re-running on an already-branded tree is a no-op.
@@ -67,6 +73,35 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
+# webapp_fixes.py sits next to this file in the repo and is COPYed to /tmp
+# alongside it in the Dockerfile; anchor the import to this file's directory
+# so both entry paths (script, importlib) resolve it.
+_HERE = Path(__file__).resolve().parent
+if str(_HERE) not in sys.path:
+    sys.path.insert(0, str(_HERE))
+import webapp_fixes
+from webapp_fixes import (
+    BUNDLE_LOADER_RE,
+    LOCALE_OVERRIDES,
+    MODAL_BLOCK,
+    MODAL_CSS,
+    MODAL_STYLE_ID,
+    NOISE_TAGS,
+    REQUIRED_CUSTOM_SHEETS,
+    THEME_INIT_FILE,
+    TIMELINE_TEXT,
+    TIMELINE_TEXT_FIXED,
+    TIMELINE_TEXT_MIN_USES,
+    BrandingError,
+    add_missing as _add_missing,
+    apply_locales as rebrand_locales,
+    apply_theme_css,
+    inject_modal_style,
+    inject_theme_boot_tag,
+    patch_theme_css as rebrand_theme_custom,
+    theme_boot_tag,
+)
+
 BRAND = "Plotina Web"
 THEME_COLOR = "#17795A"
 OG_IMAGE = "https://chat.plotina.cc/plotina-512.png"
@@ -78,74 +113,11 @@ WELCOME_BG = "/plotina-bg.png"
 ICON_LINK = f'<link rel="icon" type="image/svg+xml" href="{ICON_SVG}">'
 TOUCH_LINK = f'<link rel="apple-touch-icon" sizes="192x192" href="{ICON_192}">'
 
-# The two noise <script> tags the Dockerfile inserts before this script runs;
-# rebrand_index() anchors the modal style right in front of them when they are
-# there (and before </head> otherwise) so the tag pair itself stays byte-identical.
-NOISE_TAGS = ('<script src="/noise/logic.js"></script>'
-              '<script src="/noise/boot.js" defer></script>')
-
-# Device-verification dialog fix, validated against the live chat.plotina.cc
-# bundle 81bff4fd060173d686ec (element-web v1.12.32), see THEME-FIX.md:
-#   * do NOT override .mx_AuthPage_modal margins: stock `margin:100px auto auto`
-#     keeps the auto bottom margin that pins .mx_AuthFooter (the dark gradient
-#     behind the footer links) to the viewport bottom; any explicit
-#     margin-bottom glues that gradient to the card instead of the screen edge,
-#   * replace the percentage max-height that resolves through the AuthPage
-#     flex chain (upstream assumes a fixed-position .mx_Dialog_wrapper parent)
-#     with a viewport-relative one, scoped to the CompleteSecurity Glass so
-#     ordinary dialogs keep their own geometry,
-#   * scroll the white card internally so the button row ("Use recovery key",
-#     "Sign out") always stays reachable on ~1366x768 laptops.
-MODAL_STYLE_ID = "plotina-modal-a11y"
-MODAL_CSS = (
-    ".mx_AuthPage_modalContent>.mx_Dialog_border{max-height:calc(100vh - 150px)}"
-    ".mx_CompleteSecurityBody{overflow-y:auto}"
-)
-MODAL_BLOCK = f'<style id="{MODAL_STYLE_ID}">{MODAL_CSS}</style>'
-
-# Custom-theme contrast fix, see THEMES.md: theme-{light,dark}-custom.css
-# use the dead legacy --timeline-text-color at 133 selectors per sheet,
-# always WITHOUT a fallback, so text colour falls through to inheritance
-# from <html> — whose tokens flip with prefers-color-scheme. The sibling
-# --timeline-background-color always carries a fallback; this restores the
-# same pattern for the text.
-TIMELINE_TEXT = "var(--timeline-text-color)"
-TIMELINE_TEXT_FIXED = "var(--timeline-text-color,var(--cpd-color-text-primary))"
-TIMELINE_TEXT_MIN_USES = 133  # per sheet at element-web v1.12.32
-REQUIRED_CUSTOM_SHEETS = frozenset({"theme-light-custom.css",
-                                    "theme-dark-custom.css"})
-
-# First-visit theme bootstrap (part 2 of the fix): the script file is
-# COPYed into /app by the Dockerfile; branding.py injects its tag directly
-# in front of the bundle loader and refuses to run without the payload.
-THEME_INIT_FILE = "plotina-theme.js"
-THEME_INIT_TAG = f'<script src="/{THEME_INIT_FILE}"></script>'
-BUNDLE_LOADER_RE = re.compile(r'<script src="bundles/[^"]+/bundle\.js"></script>')
-
-# Russian strings the upstream ru locale still lacks for the
-# after-new-login verification dialog (keys per element-web's hierarchical
-# i18n JSON). Inserted only where absent: once upstream ships its own
-# translation, rebrand_locales() stops touching it.
-LOCALE_OVERRIDES: dict[str, dict] = {
-    "ru": {
-        "action": {
-            "sign_out_before_verify": "Выйти",
-        },
-        "encryption": {
-            "verification": {
-                "no_other_devices":
-                    "Этот параметр недоступен, потому что у вас нет других устройств",
-                "no_recovery_key":
-                    "Этот параметр недоступен, потому что вы ещё не настроили "
-                    "ключ восстановления",
-            },
-        },
-    },
-}
-
-
-class BrandingError(RuntimeError):
-    """A brand replacement did not happen; the build must stop."""
+# The bootstrap tag the web uses: /app is served from the site root, so the
+# src is absolute. (MODAL_*, TIMELINE_*, NOISE_TAGS, BUNDLE_LOADER_RE and
+# LOCALE_OVERRIDES come unchanged from webapp_fixes.py; see there for the
+# THEME-FIX.md / THEMES.md background of each fix.)
+THEME_INIT_TAG = theme_boot_tag(relative=False)
 
 
 def fail(message: str) -> NoReturn:
@@ -189,30 +161,12 @@ def rebrand_index(html: str) -> str:
     html = html.replace("Sorry, Element requires JavaScript to be enabled.",
                         f"{BRAND} requires JavaScript to be enabled.")
 
-    # Modal a11y style: drop a previously injected block first so re-running
-    # on an already-branded tree is a no-op, then insert exactly one, directly
-    # in front of the noise tags (which must stay byte-identical) or before
-    # </head> on a stock tree. After bundle.css/theme-*.css in every case, so
-    # the brand rules win the cascade at equal specificity.
-    html = re.sub(r'<style id="' + re.escape(MODAL_STYLE_ID)
-                  + r'">.*?</style>', "", html, flags=re.S)
-    if NOISE_TAGS in html:
-        html = html.replace(NOISE_TAGS, MODAL_BLOCK + NOISE_TAGS, 1)
-    else:
-        html = html.replace("</head>", MODAL_BLOCK + "</head>", 1)
-
-    # Theme bootstrap: /plotina-theme.js must run before the bundle loader,
-    # so its tag goes directly in front of that <script>. Drop a previously
-    # injected tag first, then re-insert: a second run is byte-identical.
-    # Anchoring on the loader (not </head>) leaves the noise pair and the
-    # modal style above it exactly as they are.
-    html = html.replace(THEME_INIT_TAG, "")
-    html, loader_hits = BUNDLE_LOADER_RE.subn(
-        lambda m: THEME_INIT_TAG + m.group(0), html, 1)
-    if loader_hits != 1:
-        raise BrandingError("index.html: the bundles/<hash>/bundle.js loader "
-                            "<script> is not there to anchor the theme "
-                            "bootstrap tag; upstream index layout moved")
+    # Modal a11y style and the theme bootstrap tag come from webapp_fixes
+    # (shared with element-desktop/branding.py): both are dropped-and-
+    # reinserted at fixed anchors, so a re-run on an already-branded tree is
+    # byte-stable; the assertions below still pin the end state.
+    html = inject_modal_style(html)
+    html = inject_theme_boot_tag(html, relative=False)
 
     for expected in (
         f"<title>{BRAND}</title>",
@@ -260,35 +214,6 @@ def rebrand_error_view(js: str) -> str:
     return js
 
 
-def rebrand_theme_custom(css: str) -> str:
-    """Restore body text contrast in Element's custom-theme sheets.
-
-    Upstream theme-{light,dark}-custom.css reference the dead legacy variable
-    --timeline-text-color WITHOUT a fallback (133 uses, 0 definitions in the
-    whole distro), so `color` becomes invalid-at-computed-value-time and
-    inherits the @media (prefers-color-scheme) tokens from <html>: dark-OS
-    visitors see light-on-white text. The sibling --timeline-background-color
-    always carries a fallback, which is why only the text is broken. Adding
-    --cpd-color-text-primary (which resolves through the body's cpd-theme-*
-    class, i.e. the *chosen* theme) restores contrast without changing any
-    behaviour. If the variable ever becomes defined again, it wins as usual.
-    See THEMES.md.
-
-    Idempotent: patched sheets pass through unchanged. Sheets that do not
-    carry the expected 133 uses fail loudly — a moved upstream layout must
-    abort the build, not ship half-fixed CSS.
-    """
-    if TIMELINE_TEXT not in css and TIMELINE_TEXT_FIXED in css:
-        return css  # already patched; re-run is a no-op
-    out = css.replace(TIMELINE_TEXT, TIMELINE_TEXT_FIXED)
-    if TIMELINE_TEXT in out:
-        raise BrandingError("custom theme CSS: --timeline-text-color survived")
-    if out.count(TIMELINE_TEXT_FIXED) < TIMELINE_TEXT_MIN_USES:
-        raise BrandingError(f"custom theme CSS: expected >={TIMELINE_TEXT_MIN_USES} "
-                            f"fallback additions, got {out.count(TIMELINE_TEXT_FIXED)}")
-    return out
-
-
 def rebrand_config(config: Path) -> bool:
     """Point the welcome screen at the Plotina background. Absent is fine:
     deployments mount their own config.json over /app/config.json."""
@@ -308,65 +233,6 @@ def rebrand_config(config: Path) -> bool:
     config.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n",
                       encoding="utf-8")
     return True
-
-
-def _add_missing(dst: dict, src: dict, path: str = "") -> list[str]:
-    """Recursively copy leaf strings from *src* into *dst* where absent.
-
-    Returns the dotted keys that were added. Existing upstream translations
-    are never overwritten, so this stays a no-op once Crowdin catches up.
-    """
-    added: list[str] = []
-    for key, value in src.items():
-        here = f"{path}|{key}" if path else key
-        if isinstance(value, dict):
-            target = dst.get(key)
-            if not isinstance(target, dict):
-                target = {}
-                dst[key] = target
-            added.extend(_add_missing(target, value, here))
-        elif key not in dst:
-            dst[key] = value
-            added.append(here)
-    return added
-
-
-def rebrand_locales(i18n: Path) -> list[str]:
-    """Fill the known-missing Russian verification strings in /app/i18n.
-
-    i18n/languages.json maps a language to its hashed filename (e.g.
-    "ru.a625131.json"); the JSON itself is served with no-cache + ETag, so
-    the content is patched in place under the existing name.
-    """
-    manifest_file = i18n / "languages.json"
-    if not manifest_file.is_file():
-        raise BrandingError(f"i18n/languages.json: {manifest_file} does not "
-                            "exist; upstream i18n layout moved")
-    try:
-        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise BrandingError(f"i18n/languages.json: cannot parse: {exc}") from exc
-    actions: list[str] = []
-    for lang, overrides in LOCALE_OVERRIDES.items():
-        name = manifest.get(lang)
-        if not name:
-            raise BrandingError(f"i18n/languages.json: no entry for {lang!r}")
-        path = i18n / name
-        if not path.is_file():
-            raise BrandingError(f"i18n: {lang} file {name} is missing from {i18n}")
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise BrandingError(f"i18n/{name}: cannot parse: {exc}") from exc
-        if not isinstance(data, dict):
-            raise BrandingError(f"i18n/{name}: top level is not an object")
-        added = _add_missing(data, overrides)
-        if added:
-            path.write_text(json.dumps(data, ensure_ascii=False, indent=4) + "\n",
-                            encoding="utf-8")
-            for dotted in added:
-                actions.append(f"i18n/{name}: added {dotted.split('|')[-1]!r}")
-    return actions
 
 
 def apply(app: Path) -> list[str]:
@@ -398,24 +264,7 @@ def apply(app: Path) -> list[str]:
                          encoding="utf-8")
     actions.append(f"{len(error_views)} error-view chunk(s) rebranded")
 
-    custom_sheets = sorted((app / "bundles").glob("*/theme-*-custom.css"))
-    if not custom_sheets:
-        raise BrandingError("no bundles/*/theme-*-custom.css found; upstream "
-                            "layout moved")
-    by_dir: dict[Path, set[str]] = {}
-    for sheet in custom_sheets:
-        by_dir.setdefault(sheet.parent, set()).add(sheet.name)
-    for bdir, found in sorted(by_dir.items()):
-        missing = REQUIRED_CUSTOM_SHEETS - found
-        if missing:
-            raise BrandingError(f"{bdir} is missing {' and '.join(sorted(missing))}; "
-                                "expected both bundles/*/theme-*-custom.css sheets")
-    for sheet in custom_sheets:
-        sheet.write_text(rebrand_theme_custom(
-            sheet.read_text(encoding="utf-8", errors="replace")),
-            encoding="utf-8")
-    actions.append(f"{len(custom_sheets)} custom-theme sheet(s): "
-                   "--timeline-text-color fallback added")
+    actions.extend(apply_theme_css(app))
 
     actions.extend(rebrand_locales(app / "i18n"))
 

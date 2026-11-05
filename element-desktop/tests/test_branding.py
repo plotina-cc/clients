@@ -62,6 +62,17 @@ GREEN_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><
 GREEN_192 = b"\x89PNG\r\n\x1a\n fake plotina 192"
 GREEN_512 = b"\x89PNG\r\n\x1a\n fake plotina 512"
 
+# The release webapp also carries the two custom-theme sheets and the i18n
+# tree that the shared web fixes (../element-web/webapp_fixes.py, run by
+# branding.py) require; branding fails loudly when either is missing, so
+# the fixture ships what the real .build/webapp has.
+TIMELINE_USES = 133
+
+
+def custom_theme_css() -> str:
+    return ".mx_EventTile{color:var(--timeline-text-color)}\n" * TIMELINE_USES
+
+
 MANIFEST = {
     "name": "Element",
     "short_name": "Element",
@@ -90,6 +101,16 @@ class BrandingTest(unittest.TestCase):
         (self.webapp / "index.html").write_text(INDEX_HTML, encoding="utf-8")
         (bundle / "error-view.js").write_text(ERROR_VIEW_JS, encoding="utf-8")
         (bundle / "bundle.js").write_text("//\n", encoding="utf-8")
+        for sheet in ("theme-light-custom.css", "theme-dark-custom.css"):
+            (bundle / sheet).write_text(custom_theme_css(), encoding="utf-8")
+        i18n = self.webapp / "i18n"
+        i18n.mkdir()
+        (i18n / "languages.json").write_text(
+            json.dumps({"ru": "ru.deadbeef.json"}, indent=4) + "\n", encoding="utf-8")
+        (i18n / "ru.deadbeef.json").write_text(
+            json.dumps({"action": {"sign_out": "Удалить это устройство"}},
+                       ensure_ascii=False, indent=4) + "\n",
+            encoding="utf-8")
         if with_logo:
             logos = self.webapp / "themes" / "element" / "img" / "logos"
             logos.mkdir(parents=True)
@@ -234,11 +255,16 @@ class TestErrorView(BrandingTest):
     def test_other_alts_untouched(self):
         self.assertIn('alt:"Element web client"', self.error_view())
 
-    def test_error_view_absent_fails_loudly(self):
+    def test_error_view_absent_fails_loudly(self) -> None:
         shutil.rmtree(self.webapp / "bundles")
         result = self.run_branding()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("error-view", result.stderr.lower())
+        # The shared web fixes run on the final index.html, ahead of the
+        # error-view pass, so whichever check hits the removed tree first,
+        # the build must abort loudly on the moved upstream layout.
+        self.assertIn("upstream layout", result.stderr.lower())
+        self.assertTrue("error-view" in result.stderr.lower()
+                        or "theme-*-custom.css" in result.stderr)
 
 
 class TestRemovals(BrandingTest):

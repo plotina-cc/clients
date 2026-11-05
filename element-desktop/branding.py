@@ -8,6 +8,18 @@ the page title and metadata, favicons, the error view the desktop shell shows,
 the PWA manifest, and the mobile install guide the desktop never needs. Noise
 injection and config.json stay in apply-noise.py and render-config.py.
 
+PARITY RULE: every fix the Element Web image ships must also ship here. The
+web fixes — the --timeline-text-color contrast fallback, the plotina-modal-a11y
+style, the plotina-theme.js first-visit bootstrap and the ru locale fills —
+are not re-implemented in this file: they come from ../element-web/webapp_fixes.py,
+the single source of truth both branding scripts share, and
+tests/test_webapp_fixes.py feeds identical CSS/HTML through both entry points
+and asserts byte-identical output. The only desktop-specific difference is
+allowed to be the tag form: the shell serves the webapp from
+vector://vector/webapp/, so root-absolute srcs 404 and everything (including
+the plotina-theme.js payload, which branding.py copies out of ../element-web
+into the webapp root here instead of a Dockerfile COPY) stays relative.
+
 Icon hrefs are relative on purpose: the shell serves the webapp from
 vector://vector/webapp/, and absolute /plotina-... paths would 404 there —
 the same reason apply-noise.py adds relative script tags.
@@ -18,6 +30,15 @@ import re
 import shutil
 import sys
 from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ELEMENT_WEB = HERE.parent / "element-web"  # webapp_fixes.py + plotina-theme.js
+if str(ELEMENT_WEB) not in sys.path:
+    sys.path.insert(0, str(ELEMENT_WEB))
+try:
+    import webapp_fixes  # type: ignore[import-not-found]  # lives in ../element-web
+except ImportError as exc:  # build host without the sibling directory
+    sys.exit(f"branding: cannot import {ELEMENT_WEB / 'webapp_fixes.py'}: {exc}")
 
 BRAND = "Plotina Desktop"
 IMG_ALT = "Plotina"
@@ -152,12 +173,55 @@ def remove_mobile_guide(webapp: Path) -> None:
         guide.unlink()
 
 
-def rebrand(webapp: Path, icons_dir: Path) -> None:
+def apply_web_fixes(webapp: Path) -> list[str]:
+    """Run the shared Element Web fixes on the unpacked webapp.
+
+    Same helpers the web image runs (webapp_fixes.py), with the one
+    desktop-specific difference: ../element-web/plotina-theme.js is copied
+    into the webapp root and referenced RELATIVELY, like the noise tags —
+    vector://vector/webapp/ never serves a root-absolute path. Fails loudly
+    (BrandingError) when a custom-theme sheet is missing or the 133-use
+    fallback count drops, exactly like the web pass.
+    """
+    theme_src = ELEMENT_WEB / webapp_fixes.THEME_INIT_FILE
+    if not theme_src.is_file():
+        sys.exit(f"branding: {theme_src} missing; the theme bootstrap payload "
+                 "lives in ../element-web for both clients")
+    shutil.copyfile(theme_src, webapp / webapp_fixes.THEME_INIT_FILE)
+    (webapp / webapp_fixes.THEME_INIT_FILE).chmod(0o644)
+
+    index = webapp / "index.html"
+    html = index.read_text(encoding="utf-8")
+    patched = webapp_fixes.inject_modal_style(html)
+    if patched != html:
+        index.write_text(patched, encoding="utf-8")
+
+    actions = [
+        f"{webapp_fixes.THEME_INIT_FILE} copied from ../element-web into the webapp root",
+        "index.html: plotina-modal-a11y style injected (exactly once, after the bundle/theme links)",
+    ]
+    actions.extend(webapp_fixes.ensure_theme_boot(webapp, relative=True))
+    actions.extend(webapp_fixes.apply_theme_css(webapp))
+    actions.extend(webapp_fixes.apply_locales(webapp / "i18n"))
+    return actions
+
+
+def rebrand(webapp: Path, icons_dir: Path) -> list[str]:
+    """Full brand pass; returns human-readable actions.
+
+    Raises webapp_fixes.BrandingError when one of the shared web fixes
+    cannot be applied: main() turns that into a failed build.
+    """
     copy_icons(webapp, icons_dir)
+    actions = []
     rebrand_index(webapp / "index.html", icons_dir)
+    # The shared web fixes run on the final index.html, right after the
+    # desktop-specific title/meta/icon work above.
+    actions.extend(apply_web_fixes(webapp))
     rebrand_error_view(webapp)
     rebrand_manifest(webapp)
     remove_mobile_guide(webapp)
+    return actions
 
 
 def main() -> None:
@@ -173,7 +237,12 @@ def main() -> None:
     if not icons_dir.is_dir():
         sys.exit(f"branding: {icons_dir} is not a directory")
 
-    rebrand(webapp, icons_dir)
+    try:
+        actions = rebrand(webapp, icons_dir)
+    except webapp_fixes.BrandingError as exc:
+        sys.exit(f"branding: {exc}")
+    for action in actions:
+        print(f"branding: {action}")
     print(f"branded: {webapp} as {BRAND}")
 
 
