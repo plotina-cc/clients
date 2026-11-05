@@ -47,7 +47,16 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      // The edge serves a client-only stub to plain browser user agents
+      // (call.plotina.cc cannot authenticate a standalone browser); the e2e
+      // suite IS the app under test, so it carries a marker that the Caddy
+      // rule excludes from the stub (config/edge/Caddyfile,
+      // @standalone_browser). Modern headless Chromium no longer puts
+      // "HeadlessChrome" in its UA, so that exclusion alone is not enough.
+      use: {
+        ...devices["Desktop Chrome"],
+        userAgent: `${devices["Desktop Chrome"].userAgent} PlotinaE2E/1.0`,
+      },
     },
   ],
 });
