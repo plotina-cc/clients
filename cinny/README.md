@@ -18,7 +18,10 @@ the "Исходный код" link to the auth footer and to Settings → About;
 at <https://github.com/plotina-cc/clients>. `apply-noise.py` copies
 `../LICENSE` and `../NOTICE` into the dist as `LICENSE-AGPL-3.0` and `NOTICE`.
 `branding.py` owns the browser shell: icons, HTML metadata and the web app
-manifest.
+manifest, plus one pinned bundle default — fresh visitors get "follow the
+system theme" (`useSystemTheme`), which renders Dark on a dark OS and Light
+otherwise. The guard in `branding.py` rewrites `useSystemTheme:!1` back on
+and aborts the build if the settings default is missing from the bundle.
 
 ## What is here
 
@@ -27,6 +30,7 @@ config.json          default homeserver (plotina.cc), no featured communities
 UPSTREAM_TAG         the cinny-desktop tag we build against
 apply-noise.py       copies noise/ into dist and inserts the tags into two documents
 branding.py          applies Plotina icons, HTML metadata and manifest to the dist
+tests/               unit tests for branding.py (python3 -m unittest discover -s cinny/tests)
 tauri.plotina.json   build override: no beforeBuildCommand, updater disabled
 noise.lock.json      URL and sha256 of the two model binaries (wasm and .tar.gz)
 scripts/build.sh     local Linux build (AppImage + deb)
