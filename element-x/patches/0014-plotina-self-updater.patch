@@ -1,0 +1,836 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 50847073..29503829 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -55,6 +55,24 @@ android {
+         versionCode = Versions.VERSION_CODE
+         versionName = Versions.VERSION_NAME
+ 
++        // Plotina: the release tag decides the versionCode. A tag `vYY.MM.p-plotina-x.N` maps to
++        // the base code `(2000 + YY) * 100_000 + MM * 1_000 + N`, so v26.10.1-plotina-x.25 is
++        // 202610025. CI derives N from the tag and passes it as -PplotinaBuildNumber (see
++        // .github/workflows/build-element-x.yml in the clients repository); without the property
++        // (plain local builds) upstream's Versions.VERSION_CODE stands, and a local build carries
++        // the `.debug` application id suffix anyway, so it never competes with a release.
++        val plotinaBuildNumber = project.findProperty("plotinaBuildNumber")?.toString()?.toIntOrNull()
++        if (plotinaBuildNumber != null) {
++            require(plotinaBuildNumber in 0..999) { "plotinaBuildNumber must be in 0..999, was $plotinaBuildNumber" }
++            val cal = Versions.VERSION_NAME.split(".").map { it.toInt() }
++            versionCode = (2000 + cal[0]) * 100_000 + cal[1] * 1_000 + plotinaBuildNumber
++        }
++        // The packaged APK still gets the ABI digit the androidComponents block appends
++        // (base * 10 + abiCode, arm64-v8a = 2). update-x.json carries the base value, and
++        // io.element.android.x.updater.PlotinaUpdate compares it with the digit dropped again.
++        // Base codes under this scheme are greater than every previous Plotina build (whose base
++        // was upstream's 20261001), so the installer accepts them as upgrades of an install.
++
+         // Plotina: no ndk.abiFilters here. AGP refuses to configure the project when
+         // abiFilters is set at all while ABI splits are enabled; the filter only exists
+         // upstream to serve the universal APK, which we build without.
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index e5872e54..27db23d7 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -8,6 +8,9 @@
+ <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+     xmlns:tools="http://schemas.android.com/tools">
+ 
++    <!-- Plotina: the in-app updater hands its verified download to the system installer. -->
++    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
++
+     <application
+         android:name=".ElementXApplication"
+         android:allowBackup="false"
+@@ -57,6 +60,18 @@
+         https://github.com/element-hq/element-x-android/issues/4074) and for opening
+         the application from a mobile.element.io link.
+         -->
++        <!--
++        Plotina: the self-updater dialog (io.element.android.x.updater). Translucent so the app
++        stays visible behind it; singleTop because the installer posts its result back into this
++        Activity. Never exported: the only entry points are the About screen and the daily check.
++        -->
++        <activity
++            android:name=".updater.PlotinaUpdateActivity"
++            android:excludeFromRecents="true"
++            android:exported="false"
++            android:launchMode="singleTop"
++            android:theme="@style/Theme.ElementX.Updater" />
++
+         <activity
+             android:name=".MainActivity"
+             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
+diff --git a/app/src/main/kotlin/io/element/android/x/MainActivity.kt b/app/src/main/kotlin/io/element/android/x/MainActivity.kt
+index cc058d0f..9588b8f1 100644
+--- a/app/src/main/kotlin/io/element/android/x/MainActivity.kt
++++ b/app/src/main/kotlin/io/element/android/x/MainActivity.kt
+@@ -42,6 +42,7 @@ import io.element.android.libraries.designsystem.utils.snackbar.LocalSnackbarDis
+ import io.element.android.services.analytics.compose.LocalAnalyticsService
+ import io.element.android.x.di.AppBindings
+ import io.element.android.x.intent.SafeUriHandler
++import io.element.android.x.updater.PlotinaUpdate
+ import kotlinx.coroutines.launch
+ import timber.log.Timber
+ 
+@@ -68,6 +69,10 @@ class MainActivity : NodeActivity() {
+                 it.onAppStartup(activity)
+             }
+         }
++
++        // Plotina: silent update check, at most once a day; only opens the updater dialog when the
++        // manifest really describes a newer build. See io.element.android.x.updater.PlotinaUpdate.
++        PlotinaUpdate.onAppStart(this)
+     }
+ 
+     /**
+diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt
+new file mode 100644
+index 00000000..b750ff39
+--- /dev/null
++++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt
+@@ -0,0 +1,164 @@
++/*
++ * Plotina: the in-app updater's manifest side.
++ *
++ * Copyright (C) 2026 Plotina
++ *
++ * This program is free software: you can redistribute it and/or modify it under the terms of the
++ * GNU Affero General Public License as published by the Free Software Foundation, version 3.
++ */
++
++package io.element.android.x.updater
++
++import android.app.Activity
++import android.content.Context
++import android.content.Intent
++import androidx.core.content.pm.PackageInfoCompat
++import java.net.HttpURLConnection
++import java.net.URL
++import org.json.JSONObject
++import timber.log.Timber
++
++private const val loggerTag = "PlotinaUpdate"
++
++/**
++ * What https://plotina.cc/dl/update-x.json says about the newest release. The contract is shared
++ * with the other Plotina clients:
++ *
++ * ```json
++ * {"client":"x","package":"cc.plotina.x","versionName":"26.10.1","versionCode":202610025,
++ *  "apkUrl":"https://plotina.cc/dl/Plotina-X.apk","sha256":"<hex>","size":<bytes>,
++ *  "notes":"<short ru text>"}
++ * ```
++ */
++data class UpdateInfo(
++    val versionName: String,
++    val versionCode: Long,
++    val apkUrl: String,
++    val sha256: String,
++    val size: Long,
++    val notes: String,
++) {
++    fun toJson(): String = JSONObject()
++        .put("client", "x")
++        .put("versionName", versionName)
++        .put("versionCode", versionCode)
++        .put("apkUrl", apkUrl)
++        .put("sha256", sha256)
++        .put("size", size)
++        .put("notes", notes)
++        .toString()
++
++    companion object {
++        /** Null unless every field is present and sane; it never trusts the manifest blindly. */
++        fun fromJson(context: Context, raw: String): UpdateInfo? = runCatching {
++            val json = JSONObject(raw)
++            if (json.optString("client") != "x") return null
++            val apkUrl = json.getString("apkUrl")
++            // Only ever install over https, and only ever for this application id. The debug build
++            // carries the ".debug" suffix, so a manifest written for the release is accepted there
++            // too - it is the same updater code under test, and a prefix mismatch cannot be confused
++            // with another vendor's app.
++            if (!apkUrl.startsWith("https://")) return null
++            val manifestPackage = json.getString("package")
++            val packageName = context.packageName
++            if (packageName != manifestPackage && !packageName.startsWith("$manifestPackage.")) return null
++            val sha256 = json.getString("sha256").lowercase()
++            if (!Regex("^[0-9a-f]{64}$").matches(sha256)) return null
++            UpdateInfo(
++                versionName = json.getString("versionName"),
++                versionCode = json.getLong("versionCode"),
++                apkUrl = apkUrl,
++                sha256 = sha256,
++                size = json.getLong("size"),
++                notes = json.optString("notes"),
++            ).takeIf { it.versionCode > 0 && it.size > 0 }
++        }.onFailure { Timber.tag(loggerTag).w(it, "update manifest did not parse") }.getOrNull()
++    }
++}
++
++/**
++ * Reads the release manifest.
++ *
++ * The versionCode scheme (documented for CI, the updater and anyone re-releasing by hand):
++ * a release tag `vYY.MM.p-plotina-x.N` maps to the base code
++ * `(2000 + YY) * 100_000 + MM * 1_000 + N`, so `v26.10.1-plotina-x.25` is `202610025`. CI passes
++ * `N` as `-PplotinaBuildNumber` (see `app/build.gradle.kts` and build-element-x.yml). The packaged
++ * APK's own versionCode additionally carries upstream's ABI digit
++ * (`base * 10 + abiCode`, arm64-v8a = 2, armeabi-v7a = 1), which [installedBaseCode] drops again.
++ * The manifest carries the base value, and base codes are strictly greater than those of the
++ * pre-updater builds (whose base was upstream's `20261001`), so every installed Plotina X can be
++ * upgraded by this scheme.
++ */
++object PlotinaUpdate {
++    const val MANIFEST_URL = "https://plotina.cc/dl/update-x.json"
++
++    /** The updater screen, named from other modules too - they cannot see the app module. */
++    const val ACTIVITY_CLASS = "io.element.android.x.updater.PlotinaUpdateActivity"
++
++    /** A already-fetched manifest, passed as JSON by the daily check. */
++    const val EXTRA_MANIFEST = "plotina_update_manifest"
++
++    /** Test hook: `adb shell am start ... --es plotina_manifest_url http://10.0.2.2:8000/update-x.json`. */
++    const val EXTRA_MANIFEST_URL = "plotina_manifest_url"
++
++    private const val PREFS = "plotina-updater"
++    private const val KEY_LAST_CHECK = "last_check_ms"
++    private const val CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000L
++
++    fun activityIntent(context: Context): Intent =
++        Intent().setClassName(context.packageName, ACTIVITY_CLASS)
++
++    /** The installed version's base code, without the ABI digit the packaging step appends. */
++    fun installedBaseCode(context: Context): Long {
++        val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
++        return PackageInfoCompat.getLongVersionCode(packageInfo) / 10L
++    }
++
++    fun installedVersionName(context: Context): String =
++        context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
++
++    fun isUpdateAvailable(context: Context, info: UpdateInfo): Boolean =
++        info.versionCode > installedBaseCode(context)
++
++    /**
++     * Silent once-a-day check started from MainActivity.onCreate. Only when the manifest really
++     * describes a newer build does anything open: the updater dialog, carrying the manifest we
++     * already fetched, so the user never waits on a second request.
++     */
++    fun onAppStart(activity: Activity) {
++        val prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
++        val now = System.currentTimeMillis()
++        if (now - prefs.getLong(KEY_LAST_CHECK, 0L) < CHECK_INTERVAL_MS) return
++        prefs.edit().putLong(KEY_LAST_CHECK, now).apply()
++        val appContext = activity.applicationContext
++        Thread {
++            val info = fetch(appContext, MANIFEST_URL) ?: return@Thread
++            if (!isUpdateAvailable(appContext, info)) return@Thread
++            if (activity.isFinishing || activity.isDestroyed) return@Thread
++            val intent = activityIntent(appContext)
++                .putExtra(EXTRA_MANIFEST, info.toJson())
++                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
++            runCatching { appContext.startActivity(intent) }
++                .onFailure { Timber.tag(loggerTag).w(it, "the update dialog could not be opened") }
++        }.apply { name = "plotina-update-check"; isDaemon = true; start() }
++    }
++
++    /** Plain HttpURLConnection: no new dependency, and this only ever reads a small https document. */
++    fun fetch(context: Context, url: String): UpdateInfo? = runCatching {
++        val connection = URL(url).openConnection() as HttpURLConnection
++        try {
++            connection.requestMethod = "GET"
++            connection.connectTimeout = 10_000
++            connection.readTimeout = 15_000
++            connection.instanceFollowRedirects = true
++            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
++                Timber.tag(loggerTag).d("manifest HTTP %s", connection.responseCode)
++                return null
++            }
++            val body = connection.inputStream.bufferedReader().use { it.readText() }
++            UpdateInfo.fromJson(context, body)
++        } finally {
++            connection.disconnect()
++        }
++    }.onFailure { Timber.tag(loggerTag).w(it, "manifest fetch failed") }.getOrNull()
++}
+diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt
+new file mode 100644
+index 00000000..d9776009
+--- /dev/null
++++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt
+@@ -0,0 +1,406 @@
++/*
++ * Plotina: the in-app updater's screen. A small dialog over the app: check the manifest, ask,
++ * download, verify sha256 + size, and hand the file to the system installer. No third-party
++ * update SDK: HttpURLConnection/DownloadManager to fetch, PackageInstaller to install, and the
++ * "install unknown apps" permission when Android asks for it.
++ *
++ * Copyright (C) 2026 Plotina
++ *
++ * This program is free software: you can redistribute it and/or modify it under the terms of the
++ * GNU Affero General Public License as published by the Free Software Foundation, version 3.
++ */
++
++package io.element.android.x.updater
++
++import android.app.DownloadManager
++import android.app.PendingIntent
++import android.content.Context
++import android.content.Intent
++import android.content.pm.PackageInstaller
++import android.net.Uri
++import android.os.Build
++import android.os.Bundle
++import android.provider.Settings
++import androidx.activity.ComponentActivity
++import androidx.activity.compose.setContent
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.material3.AlertDialog
++import androidx.compose.material3.Button
++import androidx.compose.material3.LinearProgressIndicator
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.res.stringResource
++import androidx.compose.ui.unit.dp
++import androidx.core.content.ContextCompat
++import androidx.lifecycle.lifecycleScope
++import io.element.android.x.R
++import java.io.File
++import java.security.MessageDigest
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.delay
++import kotlinx.coroutines.isActive
++import kotlinx.coroutines.launch
++import kotlinx.coroutines.withContext
++import timber.log.Timber
++
++/**
++ * Reached two ways: the About screen's "Check for updates" row (always shows a result), and the
++ * silent once-a-day check in [PlotinaUpdate.onAppStart], which only starts this Activity when the
++ * manifest really is newer and hands over its own copy through [PlotinaUpdate.EXTRA_MANIFEST].
++ * A debug build can point it at a local manifest with
++ * [PlotinaUpdate.EXTRA_MANIFEST_URL] (see PlotinaUpdate.kt).
++ */
++class PlotinaUpdateActivity : ComponentActivity() {
++    private sealed interface UiState {
++        data object Checking : UiState
++        data class UpToDate(val current: String) : UiState
++        data class Message(val text: String) : UiState
++        data class Available(val info: UpdateInfo) : UiState
++        data class Downloading(val info: UpdateInfo, val percent: Int) : UiState
++        data object Verifying : UiState
++        data object NeedPermission : UiState
++        data object Installing : UiState
++    }
++
++    private var uiState by mutableStateOf<UiState>(UiState.Checking)
++    private var pendingInfo: UpdateInfo? = null
++    private var downloadId: Long = -1L
++    private var apkFile: File? = null
++
++    override fun onCreate(savedInstanceState: Bundle?) {
++        super.onCreate(savedInstanceState)
++        handleIntent(intent)
++        setContent { MaterialTheme { UpdaterDialog() } }
++    }
++
++    override fun onNewIntent(intent: Intent) {
++        super.onNewIntent(intent)
++        setIntent(intent)
++        handleIntent(intent)
++    }
++
++    override fun onResume() {
++        super.onResume()
++        // The user may have just allowed "install unknown apps" in the system settings we opened.
++        if (uiState == UiState.NeedPermission && packageManager.canRequestPackageInstalls()) {
++            pendingInfo?.let { startDownload(it) }
++        }
++    }
++
++    private fun handleIntent(intent: Intent) {
++        if (intent.getBooleanExtra(EXTRA_INSTALL_RESULT, false)) {
++            onInstallResult(
++                intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE),
++                intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE),
++            )
++            return
++        }
++        // While one flow is visibly running, a repeat start just brings it forward.
++        if (uiState is UiState.Downloading || uiState is UiState.Verifying ||
++            uiState is UiState.Installing || uiState is UiState.NeedPermission ||
++            uiState is UiState.Checking
++        ) {
++            return
++        }
++        val passed = intent.getStringExtra(PlotinaUpdate.EXTRA_MANIFEST)
++        if (passed != null) {
++            val info = UpdateInfo.fromJson(this, passed)
++            if (info != null) showResult(info) else check()
++        } else {
++            check()
++        }
++    }
++
++    private fun check() {
++        uiState = UiState.Checking
++        lifecycleScope.launch {
++            val url = intent.getStringExtra(PlotinaUpdate.EXTRA_MANIFEST_URL) ?: PlotinaUpdate.MANIFEST_URL
++            val info = withContext(Dispatchers.IO) { PlotinaUpdate.fetch(this@PlotinaUpdateActivity, url) }
++            if (info == null) {
++                uiState = UiState.Message(getString(R.string.plotina_update_error_check))
++            } else {
++                showResult(info)
++            }
++        }
++    }
++
++    private fun showResult(info: UpdateInfo) {
++        pendingInfo = info
++        uiState = if (PlotinaUpdate.isUpdateAvailable(this, info)) {
++            UiState.Available(info)
++        } else {
++            UiState.UpToDate(
++                getString(
++                    R.string.plotina_update_up_to_date,
++                    PlotinaUpdate.installedVersionName(this),
++                    PlotinaUpdate.installedBaseCode(this).toString(),
++                ),
++            )
++        }
++    }
++
++    private fun confirmAndDownload(info: UpdateInfo) {
++        if (!packageManager.canRequestPackageInstalls()) {
++            // Ask before the bytes move: the installer is the only dead end a user should hit.
++            uiState = UiState.NeedPermission
++            return
++        }
++        startDownload(info)
++    }
++
++    private fun startDownload(info: UpdateInfo) {
++        val file = File(getExternalFilesDir(null), "plotina-x-${info.versionCode}.apk")
++        runCatching { file.delete() }
++        val request = DownloadManager.Request(Uri.parse(info.apkUrl))
++            .setTitle(getString(R.string.app_name))
++            .setDescription(info.notes.ifBlank { info.versionName })
++            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE)
++            .setDestinationUri(Uri.fromFile(file))
++            .setAllowedOverMetered(true)
++            .setAllowedOverRoaming(true)
++        val manager = ContextCompat.getSystemService(this, DownloadManager::class.java)
++        if (manager == null) {
++            uiState = UiState.Message(getString(R.string.plotina_update_error_download))
++            return
++        }
++        downloadId = manager.enqueue(request)
++        apkFile = file
++        uiState = UiState.Downloading(info, 0)
++        pollDownload(info)
++    }
++
++    /**
++     * DownloadManager's completion broadcast would need an exported receiver on recent Android, so
++     * the state is polled instead while this dialog is open. The download itself belongs to
++     * DownloadManager and keeps running, with its own notification, if the dialog goes away.
++     */
++    private fun pollDownload(info: UpdateInfo) {
++        lifecycleScope.launch {
++            val manager = ContextCompat.getSystemService(this@PlotinaUpdateActivity, DownloadManager::class.java)
++                ?: return@launch
++            while (isActive) {
++                val status = manager.query(DownloadManager.Query().setFilterById(downloadId)).use { cursor ->
++                    if (!cursor.moveToFirst()) return@use DownloadManager.STATUS_FAILED
++                    cursor.getInt(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
++                }
++                when (status) {
++                    DownloadManager.STATUS_SUCCESSFUL -> {
++                        verifyAndInstall(info)
++                        return@launch
++                    }
++                    DownloadManager.STATUS_FAILED -> {
++                        uiState = UiState.Message(getString(R.string.plotina_update_error_download))
++                        return@launch
++                    }
++                    else -> {
++                        manager.query(DownloadManager.Query().setFilterById(downloadId)).use { cursor ->
++                            val total = cursor.takeIf { it.moveToFirst() }
++                                ?.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)) ?: -1L
++                            val done = cursor.getLong(cursor.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR))
++                            val percent = if (total > 0) ((done * 100) / total).toInt().coerceIn(0, 100) else 0
++                            uiState = UiState.Downloading(info, percent)
++                        }
++                    }
++                }
++                delay(400)
++            }
++        }
++    }
++
++    private fun cancelDownload() {
++        ContextCompat.getSystemService(this, DownloadManager::class.java)?.remove(downloadId)
++        pendingInfo?.let { uiState = UiState.Available(it) }
++    }
++
++    private fun verifyAndInstall(info: UpdateInfo) {
++        val file = apkFile ?: return
++        lifecycleScope.launch {
++            uiState = UiState.Verifying
++            val matches = withContext(Dispatchers.IO) {
++                runCatching { file.length() == info.size && sha256Of(file) == info.sha256 }.getOrDefault(false)
++            }
++            if (!matches) {
++                Timber.tag("PlotinaUpdate").w("checksum or size mismatch for %s", file.name)
++                file.delete()
++                uiState = UiState.Message(getString(R.string.plotina_update_error_mismatch))
++                return@launch
++            }
++            if (!packageManager.canRequestPackageInstalls()) {
++                uiState = UiState.NeedPermission
++                return@launch
++            }
++            launchInstaller(info, file)
++        }
++    }
++
++    private fun launchInstaller(info: UpdateInfo, file: File) {
++        lifecycleScope.launch(Dispatchers.IO) {
++            val outcome = runCatching {
++                val installer = packageManager.packageInstaller
++                val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
++                    setSize(info.size)
++                    setAppPackageName(packageName)
++                }
++                val sessionId = installer.createSession(params)
++                installer.openSession(sessionId).use { session ->
++                    session.openWrite("base.apk", 0, info.size).use { target ->
++                        file.inputStream().use { source -> source.copyTo(target, DEFAULT_BUFFER_SIZE * 8) }
++                        session.fsync(target)
++                    }
++                    val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
++                        // The installer writes its result into this intent, so it must be mutable.
++                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
++                    } else {
++                        PendingIntent.FLAG_UPDATE_CURRENT
++                    }
++                    val callback = PendingIntent.getActivity(
++                        this@PlotinaUpdateActivity,
++                        sessionId,
++                        Intent(this@PlotinaUpdateActivity, PlotinaUpdateActivity::class.java)
++                            .putExtra(EXTRA_INSTALL_RESULT, true),
++                        flags,
++                    )
++                    installer.commit(sessionId, callback.intentSender)
++                }
++            }
++            withContext(Dispatchers.Main) {
++                if (outcome.isSuccess) {
++                    uiState = UiState.Installing
++                } else {
++                    Timber.tag("PlotinaUpdate").e(outcome.exceptionOrNull(), "install session failed")
++                    uiState = UiState.Message(getString(R.string.plotina_update_error_install, ""))
++                }
++            }
++        }
++    }
++
++    private fun onInstallResult(status: Int, message: String?) {
++        apkFile?.delete()
++        uiState = when (status) {
++            PackageInstaller.STATUS_SUCCESS -> UiState.Message(getString(R.string.plotina_update_installed))
++            PackageInstaller.STATUS_PENDING_USER_ACTION -> UiState.Installing
++            else -> UiState.Message(
++                getString(R.string.plotina_update_error_install, message.orEmpty()),
++            )
++        }
++    }
++
++    private fun openInstallPermissionSettings() {
++        val intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.fromParts("package", packageName, null))
++        runCatching { startActivity(intent) }.onFailure {
++            // Some OEM builds refuse the direct settings screen; the app's page always opens.
++            runCatching {
++                startActivity(
++                    Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)),
++                )
++            }
++        }
++    }
++
++    @Composable
++    private fun UpdaterDialog() {
++        when (val state = uiState) {
++            UiState.Checking -> AlertDialog(
++                onDismissRequest = ::finish,
++                text = { Text(stringResource(R.string.plotina_update_checking)) },
++                confirmButton = { TextButton(onClick = ::finish) { Text(stringResource(R.string.plotina_update_cancel)) } },
++            )
++
++            UiState.Verifying -> AlertDialog(
++                onDismissRequest = {},
++                text = { Text(stringResource(R.string.plotina_update_verifying)) },
++            )
++
++            UiState.Installing -> AlertDialog(
++                onDismissRequest = ::finish,
++                text = { Text(stringResource(R.string.plotina_update_installing)) },
++                confirmButton = { TextButton(onClick = ::finish) { Text(stringResource(R.string.plotina_update_close)) } },
++            )
++
++            is UiState.UpToDate, is UiState.Message -> AlertDialog(
++                onDismissRequest = ::finish,
++                text = { Text(if (state is UiState.UpToDate) state.current else state.text) },
++                confirmButton = { TextButton(onClick = ::finish) { Text(stringResource(R.string.plotina_update_close)) } },
++            )
++
++            is UiState.Available -> AlertDialog(
++                onDismissRequest = ::finish,
++                title = { Text(stringResource(R.string.plotina_update_title)) },
++                text = {
++                    Text(
++                        stringResource(
++                            R.string.plotina_update_available,
++                            state.info.versionName,
++                            "%.0f MB".format(state.info.size / 1_048_576.0),
++                            state.info.notes,
++                        ),
++                    )
++                },
++                confirmButton = {
++                    Button(onClick = { confirmAndDownload(state.info) }) {
++                        Text(stringResource(R.string.plotina_update_download))
++                    }
++                },
++                dismissButton = {
++                    TextButton(onClick = ::finish) { Text(stringResource(R.string.plotina_update_cancel)) }
++                },
++            )
++
++            is UiState.Downloading -> AlertDialog(
++                onDismissRequest = {},
++                text = {
++                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
++                        Text(stringResource(R.string.plotina_update_downloading, state.percent))
++                        LinearProgressIndicator(
++                            progress = { state.percent / 100f },
++                            modifier = Modifier.fillMaxWidth(),
++                        )
++                    }
++                },
++                confirmButton = {
++                    TextButton(onClick = ::cancelDownload) { Text(stringResource(R.string.plotina_update_cancel)) }
++                },
++            )
++
++            UiState.NeedPermission -> AlertDialog(
++                onDismissRequest = ::finish,
++                title = { Text(stringResource(R.string.plotina_update_permission_title)) },
++                text = { Text(stringResource(R.string.plotina_update_permission_text)) },
++                confirmButton = {
++                    Button(onClick = ::openInstallPermissionSettings) {
++                        Text(stringResource(R.string.plotina_update_open_settings))
++                    }
++                },
++                dismissButton = {
++                    TextButton(onClick = ::finish) { Text(stringResource(R.string.plotina_update_cancel)) }
++                },
++            )
++        }
++    }
++
++    companion object {
++        /** Marker for the PendingIntent the installer commits with. */
++        const val EXTRA_INSTALL_RESULT = "plotina_install_result"
++
++        private fun sha256Of(file: File): String {
++            val digest = MessageDigest.getInstance("SHA-256")
++            file.inputStream().use { input ->
++                val buffer = ByteArray(DEFAULT_BUFFER_SIZE * 8)
++                while (true) {
++                    val read = input.read(buffer)
++                    if (read < 0) break
++                    digest.update(buffer, 0, read)
++                }
++            }
++            return digest.digest().joinToString("") { "%02x".format(it) }
++        }
++    }
++}
+diff --git a/app/src/main/res/values-ru/plotina_updater.xml b/app/src/main/res/values-ru/plotina_updater.xml
+new file mode 100644
+index 00000000..44a894c1
+--- /dev/null
++++ b/app/src/main/res/values-ru/plotina_updater.xml
+@@ -0,0 +1,24 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++  ~ Plotina: строки встроенного обновителя (io.element.android.x.updater).
++  -->
++<resources>
++    <string name="plotina_update_title">Доступно обновление</string>
++    <string name="plotina_update_available">Доступна Plotina X %1$s (%2$s).\n\n%3$s</string>
++    <string name="plotina_update_download">Скачать и установить</string>
++    <string name="plotina_update_checking">Проверяем обновления…</string>
++    <string name="plotina_update_downloading">Загрузка… %1$d%%</string>
++    <string name="plotina_update_verifying">Проверяем скачанный файл…</string>
++    <string name="plotina_update_installing">Подтвердите установку в системном окне…</string>
++    <string name="plotina_update_up_to_date">Установлена последняя версия (%1$s, сборка %2$s).</string>
++    <string name="plotina_update_installed">Обновление установлено. Перезапустите Plotina X.</string>
++    <string name="plotina_update_error_check">Не удалось связаться с plotina.cc. Попробуйте позже.</string>
++    <string name="plotina_update_error_download">Загрузка не удалась. Попробуйте позже.</string>
++    <string name="plotina_update_error_mismatch">Контрольная сумма скачанного файла не совпала, файл удалён.</string>
++    <string name="plotina_update_error_install">Установка не удалась: %1$s</string>
++    <string name="plotina_update_permission_title">Разрешите установку приложений</string>
++    <string name="plotina_update_permission_text">Android требует явно разрешить Plotina X установку приложений. Откройте системные настройки, разрешите установку для Plotina X и вернитесь сюда.</string>
++    <string name="plotina_update_open_settings">Открыть настройки</string>
++    <string name="plotina_update_cancel">Отмена</string>
++    <string name="plotina_update_close">Закрыть</string>
++</resources>
+diff --git a/app/src/main/res/values/plotina_updater.xml b/app/src/main/res/values/plotina_updater.xml
+new file mode 100644
+index 00000000..1d30685c
+--- /dev/null
++++ b/app/src/main/res/values/plotina_updater.xml
+@@ -0,0 +1,24 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!--
++  ~ Plotina: strings for the in-app updater (io.element.android.x.updater).
++  -->
++<resources>
++    <string name="plotina_update_title">Update available</string>
++    <string name="plotina_update_available">Plotina X %1$s (%2$s) is ready.\n\n%3$s</string>
++    <string name="plotina_update_download">Download and install</string>
++    <string name="plotina_update_checking">Checking for updates…</string>
++    <string name="plotina_update_downloading">Downloading… %1$d%%</string>
++    <string name="plotina_update_verifying">Verifying the download…</string>
++    <string name="plotina_update_installing">Confirm the installation in the system dialog…</string>
++    <string name="plotina_update_up_to_date">You have the latest version (%1$s, build %2$s).</string>
++    <string name="plotina_update_installed">Update installed. Restart Plotina X to finish.</string>
++    <string name="plotina_update_error_check">Could not reach plotina.cc. Try again later.</string>
++    <string name="plotina_update_error_download">The download failed. Try again later.</string>
++    <string name="plotina_update_error_mismatch">The downloaded file did not match its checksum, so it was discarded.</string>
++    <string name="plotina_update_error_install">Installation failed: %1$s</string>
++    <string name="plotina_update_permission_title">Allow installing apps</string>
++    <string name="plotina_update_permission_text">Android asks you to allow Plotina X to install apps it downloads. Open the system settings, enable that for Plotina X, and return here.</string>
++    <string name="plotina_update_open_settings">Open settings</string>
++    <string name="plotina_update_cancel">Cancel</string>
++    <string name="plotina_update_close">Close</string>
++</resources>
+diff --git a/app/src/main/res/values/themes.xml b/app/src/main/res/values/themes.xml
+index 26cb0a56..bfb744eb 100644
+--- a/app/src/main/res/values/themes.xml
++++ b/app/src/main/res/values/themes.xml
+@@ -20,4 +20,10 @@
+         <item name="android:statusBarColor">@color/splashscreen_bg_light</item>
+         <item name="android:navigationBarColor">@color/splashscreen_bg_light</item>
+     </style>
++    <!-- Plotina: the updater dialog over the running app; the dialog itself dims. -->
++    <style name="Theme.ElementX.Updater" parent="Theme.ElementX">
++        <item name="android:windowIsTranslucent">true</item>
++        <item name="android:windowBackground">@android:color/transparent</item>
++        <item name="android:backgroundDimEnabled">false</item>
++    </style>
+ </resources>
+diff --git a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutNode.kt b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutNode.kt
+index 4ece133b..d273b667 100644
+--- a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutNode.kt
++++ b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutNode.kt
+@@ -9,6 +9,7 @@
+ package io.element.android.features.preferences.impl.about
+ 
+ import android.app.Activity
++import android.content.Intent
+ import androidx.activity.compose.LocalActivity
+ import androidx.compose.runtime.Composable
+ import androidx.compose.ui.Modifier
+@@ -56,6 +57,17 @@ class AboutNode(
+                 onElementLegalClick(activity, isDark, elementLegal)
+             },
+             onOpenSourceLicensesClick = callback::navigateToOssLicenses,
++            // Plotina: opens the app module's updater Activity. It cannot be referenced by class
++            // from here (the feature module does not depend on the app module), so the component
++            // is named; see io.element.android.x.updater.PlotinaUpdateActivity.
++            onCheckUpdatesClick = {
++                activity.startActivity(
++                    Intent().setClassName(
++                        activity.packageName,
++                        "io.element.android.x.updater.PlotinaUpdateActivity",
++                    ),
++                )
++            },
+             modifier = modifier
+         )
+     }
+diff --git a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutView.kt b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutView.kt
+index 79a17b3e..02ebf783 100644
+--- a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutView.kt
++++ b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutView.kt
+@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.res.stringResource
+ import androidx.compose.ui.tooling.preview.PreviewParameter
++import io.element.android.features.preferences.impl.R
+ import io.element.android.libraries.designsystem.components.preferences.PreferencePage
+ import io.element.android.libraries.designsystem.preview.ElementPreview
+ import io.element.android.libraries.designsystem.preview.PreviewsDayNight
+@@ -24,6 +25,8 @@ fun AboutView(
+     state: AboutState,
+     onElementLegalClick: (ElementLegal) -> Unit,
+     onOpenSourceLicensesClick: () -> Unit,
++    // Plotina: defaulted so upstream's AboutViewTest keeps compiling untouched.
++    onCheckUpdatesClick: () -> Unit = {},
+     onBackClick: () -> Unit,
+     modifier: Modifier = Modifier,
+ ) {
+@@ -32,6 +35,14 @@ fun AboutView(
+         onBackClick = onBackClick,
+         title = stringResource(id = CommonStrings.common_about)
+     ) {
++        // Plotina: the updater lives in the app module, which this module cannot depend on, so
++        // About only asks to open it; the click handler names the component as a string.
++        ListItem(
++            content = {
++                Text(stringResource(id = R.string.plotina_check_updates))
++            },
++            onClick = onCheckUpdatesClick,
++        )
+         state.elementLegals.forEach { elementLegal ->
+             ListItem(
+                 content = {
+@@ -56,6 +67,7 @@ internal fun AboutViewPreview(@PreviewParameter(AboutStatePreviewParam::class) s
+         state = state,
+         onElementLegalClick = {},
+         onOpenSourceLicensesClick = {},
++        onCheckUpdatesClick = {},
+         onBackClick = {},
+     )
+ }
+diff --git a/features/preferences/impl/src/main/res/values-ru/translations.xml b/features/preferences/impl/src/main/res/values-ru/translations.xml
+index 96430521..5d87b91f 100644
+--- a/features/preferences/impl/src/main/res/values-ru/translations.xml
++++ b/features/preferences/impl/src/main/res/values-ru/translations.xml
+@@ -124,4 +124,5 @@
+   <string name="troubleshoot_notifications_entry_point_push_history_title">"История уведомлений"</string>
+   <string name="troubleshoot_notifications_entry_point_section">"Устранение неполадок"</string>
+   <string name="troubleshoot_notifications_entry_point_title">"Устранение неполадок с уведомлениями"</string>
++  <string name="plotina_check_updates">"Проверить обновления"</string>
+ </resources>
+diff --git a/features/preferences/impl/src/main/res/values/localazy.xml b/features/preferences/impl/src/main/res/values/localazy.xml
+index d02257c2..45fabf61 100644
+--- a/features/preferences/impl/src/main/res/values/localazy.xml
++++ b/features/preferences/impl/src/main/res/values/localazy.xml
+@@ -127,4 +127,5 @@ If you proceed, some of your settings may change."</string>
+   <string name="troubleshoot_notifications_entry_point_push_history_title">"Push history"</string>
+   <string name="troubleshoot_notifications_entry_point_section">"Troubleshoot"</string>
+   <string name="troubleshoot_notifications_entry_point_title">"Troubleshoot notifications"</string>
++  <string name="plotina_check_updates">"Check for updates"</string>
+ </resources>

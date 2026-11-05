@@ -101,10 +101,16 @@ How a build becomes updatable, end to end:
   Plotina builds at the same upstream base are distinguishable. It must be a
   semver prerelease: a 4-segment `1.12.32.30` gets mangled by electron-builder
   into `1.12.3-2.30` inside latest.yml.
-- electron-builder emits `dist/latest.yml` (+ `.exe.blockmap`,
-  `latest-linux.yml` for the AppImage); the workflow stages them **unrenamed**
-  and uploads them as release assets, because latest.yml references the
-  installer by filename.
+- electron-builder emits `dist/latest.yml` (+ a separate `.exe.blockmap`;
+  the AppImage blockmap is embedded inside the AppImage in v26, and
+  `latest-linux.yml` carries both the AppImage and the deb); the workflow
+  stages them **unrenamed** and uploads them as release assets, because
+  latest.yml references the installer by filename. Artifact names embed the
+  version as plain text — a `${version}` macro does not survive nx's
+  argument re-quoting (double quotes -> the shell expands it to empty; run
+  #41 built `Plotina-Desktop-.AppImage`). After fix-deb-branding re-packs
+  the deb, the workflow refreshes the deb's sha512/size inside
+  latest-linux.yml so the published metadata stays truthful.
 - The updater polls `api.github.com/repos/<owner>/<repo>/releases` (from
   app-update.yml), fetches `latest.yml` from the newest releases that carry
   one, compares numeric version tokens with `app.getVersion()`, downloads the

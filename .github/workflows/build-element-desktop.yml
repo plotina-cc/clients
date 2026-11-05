@@ -214,20 +214,6 @@ jobs:
           # CLI --config.* dot overrides sit on top of the file config: verified
           # against electron-builder 26.16.1 (probe: win-unpacked/resources/app-update.yml
           # gets owner/repo from here even with repository=vector-im/element-web).
-          PUB=(
-            --config.publish.provider=github
-            --config.publish.owner=plotina-cc
-            --config.publish.repo=clients
-            --config.publish.releaseType=release
-          )
-          if [ "${{ matrix.name }}" = "windows" ]; then
-            PUB+=(
-              --config.win.executableName=Plotina-Desktop
-              '--config.nsis.artifactName=Plotina-Desktop-${version}-setup.exe'
-            )
-          else
-            PUB+=('--config.appImage.artifactName=Plotina-Desktop-${version}.AppImage')
-          fi
           # Tag builds get a per-build app version (v1.12.32-plotina-desktop.30 ->
           # VERSION=1.12.32-plotina.30) so the updater can tell successive Plotina
           # builds apart at the same upstream base. Must be semver-prerelease
@@ -236,7 +222,25 @@ jobs:
           # form passes through byte-identical.
           if [[ "${{ github.ref_name }}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-plotina-desktop\.([0-9]+)$ ]]; then
             export VERSION="${BASH_REMATCH[1]}-plotina.${BASH_REMATCH[2]}"
-            echo "app VERSION=$VERSION"
+          fi
+          APPVER="${VERSION:-$(node -p 'require("./package.json").version')}"
+          echo "app VERSION=$APPVER"
+          PUB=(
+            --config.publish.provider=github
+            --config.publish.owner=plotina-cc
+            --config.publish.repo=clients
+            --config.publish.releaseType=release
+          )
+          # No ${version} macro in the artifact names: when nx re-quotes the
+          # command it wraps argument values in DOUBLE quotes, and the shell
+          # then expands ${version} to empty (run #41 built
+          # "Plotina-Desktop-.AppImage"). Interpolate in bash instead; the
+          # result contains only [0-9A-Za-z.-] and stays unexpanded.
+          if [ "${{ matrix.name }}" = "windows" ]; then
+            PUB+=(--config.win.executableName=Plotina-Desktop \
+                  "--config.nsis.artifactName=Plotina-Desktop-$APPVER-setup.exe")
+          else
+            PUB+=("--config.appImage.artifactName=Plotina-Desktop-$APPVER.AppImage")
           fi
           pnpm run build --publish never $TARGETS "${PUB[@]}"
 
@@ -269,7 +273,15 @@ jobs:
           fi
           echo "---- $meta ----"; cat "$meta"
           test -s "$meta"
-          ls -l dist/*.blockmap
+          if [ "${{ matrix.name }}" = "windows" ]; then
+            # NSIS ships the blockmap as a separate file for differential updates.
+            ls -l dist/*.exe.blockmap
+          else
+            # electron-builder 26 embeds the AppImage blockmap INSIDE the
+            # .AppImage (log line "building embedded block map"); there is no
+            # standalone .AppImage.blockmap file, only the blockMapSize entry.
+            grep -q 'blockMapSize:' "$meta"
+          fi
 
       - name: Rewrite deb branding
         if: matrix.name == 'linux'
@@ -285,6 +297,38 @@ jobs:
           for deb in dist/*.deb; do
             bash "${{ github.workspace }}/element-desktop/scripts/fix-deb-branding.sh" "$deb"
           done
+          # Re-packing the deb changed its bytes AFTER electron-builder hashed
+          # it into latest-linux.yml; refresh those entries so the published
+          # metadata stays truthful. The AppImage is untouched, so its entry
+          # (and the embedded blockmap) remain valid as built.
+          python3 - <<'PY'
+          import base64, hashlib, re
+          from pathlib import Path
+
+          meta = Path("dist/latest-linux.yml")
+          if not meta.exists():
+              raise SystemExit(0)
+
+          def fix(m: re.Match) -> str:
+              name = m.group("url")
+              f = Path("dist") / name
+              if not f.is_file():
+                  return m.group(0)
+              digest = base64.b64encode(hashlib.sha512(f.read_bytes()).digest()).decode()
+              body = m.group("body")
+              body = re.sub(r"(sha512: )\S+", rf"\g<1>{digest}", body)
+              body = re.sub(r"(size: )\d+", rf"\g<1>{f.stat().st_size}", body)
+              return f"{m.group('ind')}- url: {name}\n{body}"
+
+          text = meta.read_text(encoding="utf-8")
+          fixed = re.sub(
+              r"(?P<ind>[ \t]*)- url: (?P<url>\S+\.deb)\n(?P<body>(?:[ \t]+(?:sha512|size): [^\n]*\n)+)",
+              fix,
+              text,
+          )
+          meta.write_text(fixed, encoding="utf-8")
+          print(fixed)
+          PY
 
       - name: Stage artifacts
         shell: bash

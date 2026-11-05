@@ -103,6 +103,7 @@ jobs:
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0011-plotina-locales.patch"
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0012-plotina-about-minimal.patch"
           git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0013-plotina-analytics-off.patch"
+          git apply --check --verbose "$GITHUB_WORKSPACE/element-x/patches/0014-plotina-self-updater.patch"
 
   build:
     needs: patches
@@ -204,6 +205,13 @@ jobs:
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0012-plotina-about-minimal.patch"
           # 0013: no PostHog analytics and no Sentry reporting.
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0013-plotina-analytics-off.patch"
+          # 0014: the in-app updater. About grows a "Проверить обновления" row and MainActivity runs a
+          # silent once-a-day check; both open PlotinaUpdateActivity, which fetches
+          # https://plotina.cc/dl/update-x.json, downloads the APK with DownloadManager, verifies
+          # sha256 and size, and hands it to the system PackageInstaller. The same patch derives the
+          # versionCode from the release tag: with -PplotinaBuildNumber=N, tag vYY.MM.p-plotina-x.N
+          # gets base (2000+YY)*100000 + MM*1000 + N (26.10.1 .25 -> 202610025).
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0014-plotina-self-updater.patch"
 
       - name: Install Pillow for the icon script
         run: python3 -m pip install --quiet pillow
@@ -278,6 +286,37 @@ jobs:
           echo "PLOTINA_SENTRY_RELEASE=$release" >> "$GITHUB_ENV"
           echo "Sentry release: $release"
 
+      - name: Work out the versionCode
+        # Plotina's formula, also documented in element-x/README.md and in patch 0014's
+        # app/build.gradle.kts: the release tag `vYY.MM.p-plotina-x.N` maps to the base versionCode
+        # (2000 + YY) * 100_000 + MM * 1_000 + N. Gradle receives N as -PplotinaBuildNumber; the
+        # packaged APK additionally carries upstream's ABI digit (base * 10 + abiCode, arm64-v8a 2,
+        # armeabi-v7a 1), and update-x.json holds the base - the in-app updater compares base codes,
+        # because each phone installs a different split. Every base here is greater than the base
+        # of the pre-updater releases (upstream's 20261001), so the installer takes them upgrades.
+        # A run without a tag (workflow_dispatch) gets build number 0; its APK is a `.debug`
+        # application id installed beside the releases, never over them, so the collision that
+        # would otherwise cause does not exist.
+        run: |
+          version_name="${ELEMENT_X_TAG#v}"
+          IFS='.' read -r yy mm pp <<< "$version_name"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            build_number="${GITHUB_REF_NAME##*.}"
+            case "$build_number" in
+              ''|*[!0-9]*) echo "::error::tag '$GITHUB_REF_NAME' has no numeric build number"; exit 1 ;;
+            esac
+            [ "$build_number" -le 999 ] || { echo "::error::build number $build_number does not fit 0..999"; exit 1; }
+          else
+            build_number=0
+          fi
+          base=$(( (2000 + yy) * 100000 + mm * 1000 + build_number ))
+          echo "Plotina versionCode: base $base; arm64 APK $((base * 10 + 2)), armv7 APK $((base * 10 + 1))"
+          {
+            echo "PLOTINA_BUILD_NUMBER=$build_number"
+            echo "PLOTINA_VERSION_NAME=$version_name"
+            echo "PLOTINA_VERSION_CODE_BASE=$base"
+          } >> "$GITHUB_ENV"
+
       - name: Assemble
         working-directory: upstream/element-x
         env:
@@ -324,10 +363,10 @@ jobs:
           # app/build.gradle.kts: `gplayImplementation(projects.libraries.pushproviders.firebase)`).
           # Asking Gradle for `assemblePlayRelease` fails with "Task not found".
           if [ "${{ steps.keystore.outputs.signed }}" = "true" ]; then
-            ./gradlew assembleGplayRelease --stacktrace --no-configuration-cache
+            ./gradlew -PplotinaBuildNumber="$PLOTINA_BUILD_NUMBER" assembleGplayRelease --stacktrace --no-configuration-cache
             apk_dir=app/build/outputs/apk/gplay/release
           else
-            ./gradlew assembleGplayDebug --stacktrace --no-configuration-cache
+            ./gradlew -PplotinaBuildNumber="$PLOTINA_BUILD_NUMBER" assembleGplayDebug --stacktrace --no-configuration-cache
             apk_dir=app/build/outputs/apk/gplay/debug
           fi
           ls -lh "$apk_dir"
@@ -341,11 +380,57 @@ jobs:
 
       # Uploaded before the checks on purpose: a failing check must still leave the APK behind to
       # inspect, otherwise the only trace of a wrong artifact is a red step.
+      - name: Check the versionCode and write update-x.json
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          SDK="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          AAPT=$(ls "$SDK"/build-tools/*/aapt 2>/dev/null | sort -V | tail -1)
+          [ -n "$AAPT" ] || { echo "::error::no aapt in $SDK/build-tools: the versionCode cannot be verified"; exit 1; }
+          # aapt reads what actually got packaged - not what Gradle was asked for. The base plus the
+          # ABI digit from the androidComponents block: arm64-v8a 2, armeabi-v7a 1. If these values
+          # drift, the in-app updater would offer installs the system refuses as downgrades.
+          read_pkg_vc() {
+            local line
+            line=$("$AAPT" dump badging "$1" 2>/dev/null | head -1)
+            PKG=$(printf '%s' "$line" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
+            VC=$(printf '%s' "$line" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")
+          }
+          read_pkg_vc Plotina-X.apk
+          echo "Plotina-X.apk: package=$PKG versionCode=$VC"
+          [ "$VC" = "$(( PLOTINA_VERSION_CODE_BASE * 10 + 2 ))" ] \
+            || { echo "::error::Plotina-X.apk versionCode $VC is not base $PLOTINA_VERSION_CODE_BASE * 10 + 2 (arm64)"; exit 1; }
+          if [ -f Plotina-X-armv7.apk ]; then
+            read_pkg_vc Plotina-X-armv7.apk
+            echo "Plotina-X-armv7.apk: package=$PKG versionCode=$VC"
+            [ "$VC" = "$(( PLOTINA_VERSION_CODE_BASE * 10 + 1 ))" ] \
+              || { echo "::error::Plotina-X-armv7.apk versionCode $VC is not base * 10 + 1 (armv7)"; exit 1; }
+          fi
+          sha=$(sha256sum Plotina-X.apk | cut -d' ' -f1)
+          size=$(stat -c%s Plotina-X.apk)
+          # The contract in patch 0014: versionCode is the base, the app compares it against the
+          # installed code with the ABI digit removed. apkUrl is a stable name: publish-clients.sh
+          # copies release assets to the edge host under the names the app already knows, so the
+          # URL never moves with the tag.
+          jq -n \
+            --arg package "$PKG" \
+            --arg versionName "$PLOTINA_VERSION_NAME" \
+            --argjson versionCode "$PLOTINA_VERSION_CODE_BASE" \
+            --arg apkUrl "https://plotina.cc/dl/Plotina-X.apk" \
+            --arg sha256 "$sha" \
+            --argjson size "$size" \
+            --arg notes "Обновление Plotina X ${PLOTINA_VERSION_NAME} (сборка ${PLOTINA_BUILD_NUMBER})." \
+            '{client: "x", package: $package, versionName: $versionName, versionCode: $versionCode,
+              apkUrl: $apkUrl, sha256: $sha256, size: $size, notes: $notes}' > update-x.json
+          cat update-x.json
+          sha256sum update-x.json Plotina-X.apk
+
       - uses: actions/upload-artifact@v4
         if: always() && hashFiles('Plotina-X.apk') != ''
         with:
           name: Plotina-X
-          path: Plotina-X*.apk
+          path: |-
+            Plotina-X*.apk
+            update-x.json
           if-no-files-found: error
           retention-days: 30
 
@@ -516,7 +601,9 @@ jobs:
           # Human-facing title only: never the tag, which carries the upstream
           # client name and the plotina release counter.
           name: ${{ steps.release_title.outputs.name }}
-          files: Plotina-X*.apk
+          files: |-
+            Plotina-X*.apk
+            update-x.json
           # Tag namespace is shared with the other clients in this repository, so generated notes
           # would paste an unrelated changelog.
           generate_release_notes: false
@@ -542,6 +629,12 @@ jobs:
             - `Plotina-X.apk` is the arm64-v8a build (every phone from the last several
               years); `Plotina-X-armv7.apk` covers older 32-bit devices. There is no universal
               APK on purpose: one file for all four ABIs is 400 MB.
+            - **Updates from inside the app**: Settings → About → «Проверить обновления», plus a
+              silent check once a day at start. `update-x.json` (attached to this release next to
+              the APK, and mirrored to https://plotina.cc/dl/update-x.json by
+              `scripts/publish-clients.sh`) carries the APK's sha256, size and versionCode; the
+              app downloads, verifies, and opens the system installer. The versionCode follows the
+              tag: `vYY.MM.p-plotina-x.N` -> `(2000+YY)*100000 + MM*1000 + N`.
             - Source: this repository at this tag plus the upstream tag pinned in `element-x/pins.env`. The full set and rebuild steps are in
               https://github.com/plotina-cc/clients/blob/main/SOURCE.md (AGPL-3.0-or-later upstream, AGPL-3.0 patch layer).
 

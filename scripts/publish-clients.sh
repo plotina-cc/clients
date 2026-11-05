@@ -41,6 +41,17 @@ else
   echo "    rpm в этом релизе нет, пропускаю"
 fi
 
+# Android (Plotina X): the in-app updater reads update-x.json and downloads Plotina-X.apk from
+# this directory, so both travel under those stable names. Releases are tagged per client, so
+# both are optional here - a desktop release simply does not carry them.
+for f in Plotina-X.apk update-x.json; do
+  if curl -sSL --fail --max-time 900 -o "$WORK/$f" "$BASE/$f" 2>/dev/null; then
+    printf '    %-32s %s\n' "$f" "$(du -h "$WORK/$f" | cut -f1)"
+  else
+    echo "    $f в этом релизе нет, пропускаю"
+  fi
+done
+
 echo "==> кладу на $EDGE:$DEST"
 tar -C "$WORK" -cf - . | ssh "$EDGE" 'mkdir -p /tmp/dlin && tar -xf - -C /tmp/dlin &&
   sudo install -d -m 755 /srv/dl &&

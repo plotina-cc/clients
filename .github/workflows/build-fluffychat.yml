@@ -32,6 +32,11 @@ env:
   PLUGIN_DIR: fluffychat/plotina_dfn
   APK_NAME: Plotina-Mobile.apk
   APK_NAME_ARMV7: Plotina-Mobile-armv7.apk
+  # The in-app updater reads https://plotina.cc/dl/update-mobile.json; infra
+  # mirrors that JSON and the arm64 APK from the GitHub release. We produce
+  # both as release assets.
+  MANIFEST_NAME: update-mobile.json
+  UPDATE_APK_URL: https://plotina.cc/dl/Plotina-Mobile.apk
   # GlitchTip. The DSN is public by design and ends up inside libapp.so; an
   # empty value simply builds without reporting (Sentry stays a no-op).
   SENTRY_DSN: ${{ vars.SENTRY_DSN }}
@@ -98,6 +103,37 @@ jobs:
           RELEASE="fluffy@${VERSION}+${GITHUB_REF_NAME}"
           echo "release=$RELEASE" >> "$GITHUB_OUTPUT"
           echo "sentry release: $RELEASE"
+
+      # Android versionCode for the in-app updater. It comes from the release
+      # tag (v2.11.3-plotina-mobile.23), not from GITHUB_RUN_NUMBER, so every
+      # APK ever published is comparable: 2*1000000 + 11*10000 + 3*100 + 23 =
+      # 2110323. The formula, its digit limits and the monotonicity argument
+      # are documented in fluffychat/scripts/version-code.py; a local
+      # scripts/build-android.sh computes the same number.
+      - name: Work out the Android versionCode
+        id: versioncode
+        working-directory: fluffychat/upstream
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^version: \([0-9][0-9.]*\)+.*/\1/p' pubspec.yaml)"
+          if [[ "$GITHUB_REF_NAME" =~ ^v([0-9.]+)-plotina-mobile\.([0-9]+)$ ]]; then
+            BASE="${BASH_REMATCH[1]}"
+            BUILD="${BASH_REMATCH[2]}"
+            if [ "$BASE" != "$VERSION" ]; then
+              echo "::error::tag $GITHUB_REF_NAME is for $BASE but pubspec.yaml says $VERSION"
+              exit 1
+            fi
+          else
+            echo "::warning title=Not a release tag::ref $GITHUB_REF_NAME is not v<version>-plotina-mobile.<n>; building build 0, which never offers an update over a released one."
+            BUILD=0
+          fi
+          CODE="$(python3 ../scripts/version-code.py "$VERSION" "$BUILD")"
+          {
+            echo "version_name=$VERSION"
+            echo "version_code=$CODE"
+            echo "build=$BUILD"
+          } >> "$GITHUB_OUTPUT"
+          echo "versionCode $CODE ($VERSION, build $BUILD)"
 
       # runner.temp is not available in workflow-level env, so the path is
       # decided here and exported for the upload step.
@@ -326,7 +362,7 @@ jobs:
           # whole app for little gain, and FluffyChat is not shipped to an
           # untrusted store.
           flutter build apk --split-per-abi "--$VARIANT" \
-            --build-number "$GITHUB_RUN_NUMBER" \
+            --build-number "${{ steps.versioncode.outputs.version_code }}" \
             --dart-define=SENTRY_DSN="${SENTRY_DSN:-}" \
             --dart-define=SENTRY_RELEASE="$SENTRY_RELEASE" \
             --dart-define=SENTRY_DIST="$GITHUB_RUN_NUMBER" \
@@ -339,6 +375,66 @@ jobs:
           cp "$armv7" "$GITHUB_WORKSPACE/$APK_NAME_ARMV7"
           ls -lh "$GITHUB_WORKSPACE/$APK_NAME" "$GITHUB_WORKSPACE/$APK_NAME_ARMV7"
           sha256sum "$GITHUB_WORKSPACE/$APK_NAME" "$GITHUB_WORKSPACE/$APK_NAME_ARMV7"
+
+      # The updater compares versionCode values, so a silently wrong one would
+      # offer no update ever (or the same one forever). Read it back from the
+      # built APK and fail on mismatch.
+      - name: Verify the APK versionCode
+        run: |
+          set -euo pipefail
+          expected="${{ steps.versioncode.outputs.version_code }}"
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?ANDROID_SDK_ROOT/ANDROID_HOME is not set}}"
+          found=""
+          AAPT="$(ls -1 "$SDK"/build-tools/*/aapt 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -n "$AAPT" ]; then
+            found="$("$AAPT" dump badging "$APK_NAME" 2>/dev/null |
+              sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" | head -1 || true)"
+          fi
+          if [ -z "$found" ]; then
+            # Newer build-tools drop the aapt1 binary; apkanalyzer is in
+            # cmdline-tools and prints the binary manifest as XML.
+            AK="$(ls -1 "$SDK"/cmdline-tools/*/bin/apkanalyzer 2>/dev/null | sort -V | tail -1 || true)"
+            [ -n "$AK" ] || { echo "::error::neither aapt nor apkanalyzer under $SDK"; exit 1; }
+            found="$("$AK" manifest print "$APK_NAME" 2>/dev/null |
+              sed -n 's/.*android:versionCode="\([0-9]*\)".*/\1/p' | head -1 || true)"
+          fi
+          echo "APK versionCode: ${found:-none}, expected $expected"
+          [ "$found" = "$expected" ] || { echo "::error::$APK_NAME carries a different versionCode"; exit 1; }
+          echo "::notice::versionCode $found verified with $(basename "${AAPT:-apkanalyzer}")"
+
+      # What the in-app updater fetches from https://plotina.cc/dl/
+      # update-mobile.json. sha256/size describe the arm64 APK, which is what
+      # the app downloads; armeabi-v7a devices keep updating manually.
+      - name: Write the updater manifest
+        run: |
+          set -euo pipefail
+          sha256="$(sha256sum "$APK_NAME" | cut -d' ' -f1)"
+          size="$(stat -c%s "$APK_NAME")"
+          package="$(sed -n 's/.*applicationId = "\([^"]*\)".*/\1/p' \
+            fluffychat/upstream/android/app/build.gradle.kts)"
+          [ -n "$package" ] || { echo "::error::no applicationId in build.gradle.kts"; exit 1; }
+          export package sha256 size
+          export VERSION_NAME="${{ steps.versioncode.outputs.version_name }}"
+          export VERSION_CODE="${{ steps.versioncode.outputs.version_code }}"
+          export NOTES="Plotina Mobile ${VERSION_NAME} (сборка ${{ steps.versioncode.outputs.build }}): улучшения и исправления."
+          python3 - "$MANIFEST_NAME" <<'PY'
+          import json, os, sys
+
+          manifest = {
+              "client": "mobile",
+              "package": os.environ["package"],
+              "versionName": os.environ["VERSION_NAME"],
+              "versionCode": int(os.environ["VERSION_CODE"]),
+              "apkUrl": os.environ["UPDATE_APK_URL"],
+              "sha256": os.environ["sha256"],
+              "size": int(os.environ["size"]),
+              "notes": os.environ["NOTES"],
+          }
+          with open(sys.argv[1], "w", encoding="utf-8") as handle:
+              json.dump(manifest, handle, ensure_ascii=False, indent=2)
+              handle.write("\n")
+          print(json.dumps(manifest, ensure_ascii=False, indent=2))
+          PY
 
       # Uploaded before the checks on purpose: if a check rejects the APK, the
       # artifact is still there to inspect instead of costing another 30 minutes.
@@ -573,9 +669,9 @@ jobs:
           BASE="${BASE%%-plotina-*}"
           gh release view "$TAG" > /dev/null 2>&1 ||
             gh release create "$TAG" --title "Plotina Mobile ${BASE}" --notes-file "$BODY"
-          gh release upload "$TAG" "$APK_NAME" "$APK_NAME_ARMV7" --clobber
-          # The release is the deliverable, so prove both APKs are on it.
-          for asset in "$APK_NAME" "$APK_NAME_ARMV7"; do
+          gh release upload "$TAG" "$APK_NAME" "$APK_NAME_ARMV7" "$MANIFEST_NAME" --clobber
+          # The release is the deliverable, so prove all three assets are on it.
+          for asset in "$APK_NAME" "$APK_NAME_ARMV7" "$MANIFEST_NAME"; do
             gh release view "$TAG" --json assets \
               -q ".assets[] | select(.name == \"$asset\") | \"\\(.name) \\(.size) bytes\"" \
               | grep -q . || { echo "::error::$asset is not attached to release $TAG"; exit 1; }

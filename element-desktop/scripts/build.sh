@@ -68,11 +68,18 @@ cp "$ROOT/desktop/updater.ts" src/updater.ts
 echo "==> installers"
 # GNU tar and some containers hate hard links (electron-builder#5721).
 export USE_HARD_LINKS=false
+# electron-builder resolves the app version from VERSION (see upstream
+# electron-builder.ts) or package.json; interpolate it into the artifact
+# names ourselves: passing the ${version} macro through `pnpm run build`
+# (nx) dies to shell re-expansion -- nx re-quotes such argument values in
+# double quotes and ${version} expands to the empty string.
+APPVER="${VERSION:-$(node -p 'require("./package.json").version')}"
 case "$(uname -s)" in
   Linux)                TARGETS=(-l appimage deb)
-                        PUB=(--config.appImage.artifactName='Plotina-Desktop-${version}.AppImage') ;;
+                        PUB=("--config.appImage.artifactName=Plotina-Desktop-$APPVER.AppImage") ;;
   MINGW*|MSYS*|CYGWIN*) TARGETS=(-w nsis)
-                        PUB=(--config.win.executableName=Plotina-Desktop '--config.nsis.artifactName=Plotina-Desktop-${version}-setup.exe') ;;
+                        PUB=(--config.win.executableName=Plotina-Desktop \
+                             "--config.nsis.artifactName=Plotina-Desktop-$APPVER-setup.exe") ;;
   *)
     echo "build.sh: unsupported platform $(uname -s); macOS is not built for lack of a signing identity" >&2
     exit 1

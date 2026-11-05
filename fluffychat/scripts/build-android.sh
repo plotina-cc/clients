@@ -41,13 +41,33 @@ cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 \
 
 cd "$upstream"
 flutter pub get
+flutter gen-l10n
 # Release signing needs android/key.properties; upstream's fallback points at a
 # dummy.keystore that is not in its repository, so build debug without it.
 variant=release
 [ -f android/key.properties ] || variant=debug
 echo "building the $variant variant"
+# Android versionCode for the in-app updater. The release tag carries the
+# build number (v2.11.3-plotina-mobile.23 -> 23); a local checkout of an
+# untagged commit builds .0. Override with PLOTINA_BUILD=<n>, e.g. to produce
+# an APK that must install over a released one. The formula and its limits
+# are documented in scripts/version-code.py; CI computes it the same way.
+base_version="$(sed -n 's/^version: \([0-9][0-9.]*\)+.*/\1/p' pubspec.yaml)"
+if [ -z "${PLOTINA_BUILD:-}" ]; then
+  ref="$(git -C "$here" describe --tags --match 'v*plotina-mobile.*' --abbrev=0 2>/dev/null || true)"
+  case "$ref" in
+    v*plotina-mobile.*) PLOTINA_BUILD="${ref##*.}" ;;
+    *) PLOTINA_BUILD=0 ;;
+  esac
+fi
+build_number="$(python3 "$here/scripts/version-code.py" "$base_version" "$PLOTINA_BUILD")"
+echo "versionCode $build_number ($base_version, build $PLOTINA_BUILD)"
+# Optional manifest URL override for testing the updater against a local
+# server, e.g. PLOTINA_UPDATE_URL=http://10.0.2.2:8000/update-mobile.json.
+update_args=()
+[ -n "${PLOTINA_UPDATE_URL:-}" ] && update_args+=(--dart-define=PLOTINA_UPDATE_URL="$PLOTINA_UPDATE_URL")
 # No --target-platform: Flutter's Gradle plugin forces its default ABI filter
 # (armeabi-v7a, arm64-v8a, x86_64), so building fewer platforms would package
 # x86_64 libraries from dependencies without a libflutter.so next to them.
-flutter build apk "--$variant"
+flutter build apk "${update_args[@]}" --build-number "$build_number" "--$variant"
 echo "APK: $upstream/build/app/outputs/flutter-apk/app-$variant.apk"

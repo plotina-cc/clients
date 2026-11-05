@@ -51,6 +51,51 @@ export PLOTINA_SENTRY_RELEASE="element-x@26.10.1-plotina-x.14"
 ./gradlew -PplotinaSingleApk assembleGplayDebug
 ```
 
+## Updating in-app (patch 0014)
+
+There is no Play channel here, so Plotina X ships its own updater: platform APIs only —
+`HttpURLConnection` for the manifest, `DownloadManager` for the APK, `PackageInstaller` for the
+install, no third-party update SDK.
+
+- **Settings → About → «Проверить обновления»** opens the dialog, and a **silent check runs at
+  most once a day** when the app starts; it only opens the dialog when the manifest really is
+  newer.
+- Manifest: `https://plotina.cc/dl/update-x.json` with exactly
+  `{"client":"x","package":"cc.plotina.x","versionName":"26.10.1","versionCode":202610025,
+  "apkUrl":"https://plotina.cc/dl/Plotina-X.apk","sha256":"<hex>","size":<bytes>,
+  "notes":"<short ru text>"}`. `build-element-x.yml` writes it from the built APK and attaches it
+  to the release; `scripts/publish-clients.sh` copies it and `Plotina-X.apk` to the edge host
+  under those stable names. The updater refuses a manifest whose `client`, `package`, `apkUrl`
+  scheme, `sha256` shape or numbers do not check out, and discards a download whose sha256 or
+  size mismatch before the installer ever sees it.
+- Before the hand-off, the dialog asks for the **"install unknown apps"** permission through
+  `Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES` if the system has not been told Plotina X may
+  install apps.
+
+### versionCode
+
+A release tag `vYY.MM.p-plotina-x.N` maps to the base versionCode
+
+    (2000 + YY) * 100_000 + MM * 1_000 + N      # v26.10.1-plotina-x.25 -> 202610025
+
+CI derives `N` from the tag and passes it as `-PplotinaBuildNumber` (see "Work out the
+versionCode" in `build-element-x.yml` and the `defaultConfig` block patch 0014 adds to
+`app/build.gradle.kts`). `update-x.json` carries that base. The packaged APK additionally gets
+upstream's ABI digit appended (`base * 10 + abiCode`; arm64-v8a is 2, armeabi-v7a 1) and the
+updater strips the digit again before comparing, so arm64 and armv7 installs agree. Every base
+under this scheme is greater than the base of the pre-updater releases (upstream's `20261001`),
+which is why the `(2000 + YY)` prefix stays: `Plotina-X.apk` always upgrades an installed
+Plotina X. Locally, add `-PplotinaBuildNumber=N` or leave it out for upstream's own value.
+
+### Testing the dialog against a local manifest
+
+    python3 -m http.server 8000   # serving an update-x.json (+ the APK it names)
+    adb shell am start -n cc.plotina.x.debug/io.element.android.x.updater.PlotinaUpdateActivity \
+        --es plotina_manifest_url http://10.0.2.2:8000/update-x.json
+
+`package: cc.plotina.x` in the manifest is accepted by the debug id `cc.plotina.x.debug`
+(prefix match), so one manifest file serves both.
+
 ## Limitations
 
 - Android only.
