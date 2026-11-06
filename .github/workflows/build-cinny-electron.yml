@@ -267,6 +267,7 @@ jobs:
           # host ("Cannot connect to D:"); extract from a relative path.
           cd "$GITHUB_WORKSPACE/web-in"
           tar -xf plotina-lite-web-dist.tar -C ../cinny-electron/web-dist
+          cd "$GITHUB_WORKSPACE/cinny-electron"
           LITE_DIST="$PWD/web-dist" bash scripts/build-packages.sh windows
           # NSIS is the auto-updating installer: metadata + blockmap required.
           test -f dist/latest.yml
