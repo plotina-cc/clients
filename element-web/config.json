@@ -9,7 +9,10 @@
   "update_base_url": "https://github.com/plotina-cc/clients/releases",
   "disable_guests": true,
   "show_labs_settings": false,
-  "features": {},
+  "features": {
+    "feature_video_rooms": true,
+    "feature_element_call_video_rooms": true
+  },
   "sentry": {
     "dsn": "https://3f9c1d7a5b2e4c6d8f0a1b3c5d7e9f2a@sentry.plotina.cc/relay/1",
     "environment": "production"
@@ -69,5 +72,9 @@
       }
     ]
   },
-  "default_theme": "custom-Plotina Mint"
+  "default_theme": "custom-Plotina Mint",
+  "element_call": {
+    "use_exclusively": true,
+    "brand": "Plotina Call"
+  }
 }

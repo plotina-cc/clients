@@ -247,6 +247,16 @@ def ensure_theme_boot(root: Path, relative: bool) -> list[str]:
 # i18n JSON). Inserted only where absent: once Crowdin ships its own
 # translation, apply_locales() stops touching it.
 # --------------------------------------------------------------------------
+# Strings we intentionally replace even though upstream already has a value:
+# the crash page otherwise shows upstream's own name ("Ваш Element ...") and
+# our rebrand must never leak it.
+FORCE_LOCALE_OVERRIDES: dict[str, dict[str, str]] = {
+    "ru": {
+        "error|misconfigured": "Ваш Plotina Web неверно настроен",
+    },
+}
+
+
 LOCALE_OVERRIDES: dict[str, dict] = {
     "ru": {
         "action": {
@@ -317,7 +327,22 @@ def apply_locales(i18n: Path) -> list[str]:
         if not isinstance(data, dict):
             raise BrandingError(f"i18n/{name}: top level is not an object")
         added = add_missing(data, overrides)
-        if added:
+        forced = FORCE_LOCALE_OVERRIDES.get(lang, {})
+        forced_changed = False
+        for dotted, value in forced.items():
+            node = data
+            parts = dotted.split("|")
+            for part in parts[:-1]:
+                child = node.get(part)
+                if not isinstance(child, dict):
+                    child = {}
+                    node[part] = child
+                node = child
+            if node.get(parts[-1]) != value:
+                node[parts[-1]] = value
+                forced_changed = True
+                actions.append(f"i18n/{name}: forced {parts[-1]!r}")
+        if added or forced_changed:
             path.write_text(json.dumps(data, ensure_ascii=False, indent=4) + "\n",
                             encoding="utf-8")
             for dotted in added:
