@@ -41,8 +41,8 @@ DEB_SOURCE=""        # явный путь/URL для .deb
 APP_SOURCE=""        # явный путь/URL для AppImage
 SUDO_CMD=()          # (sudo) или пусто, если прав root хватает
 
-info() { echo "$*"; }
-warn() { echo "ПРЕДУПРЕЖДЕНИЕ: $*" >&2; }
+info() { :; }
+warn() { :; }
 die()  { echo "ОШИБКА: $*" >&2; exit 1; }
 
 usage() {
@@ -89,11 +89,11 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# --------- скачивание: 2 попытки, curl -fSL --retry 2 ------------------------
+# --------- скачивание: 2 попытки, curl -fsSL --retry 2 ------------------------
 download() {
     local url="$1" dest="$2" attempt
     for attempt in 1 2; do
-        if curl -fSL --retry 2 -o "$dest" "$url"; then
+        if curl -fsSL --retry 2 -o "$dest" "$url"; then
             return 0
         fi
         warn "попытка ${attempt}/2 не удалась: $url"
@@ -198,9 +198,9 @@ install_deb() {
     local deb
     obtain "$DEB_SOURCE" "$DEB_URL" "Plotina-Desktop.deb"
     deb="$RESOLVED"
-    if "${SUDO_CMD[@]}" apt-get install -y "$deb"; then
+    if "${SUDO_CMD[@]}" apt-get install -y "$deb" >>"$TMP/install.log" 2>&1; then
         info "Пакет .deb установлен через apt-get."
-    elif "${SUDO_CMD[@]}" dpkg -i "$deb" && "${SUDO_CMD[@]}" apt-get -f install -y; then
+    elif "${SUDO_CMD[@]}" dpkg -i "$deb" >>"$TMP/install.log" 2>&1 && "${SUDO_CMD[@]}" apt-get -f install -y >>"$TMP/install.log" 2>&1; then
         warn "apt-get install не прошёл (зависимости?) — установил через dpkg -i + apt-get -f install."
     else
         warn "apt-get и dpkg не смогли установить $deb."
@@ -320,4 +320,3 @@ case "$MODE" in
         ;;
 esac
 
-echo "Вход через SSO из браузера теперь открывается в Plotina Desktop."

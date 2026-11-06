@@ -312,10 +312,9 @@ class InstallerCase(unittest.TestCase):
         return self.log.read_text().splitlines() if self.log.exists() else []
 
     def assert_sso_footer(self, proc):
-        lines = [l for l in proc.stdout.splitlines() if l.strip()]
-        self.assertTrue(lines, "пустой stdout")
-        self.assertIn("SSO", lines[-1])
-        self.assertIn("Plotina Desktop", lines[-1])
+        # The installer is deliberately silent on success: users see no
+        # internal paths, package names or step-by-step comments.
+        self.assertEqual("", proc.stdout.strip())
 
 
 class TestAppImageIcons(InstallerCase):
@@ -457,7 +456,7 @@ class TestAppImagePath(InstallerCase):
         url = self.serve(self.tmp) + "/Plotina-Desktop.AppImage"
         proc = self.run_installer(mocks=self.xdg_mocks, extra_env={"PLOTINA_APPIMAGE_URL": url})
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("Установлен бинарник", proc.stdout)
+        self.assertEqual("", proc.stdout.strip())
         self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
         self.assert_sso_footer(proc)
 
@@ -478,15 +477,15 @@ class TestAppImagePath(InstallerCase):
             extra_env={"PLOTINA_APPIMAGE_URL": "http://127.0.0.1:1/Plotina-Desktop.AppImage"},
         )
         self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("попытка 1/2", proc.stderr)
-        self.assertIn("попытка 2/2", proc.stderr)
+        self.assertIn("ОШИБКА", proc.stderr)
+        self.assertNotIn("попытка", proc.stderr)
         self.assertIn("не удалось скачать", proc.stderr)
 
     def test_fake_appimage_extract_failure_skips_icons_but_installs(self):
         # --appimage-extract на фейке падает — установка не должна роняться.
         proc = self.run_installer([str(self.fake)], mocks=self.xdg_mocks)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("не удалось извлечь иконки", proc.stderr)
+        self.assertNotIn("не удалось извлечь иконки", proc.stderr)
         self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
         self.assertTrue((self.prefix / "share" / "applications" / "plotina-desktop.desktop").is_file())
         self.assertFalse((self.prefix / "share" / "icons").exists())
@@ -494,7 +493,7 @@ class TestAppImagePath(InstallerCase):
     def test_registration_called_when_xdg_settings_present(self):
         proc = self.run_installer([str(self.fake)], mocks=self.xdg_mocks)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("Схема io.element.desktop закреплена", proc.stdout)
+        self.assertNotIn("Схема", proc.stdout)
         self.assertIn("update-desktop-database", "\n".join(self.mock_log_lines()))
 
     def test_xdg_settings_failing_does_not_kill_install(self):
@@ -503,15 +502,15 @@ class TestAppImagePath(InstallerCase):
         proc = self.run_installer(
             [str(self.fake)], mocks=mocks, extra_env={"XDG_SETTINGS_FAIL": "1", "UDB_FAIL": "1"})
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("xdg-settings завершился с кодом 3", proc.stderr)
-        self.assertIn("update-desktop-database завершился с кодом 5", proc.stderr)
+        self.assertNotIn("xdg-settings", proc.stderr)
+        self.assertNotIn("update-desktop-database", proc.stderr)
         self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
 
     def test_xdg_tools_missing_does_not_kill_install(self):
         proc = self.run_installer([str(self.fake)])  # PATH=core: нет xdg-утилит
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("xdg-settings не найден", proc.stderr)
-        self.assertIn("update-desktop-database не найден", proc.stderr)
+        self.assertNotIn("xdg-settings", proc.stderr)
+        self.assertNotIn("update-desktop-database", proc.stderr)
         self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
 
     def test_force_appimage_flag_ignores_deb_env(self):
@@ -558,14 +557,14 @@ class TestDebPath(InstallerCase):
         i_fix = next(i for i, l in enumerate(lines) if l.startswith("apt-get -f install -y"))
         self.assertLess(i_apt, i_dpkg)
         self.assertLess(i_dpkg, i_fix)
-        self.assertIn("dpkg -i", proc.stderr)
+        self.assertNotIn("dpkg -i", proc.stderr)
 
     def test_deb_install_total_failure_falls_back_to_appimage(self):
         proc = self.run_installer(
             mocks=FULL_MOCKS,
             extra_env={**self.env, "APT_ALWAYS_FAIL": "1", "DPKG_FAIL": "1"})
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("перехожу на AppImage", proc.stderr)
+        self.assertNotIn("перехожу на AppImage", proc.stderr)
         self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
         self.assert_sso_footer(proc)
 
@@ -573,8 +572,8 @@ class TestDebPath(InstallerCase):
         mocks = {k: v for k, v in FULL_MOCKS.items() if k != "sudo"}
         proc = self.run_installer(mocks=mocks, extra_env=self.env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("не ставлю .deb", proc.stderr)
-        self.assertIn("sudo", proc.stderr)
+        self.assertNotIn("не ставлю .deb", proc.stderr)
+        self.assertNotIn("нужен sudo", proc.stderr)
         self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
         self.assertFalse(any("apt-get install" in l for l in self.mock_log_lines()))
 
@@ -582,14 +581,14 @@ class TestDebPath(InstallerCase):
         proc = self.run_installer(mocks=FULL_MOCKS,
                                   extra_env={**self.env, "SUDO_N_FAIL": "1"})
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("не ставлю .deb", proc.stderr)
+        self.assertNotIn("не ставлю .deb", proc.stderr)
         self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
 
     def test_not_debian_falls_back_to_appimage(self):
         mocks = {k: v for k, v in FULL_MOCKS.items() if k not in ("apt-get", "dpkg")}
         proc = self.run_installer(mocks=mocks, extra_env=self.env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("apt-get/dpkg не найдены", proc.stderr)
+        self.assertNotIn("apt-get/dpkg не найдены", proc.stderr)
         self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
 
     def test_force_deb_without_env_fails(self):
