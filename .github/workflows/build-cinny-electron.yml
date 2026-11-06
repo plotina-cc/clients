@@ -372,6 +372,14 @@ jobs:
             --version "${{ steps.ver.outputs.app_version }}" \
             --out release-assets
 
+      - name: Add the Linux install helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp cinny-electron/scripts/install-lite-electron.sh \
+             release-assets/Plotina-Lite-Desktop-install.sh
+          test -s release-assets/Plotina-Lite-Desktop-install.sh
+
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}

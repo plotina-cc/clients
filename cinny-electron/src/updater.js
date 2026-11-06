@@ -40,7 +40,7 @@ const { pipeline } = require('node:stream/promises');
 const { createWriteStream } = require('node:fs');
 
 const UPDATE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000; // GitHub API: 60 req/h/IP
-const INITIAL_UPDATE_DELAY_MS = 30 * 1000;
+const INITIAL_UPDATE_DELAY_MS = process.env.PLOTINA_QA_UPDATES === '1' ? 1000 : 30 * 1000;
 const MAX_METADATA_CHECKS = 5;
 const WINDOWS_METADATA_FILE = 'latest.yml';
 const LINUX_METADATA_FILE = 'latest-linux.yml';

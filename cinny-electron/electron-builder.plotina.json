@@ -17,15 +17,23 @@
   "protocols": [
     {
       "name": "Plotina Lite Desktop link",
-      "schemes": ["cc.plotina.chat"]
+      "schemes": [
+        "cc.plotina.chat"
+      ]
     },
     {
       "name": "Matrix room link",
-      "schemes": ["matrix"]
+      "schemes": [
+        "matrix"
+      ]
     }
   ],
   "linux": {
-    "target": ["AppImage", "deb", "rpm"],
+    "target": [
+      "AppImage",
+      "deb",
+      "rpm"
+    ],
     "executableName": "plotina-lite-desktop",
     "icon": "build/icons",
     "category": "Network;InstantMessaging;Chat;",
@@ -55,7 +63,10 @@
     "artifactName": "Plotina-Lite-Desktop-${version}-${arch}.${ext}"
   },
   "win": {
-    "target": ["nsis", "msi"],
+    "target": [
+      "nsis",
+      "msi"
+    ],
     "executableName": "plotina-lite-desktop",
     "icon": "build/icon.ico"
   },
@@ -76,6 +87,12 @@
       "owner": "plotina-cc",
       "repo": "clients",
       "releaseType": "release"
+    }
+  ],
+  "extraResources": [
+    {
+      "from": "assets/icon.png",
+      "to": "icon.png"
     }
   ]
 }

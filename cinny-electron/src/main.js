@@ -228,8 +228,16 @@ function echoConsole(wc) {
 // Same rule as element-desktop/desktop/icon.ts. The launcher/taskbar icon
 // still comes from the hicolor theme via StartupWMClass, not from here.
 const MAX_X11_WINDOW_ICON_PX = 128;
+function iconAssetPath() {
+  // nativeImage cannot read from inside app.asar reliably; electron-builder
+  // copies this file to resources/icon.png (extraResources).
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'icon.png')
+    : path.join(__dirname, '..', 'assets', 'icon.png');
+}
+
 function getMainWindowIcon() {
-  const iconPath = path.join(__dirname, '..', 'assets', 'icon.png');
+  const iconPath = iconAssetPath();
   if (process.platform !== 'linux') return iconPath; // Windows: .ico lives in the installer
   const image = nativeImage.createFromPath(iconPath);
   if (image.isEmpty()) return iconPath;
@@ -242,7 +250,7 @@ function getMainWindowIcon() {
 // light/dark variant selection from the migration plan (§5.2) stays with the
 // tray's LITE_TRAY opt-in path, unproven in Phase 2.
 function getTrayIconPath() {
-  return path.join(__dirname, '..', 'assets', 'icon.png');
+  return iconAssetPath();
 }
 
 function createMainWindow() {
