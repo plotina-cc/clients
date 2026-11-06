@@ -28,11 +28,22 @@ cd "$HERE"
 # ---- 1. version -------------------------------------------------------------
 if [[ "${GITHUB_REF_NAME:-}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-plotina-lite-desktop\.([0-9]+)$ ]]; then
   APP_VERSION="${BASH_REMATCH[1]}-plotina.${BASH_REMATCH[2]}"
+  TAG_OK=1
 else
   APP_VERSION="4.12.8-plotina.0.local"
+  TAG_OK=0
 fi
 # Explicit override (CI workflow_dispatch input) wins over derivation.
 APP_VERSION="${APP_VERSION_OVERRIDE:-$APP_VERSION}"
+# A tag-triggered build IS the release path (workflow build-cinny-electron.yml
+# fires on v*-plotina-lite-desktop.*): a tag that does not parse to
+# <semver>-plotina.<rev> would silently stamp 0.local artifacts into the
+# updater feed. Fail loudly instead; only branch/local builds may use it.
+if [ "${GITHUB_REF_TYPE:-}" = "tag" ] && [ -z "${APP_VERSION_OVERRIDE:-}" ] && [ "$TAG_OK" != 1 ]; then
+  echo "FATAL: tag '$GITHUB_REF_NAME' is not v<semver>-plotina-lite-desktop.<rev>" >&2
+  echo "       (expected e.g. v4.12.8-plotina-lite-desktop.18 -> APP_VERSION 4.12.8-plotina.18)" >&2
+  exit 1
+fi
 echo "APP_VERSION=$APP_VERSION"
 
 TARGETS=("${@:-}")

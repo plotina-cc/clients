@@ -1,11 +1,16 @@
 name: Build Plotina Lite Desktop
 
+# RETIRED AS A RELEASE PATH. From tag v4.12.8-plotina-lite-desktop.18 onward,
+# Lite Desktop is Electron and releases are built by
+# build-cinny-electron.yml (tag trigger + release job). This Tauri workflow
+# stays workflow_dispatch-only so historical bundles (.17 and earlier) can
+# still be reproduced by hand; the releases already published from tags remain
+# as-is — the Electron feed simply supersedes them because the updater picks
+# the newest stable version (4.12.8-plotina.18 > 4.12.8-plotina.17).
+# Do NOT re-add a push.tags trigger here: it would build Tauri in parallel
+# with Electron on the same tag and race the same release.
 on:
   workflow_dispatch:
-  push:
-    tags: ["v*-plotina-lite-desktop.*"]
-    # noise/ is baked into the bundle, so a change there must rebuild too.
-    paths: ["cinny/**", "noise/**", ".github/workflows/build-cinny-desktop.yml"]
 
 permissions:
   contents: write
