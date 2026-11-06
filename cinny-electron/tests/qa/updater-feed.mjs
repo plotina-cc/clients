@@ -75,10 +75,12 @@ function tamper(b64) {
   return arr.join('');
 }
 
-export function buildFeed({ outDir, newVersion = '999.0.0', downgradeVersion = '0.0.1', artifactPath = null }) {
+export function buildFeed({ outDir, newVersion = '999.0.0', downgradeVersion = '0.0.1', artifactPath = null, errorArtifactPath = undefined }) {
   const cases = {
     available: buildFeedCase({ dir: path.join(outDir, 'available'), version: newVersion, artifactPath }),
-    error: buildFeedCase({ dir: path.join(outDir, 'error'), version: newVersion, artifactPath, tamper: true }),
+    // The error case only needs to reach the sha512 check; a 2 MB fake
+    // artifact keeps the test fast and cannot be swapped over the real app.
+    error: buildFeedCase({ dir: path.join(outDir, 'error'), version: newVersion, artifactPath: errorArtifactPath !== undefined ? errorArtifactPath : artifactPath, tamper: true }),
     // no-update case: version strictly below anything real, so a correct
     // updater must NOT offer it (also exercises the U-08 downgrade refusal).
     'no-update': buildFeedCase({ dir: path.join(outDir, 'no-update'), version: downgradeVersion, artifactPath }),

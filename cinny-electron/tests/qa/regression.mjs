@@ -310,6 +310,9 @@ scenario({ id: 'L-01', name: 'clean launch, app serves, login page, no early exi
 // ----------------------------------------------------- L-02 WM identity (X11)
 scenario({ id: 'L-02', name: 'WM_CLASS + _NET_WM_ICON non-empty + title (X11)', matrix: ['D-06'], priority: 'P0' }, async () => {
   const { main } = ctx;
+  // Electron writes _NET_WM_ICON after the window is mapped; give the WM a
+  // moment instead of racing the map (manual xprop at +8s shows the icon).
+  await sleep(5000);
   if (!spawnSync('xdotool', ['--version'], { encoding: 'utf8' }).stdout) {
     return { status: 'skip', reason: 'xdotool not installed on this host' };
   }
@@ -678,6 +681,7 @@ scenario({ id: 'U-00', name: 'local updater-feed fixtures (sha512/size correct; 
     newVersion: process.env.QA_FEED_VERSION || '999.0.0',
     downgradeVersion: '0.0.1',
     artifactPath: resolved.kind === 'appimage' && fs.statSync(path.resolve(TARGET)).isFile() ? path.resolve(TARGET) : null,
+    errorArtifactPath: null, // 2 MB fake: fast sha512 refusal, never swapped
   });
   // Self-verify: recompute digests from the served files.
   for (const [name, c] of Object.entries(cases)) {
