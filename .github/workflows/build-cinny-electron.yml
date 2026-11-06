@@ -266,7 +266,7 @@ jobs:
           # Git Bash tar treats the drive letter in an absolute path as a remote
           # host ("Cannot connect to D:"); extract from a relative path.
           cd "$GITHUB_WORKSPACE/web-in"
-          tar -xf plotina-lite-web-dist.tar -C "$GITHUB_WORKSPACE/cinny-electron/web-dist"
+          tar -xf plotina-lite-web-dist.tar -C ../cinny-electron/web-dist
           LITE_DIST="$PWD/web-dist" bash scripts/build-packages.sh windows
           # NSIS is the auto-updating installer: metadata + blockmap required.
           test -f dist/latest.yml

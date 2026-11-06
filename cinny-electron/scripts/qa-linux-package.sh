@@ -35,6 +35,7 @@ BIN=""
 APPIMAGE=""
 if [ "$KIND" = "appimage" ]; then
   ai="$(ls "$HERE"/dist/*.AppImage | head -1)"
+  chmod +x "$ai" # artifact downloads lose the executable bit
   echo "extracting $ai"
   ( cd "$WORK" && "$ai" --appimage-extract >/dev/null )
   # Run the extracted AppRun; we export APPIMAGE ourselves so the in-app
@@ -55,7 +56,7 @@ PROFILE="$WORK/profile"
 LOG="$WORK/main.log"
 export APPIMAGE LITE_USER_DATA="$PROFILE" LITE_TRAY=0 LITE_ECHO_CONSOLE=0
 echo "launching $BIN"
-"$BIN" --no-first-run >"$LOG" 2>&1 &
+"$BIN" --no-sandbox --no-first-run >"$LOG" 2>&1 &
 PID=$!
 
 TITLE_OK=0; WM_OK=0; ICON_OK=0; UPD_OK=0
