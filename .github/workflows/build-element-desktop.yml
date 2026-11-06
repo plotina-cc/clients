@@ -384,9 +384,10 @@ jobs:
           if [ "${{ matrix.name }}" = "linux" ]; then
             ai=$(ls dist/*.AppImage | head -1)
             chmod +x "$ai"
+            ai="$(cd dist && pwd)/$(basename "$ai")"
             rm -rf "$RUNNER_TEMP/appimg-check"
             mkdir -p "$RUNNER_TEMP/appimg-check"
-            ( cd "$RUNNER_TEMP/appimg-check" && "./$ai" --appimage-extract >/dev/null )
+            ( cd "$RUNNER_TEMP/appimg-check" && "$ai" --appimage-extract >/dev/null )
             d="$RUNNER_TEMP/appimg-check/squashfs-root"
             grep -qx "Name=Plotina Desktop" "$d"/*.desktop
             grep -qx "StartupWMClass=plotina-desktop" "$d"/*.desktop

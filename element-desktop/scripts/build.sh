@@ -131,6 +131,7 @@ grep -q "plotinaUpdateFeed" lib/updater.js || { echo "build.sh: lib/updater.js l
 if [ -d dist/linux-unpacked ]; then
   ai=$(ls dist/*.AppImage 2>/dev/null | head -1)
   [ -n "$ai" ] || { echo "build.sh: no AppImage to inspect" >&2; exit 1; }
+  ai="$(readlink -f "$ai")"
   rm -rf "$WORK/appimg-check"; mkdir -p "$WORK/appimg-check"
   ( cd "$WORK/appimg-check" && "$ai" --appimage-extract >/dev/null )
   d="$WORK/appimg-check/squashfs-root"
