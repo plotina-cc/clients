@@ -21,6 +21,22 @@ env:
   # Gives the build step the right to fetch sentry-cli. It is only used by the
   # debug-id injection and the upload below.
   SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+  # JS API of the Tauri plugins the Settings -> «Проверить обновления» page
+  # uses. They are not in the pinned frontend lock file, so every workflow that
+  # builds the dist installs them with --no-save first (same policy as
+  # @sentry/browser): package.json and the lock stay untouched, and these
+  # versions match the root package.json of the pinned cinny-desktop tag.
+  TAURI_JS_PACKAGES: "@tauri-apps/api@2.7.0 @tauri-apps/plugin-updater@2.9.0 @tauri-apps/plugin-process@2.3.0 @tauri-apps/plugin-http@2.5.1"
+  # Where installed clients look for updates and where the edge mirrors the
+  # signed artifacts. updater_manifest.py derives the manifest from these two
+  # constants and refuses anything that is not https on plotina.cc.
+  UPDATER_FEED: https://plotina.cc/dl/lite/latest.json
+  PLOTINA_DL: https://plotina.cc/dl/
+  # minisign PUBLIC key whose private half lives in the TAURI_SIGNING_PRIVATE_KEY
+  # secret. Public by design: it is baked into every bundle as
+  # plugins.updater.pubkey, and pinned here so the build can prove the config and
+  # the key the bundler signs with agree before anything is published.
+  UPDATER_PUBKEY: "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlFQjI2QjE3NEVFRkYwQTgKUldTbzhPOU9GMnV5bnBBLzFWZW1KOGZka3R5VUpsS0k2aHZUcHJMSGJVZ3pnbG82cXAwa2ZLd3gK"
 
 jobs:
   build:
@@ -170,6 +186,10 @@ jobs:
           # the lock keeps transitive pins like @swc/core intact (a newer
           # @swc/core breaks vite-plugin-top-level-await).
           npm install --no-save --no-audit --no-fund "@sentry/browser@${SENTRY_SDK_VERSION}"
+          # Desktop JS API: the dist imports it lazily from the update page.
+          # The web build needs it present to resolve the import; on the browser
+          # nothing ever loads the chunk (the Settings row is desktop-only).
+          npm install --no-save --no-audit --no-fund ${TAURI_JS_PACKAGES}
           VITE_SENTRY_RELEASE="$SENTRY_RELEASE" npm run build
 
       # Debug ids pair an event with its map; the maps then leave the dist so
@@ -272,6 +292,11 @@ jobs:
           else
             echo "::notice::SENTRY_DSN is empty: the bundle carries the SDK but reports nothing"
           fi
+          # The updater UI must be in the bundle: the settings row, the lazily
+          # loaded plugin chunk, and the command name the client invokes.
+          grep -Raqs 'Проверить обновления' upstream/cinny/dist/assets
+          grep -Raqs 'plugin:updater|check' upstream/cinny/dist/assets
+          grep -Raqs 'plotina_install_kind' upstream/cinny/dist/assets
           echo "patch present in the dist"
 
       - name: Install Tauri CLI
@@ -286,9 +311,105 @@ jobs:
             cp "cinny/icons/$icon" "cinny/upstream/src-tauri/icons/$icon"
           done
 
+      # A build that cannot sign cannot produce an updatable release, and the
+      # bundler would only say so after twenty minutes of compiling. Say it now.
+      - name: Preflight the updater signing key
+        shell: bash
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SIGNING_KEY:-}" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set. bundle.createUpdaterArtifacts is true, so every bundle must be signed; add the secret (repository secrets, minisign private key for the Lite updater) before building."
+            exit 1
+          fi
+          # Report presence only, never content.
+          if [ -n "${SIGNING_KEY_PASSWORD:-}" ]; then pw=set; else pw=empty; fi
+          echo "signing key present: ${#SIGNING_KEY} characters; password: $pw"
+          if ! printf '%s' "$UPDATER_PUBKEY" | base64 -d | grep -q 'minisign public key'; then
+            echo "::error::UPDATER_PUBKEY is not base64 minisign public-key text"
+            exit 1
+          fi
+
+      # Upstream pins the app version to the Cinny tag, so every Plotina build
+      # would report the same version and the updater could never tell one build
+      # from the next. Stamp it from the tag before bundling.
+      - name: Stamp the build config
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The Rust updater plugin is compile-time: upstream keeps it behind the
+          # "updater" feature in src-tauri/Cargo.toml default features. If a
+          # future tag moves it, the app would bundle fine and still be unable
+          # to update itself, so fail here rather than ship that.
+          if ! grep -Eq '^default = .*"updater"' cinny/upstream/src-tauri/Cargo.toml; then
+            echo "::error::the updater feature is not in src-tauri default features any more; the client cannot update itself"
+            exit 1
+          fi
+          python3 cinny/scripts/build_config.py config \
+            --overlay cinny/tauri.plotina.json \
+            --out "$RUNNER_TEMP/tauri.plotina.build.json" \
+            --ref-name "${GITHUB_REF_NAME}" \
+            --upstream-tag-file cinny/UPSTREAM_TAG
+          version="$(python3 cinny/scripts/build_config.py version \
+            --ref-name "${GITHUB_REF_NAME}" --upstream-tag-file cinny/UPSTREAM_TAG)"
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+        id: stamped
+
       - name: Build installers
         working-directory: cinny/upstream
-        run: npm run tauri -- build --config "${{ github.workspace }}/cinny/tauri.plotina.json" --bundles ${{ matrix.bundles }}
+        env:
+          # Content, not a path: the runner cannot see ~/.tauri on this machine.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri -- build --config "$RUNNER_TEMP/tauri.plotina.build.json" --bundles ${{ matrix.bundles }}
+
+      # What the updater actually downloads must be the file the signature
+      # covers, and the signature must verify with the key the shipped app
+      # carries. This is the only place in the pipeline that proves it.
+      - name: Locate the updater artifact
+        id: updater
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="cinny/upstream/src-tauri/target/release/bundle"
+          if [ "${{ matrix.name }}" = linux ]; then
+            artifact="$(ls "$bundle"/appimage/*.AppImage 2>/dev/null | head -1)"
+            kind=linux-x86_64
+          else
+            artifact="$(ls "$bundle"/nsis/*-setup.exe 2>/dev/null | head -1)"
+            kind=windows-x86_64
+          fi
+          if [ -z "$artifact" ]; then
+            echo "::error::no updater artifact was bundled for ${{ matrix.name }}"
+            ls -R "$bundle" || true
+            exit 1
+          fi
+          if [ ! -f "${artifact}.sig" ]; then
+            echo "::error::${artifact} has no signature next to it"
+            echo "::error::createUpdaterArtifacts must be true and the signing key present"
+            find "$bundle" -maxdepth 2 -type f | sort
+            exit 1
+          fi
+          # 'v1Compatible' artifacts are a different file (.tar.gz) than the one
+          # the stable /dl alias serves; the feed points at the served one.
+          if ls "$bundle"/appimage/*.AppImage.tar.gz >/dev/null 2>&1; then
+            echo "::error::the bundler produced v1Compatible .tar.gz updater artifacts; the feed would sign a file the edge does not serve"
+            exit 1
+          fi
+          echo "artifact=$(realpath "$artifact")" >> "$GITHUB_OUTPUT"
+          echo "sig=$(realpath "${artifact}.sig")" >> "$GITHUB_OUTPUT"
+          echo "platform=$kind" >> "$GITHUB_OUTPUT"
+          echo "updater artifact: $(basename "$artifact") (+ .sig)"
+
+      - name: Verify the updater signature against the shipped pubkey
+        working-directory: cinny/upstream/src-tauri
+        env:
+          PLOTINA_UPDATER_CONFIG: ${{ github.workspace }}/cinny/tauri.plotina.json
+          PLOTINA_UPDATE_ARTIFACT: ${{ steps.updater.outputs.artifact }}
+          PLOTINA_UPDATE_SIG: ${{ steps.updater.outputs.sig }}
+        run: cargo test --release --test updater_signature -- --nocapture
 
       - name: Rewrite deb branding
         if: matrix.name == 'linux'
@@ -313,6 +434,11 @@ jobs:
           for f in cinny/upstream/src-tauri/target/release/bundle/rpm/*.rpm;           do cp "$f" stable/Plotina-Lite-Desktop.rpm; done
           for f in cinny/upstream/src-tauri/target/release/bundle/nsis/*.exe;          do cp "$f" stable/Plotina-Lite-Desktop-setup.exe; done
           for f in cinny/upstream/src-tauri/target/release/bundle/msi/*.msi;           do cp "$f" stable/Plotina-Lite-Desktop.msi; done
+          # Updater signatures: the .sig text becomes the "signature" field of
+          # latest.json (see the updater-manifest job). Published next to the
+          # artifacts as well, so a mirror can be checked without the manifest.
+          for f in cinny/upstream/src-tauri/target/release/bundle/appimage/*.AppImage.sig; do cp "$f" stable/Plotina-Lite-Desktop.AppImage.sig; done
+          for f in cinny/upstream/src-tauri/target/release/bundle/nsis/*-setup.exe.sig;    do cp "$f" stable/Plotina-Lite-Desktop-setup.exe.sig; done
           ls -lh stable
 
       - uses: actions/upload-artifact@v4
@@ -321,9 +447,103 @@ jobs:
           if-no-files-found: warn
           path: stable/*
 
+  # The feed is one JSON object that names BOTH platform artifacts, so it can
+  # only be assembled after the matrix finished. It runs on a branch dispatch as
+  # well: that is how the signing + manifest path is proven without burning a
+  # release tag.
+  updater-manifest:
+    name: updater manifest
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: plotina-lite-desktop-linux
+          path: dist/linux
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: plotina-lite-desktop-windows
+          path: dist/windows
+
+      - name: Name the build
+        id: stamped
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python3 cinny/scripts/build_config.py version \
+            --ref-name "${GITHUB_REF_NAME}" --upstream-tag-file cinny/UPSTREAM_TAG)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "app version: $version"
+
+      - name: Write the update notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/notes.md"
+          {
+            printf 'Plotina Lite Desktop %s (версия сборки %s).\n\n' "${GITHUB_REF_NAME}" "${{ steps.stamped.outputs.version }}"
+            printf 'Обновление приходит только с plotina.cc и проверяется подписью.\n'
+            printf 'Linux — AppImage, Windows — установщик NSIS (setup.exe).\n'
+            printf 'MSI и пакеты deb/rpm обновляются вручную: автообновление для них недоступно.\n'
+            if [ "${GITHUB_REF_TYPE}" = tag ]; then
+              printf '\nСписок изменений: https://github.com/plotina-cc/clients/releases/tag/%s\n' "${GITHUB_REF_NAME}"
+            fi
+          } > "$notes"
+          cat "$notes"
+
+      - name: Assemble latest.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 cinny/scripts/updater_manifest.py build \
+            --version "${{ steps.stamped.outputs.version }}" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --platform linux-x86_64=dist/linux/Plotina-Lite-Desktop.AppImage.sig \
+            --platform windows-x86_64=dist/windows/Plotina-Lite-Desktop-setup.exe.sig \
+            --out dist/update-lite-desktop.json
+          python3 cinny/scripts/updater_manifest.py validate \
+            --manifest dist/update-lite-desktop.json
+          python3 - <<'PY'
+          import json
+          data = json.load(open('dist/update-lite-desktop.json'))
+          print('served as https://plotina.cc/dl/lite/latest.json')
+          print('version  :', data['version'])
+          print('pub_date :', data['pub_date'])
+          for platform, entry in sorted(data['platforms'].items()):
+              print(f'{platform:16s} {entry["url"]}  signature {len(entry["signature"])} chars')
+          PY
+
+      - name: Assert the feed is https-only and on our host
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, sys
+          data = json.load(open('dist/update-lite-desktop.json'))
+          bad = [u for p in data['platforms'].values()
+                 for u in [p['url']] if not u.startswith('https://plotina.cc/dl/')]
+          if bad:
+              print('::error::non-plotina or non-https updater URL: ' + ', '.join(bad))
+              sys.exit(1)
+          print('all updater artifact URLs are https on plotina.cc:', ', '.join(
+              p['url'] for p in data['platforms'].values()))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plotina-lite-updater-manifest
+          path: dist/update-lite-desktop.json
+
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: [build, updater-manifest]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -351,6 +571,12 @@ jobs:
             Шумоподавление с уровнем по умолчанию 60, настраивается в Настройки → General → Sound.
             Windows: установщик не подписан, SmartScreen попросит подтверждение.
             Linux: AppImage, deb (Debian/Ubuntu) или rpm (Fedora/openSUSE).
+
+            Обновления теперь проверяются в приложении: Настройки → «Проверить обновления».
+            Автообновление работает для AppImage (Linux) и NSIS-установщика (Windows);
+            MSI и пакеты deb/rpm обновляются вручную — скачать свежий установщик с этой
+            страницы. Сборки .17 и старше источник обновлений не имели: их нужно
+            установить вручную один раз, дальше приложение справится само.
 
             Исходники этой сборки — в этом репозитории (AGPL-3.0): upstream-тег cinny-desktop из cinny/UPSTREAM_TAG и его submodule cinny плюс оверлей cinny/.
             Полный набор: https://github.com/plotina-cc/clients/blob/main/SOURCE.md

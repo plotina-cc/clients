@@ -157,6 +157,13 @@ jobs:
           # package.json and package-lock.json untouched, and letting npm read
           # the lock keeps transitive pins like @swc/core intact.
           npm install --no-save --no-audit --no-fund "@sentry/browser@${SENTRY_SDK_VERSION}"
+          # The desktop updater UI lives in the same source tree, so the browser
+          # bundle has to resolve @tauri-apps/* too. Nothing loads it on the web:
+          # the Settings row only appears when window.__TAURI_INTERNALS__ exists,
+          # and the plugin code sits in a lazy chunk the page never fetches.
+          npm install --no-save --no-audit --no-fund \
+            "@tauri-apps/api@2.7.0" "@tauri-apps/plugin-updater@2.9.0" \
+            "@tauri-apps/plugin-process@2.3.0" "@tauri-apps/plugin-http@2.5.1"
           VITE_SENTRY_RELEASE="$SENTRY_RELEASE" npm run build
 
       # Debug ids pair an event with its map, and the maps then leave the dist:

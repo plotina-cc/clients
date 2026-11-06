@@ -1,0 +1,734 @@
+diff --git a/src-tauri/Cargo.lock b/src-tauri/Cargo.lock
+index fd0d2ff..d12b7eb 100644
+--- a/src-tauri/Cargo.lock
++++ b/src-tauri/Cargo.lock
+@@ -523,6 +523,8 @@ checksum = "6e4de3bc4ea267985becf712dc6d9eed8b04c953b3fcfb339ebc87acd9804901"
+ name = "cinny"
+ version = "4.12.8"
+ dependencies = [
++ "base64 0.22.1",
++ "minisign-verify",
+  "serde",
+  "serde_json",
+  "tauri",
+@@ -540,6 +542,7 @@ dependencies = [
+  "tauri-plugin-shell",
+  "tauri-plugin-updater",
+  "tauri-plugin-window-state",
++ "webkit2gtk",
+ ]
+ 
+ [[package]]
+diff --git a/src-tauri/Cargo.toml b/src-tauri/Cargo.toml
+index 5caafa7..8983669 100644
+--- a/src-tauri/Cargo.toml
++++ b/src-tauri/Cargo.toml
+@@ -50,6 +50,13 @@ tauri-plugin-updater = { version = "2.10.1", features = ["rustls-tls"], optional
+ # with a `cargo tree -d webkit2gtk` check.
+ webkit2gtk = "=2.0.2"
+ 
++[dev-dependencies]
++# The same verifier tauri-plugin-updater uses at runtime, so tests/updater_signature.rs
++# checks signatures exactly the way an installed client will (base64 unwraps the
++# .sig document the same way the plugin does).
++minisign-verify = "0.2.5"
++base64 = "0.22"
++
+ [lib]
+ name = "app_lib"
+ crate-type = ["staticlib", "cdylib", "rlib"]
+diff --git a/src-tauri/capabilities/migrated.json b/src-tauri/capabilities/migrated.json
+index 8e0427b..d3cb8d3 100644
+--- a/src-tauri/capabilities/migrated.json
++++ b/src-tauri/capabilities/migrated.json
+@@ -78,6 +78,7 @@
+     "os:allow-hostname",
+     "process:allow-restart",
+     "process:allow-exit",
++    "updater:default",
+     "clipboard-manager:allow-read-text",
+     "clipboard-manager:allow-write-text",
+     "core:app:allow-app-show",
+diff --git a/src-tauri/src/install_kind.rs b/src-tauri/src/install_kind.rs
+new file mode 100644
+index 0000000..882d062
+--- /dev/null
++++ b/src-tauri/src/install_kind.rs
+@@ -0,0 +1,389 @@
++//! Which kind of install is running, and whether the built-in updater may touch
++//! it.
++//!
++//! The updater replaces the artifact the process is running from: on Linux it
++//! swaps the AppImage file, on Windows it runs the new NSIS `*-setup.exe` (and
++//! when it is handed an MSI it calls `msiexec /i` for us). The feed we publish
++//! carries exactly one artifact per platform — the AppImage and the NSIS
++//! installer — because those are the signed stable `/dl` aliases. And Tauri
++//! resolves a platform entry as `<os>-<arch>-<installer>` first, then falls back
++//! to the bare `<os>-<arch>`, so an install of any other kind that asks this
++//! feed for an update is handed the NSIS/AppImage payload anyway:
++//!
++//! * a **deb/rpm** install would have to run `dpkg -i`/`rpm -U` from inside a
++//!   GUI app (root or polkit), and it fights the apt/dnf repository we operate:
++//!   the package database ends up describing a version nobody installed through
++//!   it, and the next `apt upgrade` argues with that.
++//! * an **MSI** install is owned by the Windows Installer database. Running an
++//!   NSIS setup over an MSI product leaves two uninstall entries and an MSI
++//!   database that no longer matches the files on disk.
++//!
++//! So the client asks this before it checks a feed and shows an honest
++//! manual-install state instead of a progress bar that is going to fail.
++//! `cinny/README.md` ("Updater") keeps the same list from the release side; if
++//! MSI installs should ever update themselves the way to do it is to publish and
++//! sign the `.msi` too and add a `windows-x86_64-msi` key — not to let the bare
++//! key serve them an NSIS payload.
++//!
++//! The OS probes are tiny wrappers around `reg.exe` and the filesystem; every
++//! decision is made by a pure function so it can be tested on any host.
++
++#[cfg(target_os = "windows")]
++use std::path::Path;
++
++/// How this copy of Plotina Lite Desktop was installed.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum InstallKind {
++    /// Running from an AppImage file (`$APPIMAGE` or a `.AppImage` path).
++    AppImage,
++    /// Installed as a distribution package (deb or rpm).
++    Package,
++    /// Installed with the Tauri NSIS installer (uninstall exe beside the app).
++    Nsis,
++    /// Installed with the Tauri MSI (Windows Installer owns the package).
++    Msi,
++    /// Anything else: a raw binary from a build directory, an unknown tool.
++    Other,
++    /// The probe could not run. Treated as "do not auto-update".
++    Unknown,
++}
++
++impl InstallKind {
++    /// Stable string for the IPC boundary — the client matches on these exact
++    /// values, so renaming one is a breaking change.
++    pub fn as_str(self) -> &'static str {
++        match self {
++            InstallKind::AppImage => "appimage",
++            InstallKind::Package => "package",
++            InstallKind::Nsis => "nsis",
++            InstallKind::Msi => "msi",
++            InstallKind::Other => "other",
++            InstallKind::Unknown => "unknown",
++        }
++    }
++
++    /// Can the updater finish for this kind of install?
++    pub fn updatable(self) -> bool {
++        matches!(self, InstallKind::AppImage | InstallKind::Nsis)
++    }
++}
++
++/// Linux: the AppImage runtime exports `$APPIMAGE` pointing at the file it was
++/// started from. `--appimage-extract-and-run` (what CI and some sandboxes use)
++/// keeps `.AppImage` in the executable path instead. Everything else — a deb
++/// or rpm install runs `/usr/bin/plotina-lite` — is a package install.
++pub fn linux_install_kind(appimage_env: Option<&str>, exe_path: &str) -> InstallKind {
++    if appimage_env.map(str::trim).filter(|value| !value.is_empty()).is_some() {
++        return InstallKind::AppImage;
++    }
++    if exe_path.contains(".AppImage") {
++        return InstallKind::AppImage;
++    }
++    InstallKind::Package
++}
++
++/// Windows, as a decision table over three probes:
++///
++/// * the NSIS installer always writes its uninstaller next to the executable;
++/// * it also registers the uninstall key under the app identifier
++///   (`cc.plotina.chat`), which is a second, independent sign of an NSIS
++///   install;
++/// * the MSI registers under its product-code GUID with `WindowsInstaller=1`
++///   and leaves no uninstaller file of its own.
++///
++/// An uninstaller file therefore wins even if a stray MSI key exists (an
++/// NSIS install made on top of an old MSI, which the MSI probe would still
++/// see). No evidence at all is `Other`, not `Msi`: guessing MSI would show the
++/// wrong download link on, say, a portable build.
++pub fn windows_install_kind(
++    uninstaller_file_present: bool,
++    identifier_key_present: bool,
++    msi_entry_present: bool,
++) -> InstallKind {
++    if uninstaller_file_present || identifier_key_present {
++        InstallKind::Nsis
++    } else if msi_entry_present {
++        InstallKind::Msi
++    } else {
++        InstallKind::Other
++    }
++}
++
++/// Key paths in `reg query` output: one per line, unindented, starting with
++/// `HKEY_`. Value lines are indented, so they never match.
++pub fn reg_key_paths(output: &str) -> Vec<&str> {
++    output
++        .lines()
++        .map(str::trim_end)
++        .filter(|line| line.starts_with("HKEY_"))
++        .collect()
++}
++
++/// Read one value out of `reg query` output. A value line looks like
++/// `    DisplayName    REG_SZ    Plotina Lite Desktop`: name, type, then the
++/// data, which may itself contain spaces and quotes.
++pub fn reg_value<'a>(output: &'a str, name: &str) -> Option<&'a str> {
++    for line in output.lines() {
++        let line = line.trim_start();
++        if line.is_empty() || line.starts_with("HKEY_") || line.starts_with("End of ") {
++            continue;
++        }
++        let Some((first, rest)) = split_once_space(line) else {
++            continue;
++        };
++        if !first.eq_ignore_ascii_case(name) {
++            continue;
++        }
++        // `rest` still starts with the value type (REG_SZ, REG_DWORD, ...).
++        let Some((_type, data)) = split_once_space(rest.trim_start()) else {
++            continue;
++        };
++        return Some(data.trim());
++    }
++    None
++}
++
++/// True when a `WindowsInstaller` value of `1` is present — the mark of a
++/// package the Windows Installer service owns. reg.exe prints DWORDs in hex
++/// (`REG_DWORD    0x1`), so both spellings are understood; anything else,
++/// including `0x0` and a missing value, is not ours to trust.
++pub fn is_windows_installer_entry(output: &str) -> bool {
++    let Some(value) = reg_value(output, "WindowsInstaller") else {
++        return false;
++    };
++    let value = value.trim().to_lowercase();
++    let digits = value.strip_prefix("0x").unwrap_or(&value);
++    u64::from_str_radix(digits, if value.starts_with("0x") { 16 } else { 10 })
++        .map(|number| number == 1)
++        .unwrap_or(false)
++}
++
++fn split_once_space(text: &str) -> Option<(&str, &str)> {
++    let index = text.char_indices().find_map(|(at, ch)| ch.is_whitespace().then_some(at))?;
++    Some((&text[..index], &text[index..]))
++}
++
++/// The app identifier, kept in sync with cinny/tauri.plotina.json. It is also
++/// the NSIS uninstall key name, which is why it is worth a constant.
++#[cfg(target_os = "windows")]
++pub const APP_IDENTIFIER: &str = "cc.plotina.chat";
++#[cfg(target_os = "windows")]
++pub const PRODUCT_NAME: &str = "Plotina Lite Desktop";
++#[cfg(target_os = "windows")]
++const UNINSTALL_ROOTS: [&str; 2] = [
++    r"HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall",
++    r"HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall",
++];
++
++#[cfg(target_os = "windows")]
++fn reg_query(args: &[&str]) -> Option<String> {
++    let output = std::process::Command::new("reg")
++        .args(args)
++        .output()
++        .ok()?;
++    if !output.status.success() {
++        return None;
++    }
++    Some(String::from_utf8_lossy(&output.stdout).into_owned())
++}
++
++#[cfg(target_os = "windows")]
++fn identifier_key_present() -> bool {
++    UNINSTALL_ROOTS.into_iter().any(|root| {
++        let key = format!("{}\\{}", root, APP_IDENTIFIER);
++        reg_query(&["query", key.as_str()]).is_some()
++    })
++}
++
++#[cfg(target_os = "windows")]
++fn msi_entry_present() -> bool {
++    // Find uninstall entries whose *value data* is our product name, then ask
++    // Windows Installer about each of them. `/d` matches data, `/s` descends
++    // into the product-code subkeys.
++    UNINSTALL_ROOTS.iter().any(|root| {
++        let Some(search) = reg_query(&["query", *root, "/f", PRODUCT_NAME, "/d", "/s"]) else {
++            return false;
++        };
++        for key in reg_key_paths(&search) {
++            if let Some(found) = reg_query(&["query", key, "/v", "WindowsInstaller"]) {
++                if is_windows_installer_entry(&found) {
++                    return true;
++                }
++            }
++        }
++        false
++    })
++}
++
++#[cfg(target_os = "windows")]
++fn uninstaller_file_present() -> bool {
++    let Some(exe) = std::env::current_exe().ok() else {
++        return false;
++    };
++    let Some(dir) = exe.parent().map(Path::to_path_buf) else {
++        return false;
++    };
++    let Ok(entries) = std::fs::read_dir(dir) else {
++        return false;
++    };
++    entries.filter_map(Result::ok).any(|entry| {
++        let file_name = entry.file_name().to_string_lossy().into_owned();
++        let lower = file_name.to_lowercase();
++        lower.starts_with("uninstall") && lower.ends_with(".exe")
++    })
++}
++
++#[cfg(target_os = "windows")]
++pub fn detect() -> InstallKind {
++    windows_install_kind(uninstaller_file_present(), identifier_key_present(), msi_entry_present())
++}
++
++#[cfg(target_os = "linux")]
++pub fn detect() -> InstallKind {
++    let exe = std::env::current_exe()
++        .ok()
++        .map(|path| path.to_string_lossy().into_owned())
++        .unwrap_or_default();
++    linux_install_kind(std::env::var("APPIMAGE").ok().as_deref(), &exe)
++}
++
++/// macOS bundles are updated by replacing the .app (we publish none), and no
++/// other target exists: report a manual install.
++#[cfg(not(any(target_os = "linux", target_os = "windows")))]
++pub fn detect() -> InstallKind {
++    InstallKind::Other
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn appimage_is_detected_from_the_environment_variable() {
++        assert_eq!(
++            linux_install_kind(Some("/home/user/Plotina-Lite-Desktop.AppImage"), "/tmp/x/plotina-lite"),
++            InstallKind::AppImage
++        );
++    }
++
++    #[test]
++    fn a_mounted_runtime_path_without_the_variable_is_not_claimed_as_appimage() {
++        // With APPIMAGE_EXTRACT_AND_RUN the runtime exports no $APPIMAGE and the
++        // executable lives in a temp mount. The updater cannot write back to
++        // that either, so a package/manual answer is the honest one.
++        assert_eq!(
++            linux_install_kind(None, "/tmp/.mount_PlotinAbCdEf/usr/bin/plotina-lite"),
++            InstallKind::Package
++        );
++        assert_eq!(
++            linux_install_kind(None, "/home/user/Downloads/Plotina-Lite-Desktop.AppImage"),
++            InstallKind::AppImage
++        );
++    }
++
++    #[test]
++    fn blank_appimage_variable_is_not_an_appimage() {
++        assert_eq!(linux_install_kind(Some("   "), "/usr/bin/plotina-lite"), InstallKind::Package);
++    }
++
++    #[test]
++    fn deb_and_rpm_installs_are_packages() {
++        assert_eq!(linux_install_kind(None, "/usr/bin/plotina-lite"), InstallKind::Package);
++        assert_eq!(linux_install_kind(None, ""), InstallKind::Package);
++    }
++
++    #[test]
++    fn nsis_wins_over_the_msi_probe() {
++        assert_eq!(windows_install_kind(true, false, false), InstallKind::Nsis);
++        assert_eq!(windows_install_kind(false, true, false), InstallKind::Nsis);
++        // an NSIS install that also left an MSI key behind still updates
++        assert_eq!(windows_install_kind(true, false, true), InstallKind::Nsis);
++    }
++
++    #[test]
++    fn msi_only_when_the_msi_probe_answered() {
++        assert_eq!(windows_install_kind(false, false, true), InstallKind::Msi);
++    }
++
++    #[test]
++    fn no_evidence_is_other_not_msi() {
++        assert_eq!(windows_install_kind(false, false, false), InstallKind::Other);
++    }
++
++    #[test]
++    fn only_appimage_and_nsis_are_updatable() {
++        assert!(InstallKind::AppImage.updatable());
++        assert!(InstallKind::Nsis.updatable());
++        for kind in [
++            InstallKind::Msi,
++            InstallKind::Package,
++            InstallKind::Other,
++            InstallKind::Unknown,
++        ] {
++            assert!(!kind.updatable(), "{}", kind.as_str());
++        }
++    }
++
++    #[test]
++    fn wire_names_are_stable() {
++        // the client matches on these strings (src/plotina/updater.ts)
++        assert_eq!(InstallKind::AppImage.as_str(), "appimage");
++        assert_eq!(InstallKind::Package.as_str(), "package");
++        assert_eq!(InstallKind::Nsis.as_str(), "nsis");
++        assert_eq!(InstallKind::Msi.as_str(), "msi");
++        assert_eq!(InstallKind::Other.as_str(), "other");
++        assert_eq!(InstallKind::Unknown.as_str(), "unknown");
++    }
++
++    // canned `reg query` output, exactly as reg.exe prints it
++    const NSIS_KEY_DUMP: &str = "\nHKEY_CURRENT_USER\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\cc.plotina.chat\n    DisplayName    REG_SZ    Plotina Lite Desktop\n    DisplayVersion    REG_SZ    4.12.818\n    UninstallString    REG_SZ    \"C:\\Program Files\\Plotina Lite Desktop\\Uninstall Plotina Lite Desktop.exe\"\n    DisplayIcon    REG_SZ    C:\\Program Files\\Plotina Lite Desktop\\plotina-lite.exe\n\n";
++
++    const MSI_KEY_DUMP: &str = "\nHKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\{6C1B2A3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D}\n    DisplayName    REG_SZ    Plotina Lite Desktop\n    DisplayVersion    REG_SZ    4.12.818\n    WindowsInstaller    REG_DWORD    0x1\n    UninstallString    REG_SZ    MsiExec.exe /X{6C1B2A3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D}\n\nEnd of search: 1 match(es) found.\n";
++
++    #[test]
++    fn reg_key_paths_only_returns_key_lines() {
++        let paths = reg_key_paths(MSI_KEY_DUMP);
++        assert_eq!(paths.len(), 1);
++        assert!(paths[0].ends_with("Uninstall\\{6C1B2A3D-4E5F-6A7B-8C9D-0E1F2A3B4C5D}"));
++        assert!(reg_key_paths(NSIS_KEY_DUMP)[0].starts_with("HKEY_CURRENT_USER"));
++    }
++
++    #[test]
++    fn reg_value_keeps_spaces_and_quotes_in_the_data() {
++        assert_eq!(
++            reg_value(NSIS_KEY_DUMP, "DisplayName"),
++            Some("Plotina Lite Desktop")
++        );
++        assert_eq!(reg_value(NSIS_KEY_DUMP, "displayversion"), Some("4.12.818"));
++        assert_eq!(
++            reg_value(NSIS_KEY_DUMP, "UninstallString"),
++            Some("\"C:\\Program Files\\Plotina Lite Desktop\\Uninstall Plotina Lite Desktop.exe\"")
++        );
++        assert_eq!(reg_value(NSIS_KEY_DUMP, "WindowsInstaller"), None);
++    }
++
++    #[test]
++    fn windows_installer_flag_is_read_from_the_value() {
++        assert!(is_windows_installer_entry(MSI_KEY_DUMP));
++        assert!(!is_windows_installer_entry(NSIS_KEY_DUMP));
++        // a WindowsInstaller value that is not 1 is not ours to trust
++        assert!(!is_windows_installer_entry("    WindowsInstaller    REG_DWORD    0x0\n"));
++    }
++
++    #[test]
++    fn detect_never_panics_without_evidence() {
++        let kind = detect();
++        assert!(!kind.as_str().is_empty());
++        // on the Linux test host this is a package/dev build; the point is that
++        // detection answers something the client understands.
++        assert!(matches!(
++            kind,
++            InstallKind::AppImage
++                | InstallKind::Package
++                | InstallKind::Nsis
++                | InstallKind::Msi
++                | InstallKind::Other
++                | InstallKind::Unknown
++        ));
++    }
++}
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 928510c..698d098 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -6,6 +6,7 @@
+ // mod menu;
+ 
+ mod linux_media;
++mod install_kind;
+ 
+ use std::sync::atomic::{AtomicUsize, Ordering};
+ use tauri::{webview::{NewWindowResponse, WebviewWindowBuilder}, WebviewUrl, TitleBarStyle};
+@@ -215,10 +216,17 @@ mod sso_tests {
+   }
+ }
+ 
+-#[cfg(feature = "updater")]
+-use tauri_plugin_updater::UpdaterExt;
+-#[cfg(feature = "updater")]
+-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
++/// Which installer this copy came from (appimage | package | nsis | msi |
++/// other | unknown). The Settings → «Проверить обновления» page asks this before
++/// it touches a feed: our feed carries one signed artifact per platform, so an
++/// install of another kind (deb/rpm on Linux, MSI on Windows) would be handed
++/// the AppImage/NSIS payload and apply it over its package manager's database.
++/// Those kinds get an honest manual-install state instead.
++/// See `install_kind` and the "Updater" section of cinny/README.md.
++#[tauri::command]
++fn plotina_install_kind() -> String {
++    install_kind::detect().as_str().to_string()
++}
+ 
+ pub fn run() {
+     
+@@ -256,40 +264,19 @@ pub fn run() {
+         .plugin(tauri_plugin_localhost::Builder::new(port).build())
+         .plugin(tauri_plugin_window_state::Builder::default().build())
+         .plugin(tauri_plugin_opener::init())
++        // App-defined commands are not gated by the plugin ACL, but the origin
++        // allowed to call them is: capabilities/migrated.json lists exactly the
++        // localhost origin the frontend is served from, and only `main` (the
++        // sign-in child window stays outside it).
++        .invoke_handler(tauri::generate_handler![plotina_install_kind])
+         .setup(move |app| {
+-            #[cfg(feature = "updater")]
+-            {
+-                let handle = app.handle().clone();
+-                tauri::async_runtime::spawn(async move {
+-                    let updater = match handle.updater() {
+-                        Ok(u) => u,
+-                        Err(e) => {
+-                            eprintln!("Updater not available: {}", e);
+-                            return;
+-                        }
+-                    };
+-                    if let Ok(Some(update)) = updater.check().await {
+-                        let version = update.version.clone();
+-
+-                        let should_update = handle
+-                            .dialog()
+-                            .message(format!(
+-                                "Version {} is available.\n\nWould you like to update now?",
+-                                version
+-                            ))
+-                            .title("Update Available")
+-                            .kind(MessageDialogKind::Info)
+-                            .buttons(MessageDialogButtons::YesNo)
+-                            .blocking_show();
+-
+-                        if should_update {
+-                            if update.download_and_install(|_, _| {}, || {}).await.is_ok() {
+-                                handle.restart();
+-                            }
+-                        }
+-                    }
+-                });
+-            }
++            // Plotina: no update prompt at startup. Upstream checked the feed
++            // here and answered with a native yes/no dialog — unthemed, English,
++            // and it could start a download mid-call. An update is now always an
++            // explicit act in Settings → «Проверить обновления», which also knows
++            // whether this install can be moved at all (plotina_install_kind).
++            // The updater plugin itself stays registered above; only the
++            // spontaneous prompt is gone.
+ 
+             // Dev: use devUrl from tauri.conf.json (http://localhost:8080) to support HMR
+             #[cfg(debug_assertions)]
+diff --git a/src-tauri/tests/updater_signature.rs b/src-tauri/tests/updater_signature.rs
+new file mode 100644
+index 0000000..f796992
+--- /dev/null
++++ b/src-tauri/tests/updater_signature.rs
+@@ -0,0 +1,195 @@
++//! The updater is only as good as the pairing between three things that live in
++//! different places: the public key compiled into the client
++//! (`cinny/tauri.plotina.json`), the `.sig` file CI produces next to a bundle,
++//! and the bytes the edge then serves at the URL inside `latest.json`. A
++//! mismatch is invisible until somebody's client refuses an update — and it is
++//! unrecoverable for the release, because the manifest is already published.
++//!
++//! This test replays `tauri_plugin_updater::verify_signature` (the function the
++//! plugin runs before it installs anything) on the built artifact:
++//!
++//! ```text
++//! base64_to_string(config pubkey)  -> minisign_verify::PublicKey::decode
++//! base64_to_string(.sig content)   -> minisign_verify::Signature::decode
++//! public_key.verify(bytes, signature, true)      // allow_prehashed = true
++//! ```
++//!
++//! so "it verifies here" means "an installed client accepts it", with the same
++//! wrapped-base64 quirks (the `.sig` file is ONE base64 line that *contains* the
++//! minisign document, not the document itself).
++//!
++//! Two tests:
++//!
++//! * `shipped_pubkey_is_a_usable_minisign_key` always runs: the key in the
++//!   repository has to decode as a minisign public key. Copy-paste damage (a
++//!   dropped character, the private key by mistake, a wrapped line) is the
++//!   classic way to ship a client that can never verify anything.
++//! * `bundled_artifact_verifies_against_the_shipped_pubkey` runs when CI hands
++//!   it the built bundle through the environment:
++//!
++//!       PLOTINA_UPDATE_ARTIFACT=…/Plotina-Lite-Desktop.AppImage
++//!       PLOTINA_UPDATE_SIG=…/Plotina-Lite-Desktop.AppImage.sig
++//!       PLOTINA_UPDATER_CONFIG=…/cinny/tauri.plotina.json    (optional)
++//!
++//!   Absent variables mean "nothing was built here", which is not a failure for
++//!   a normal `cargo test`. A variable that points at a missing file, or a
++//!   signature that does not verify against the shipped key, is a failure — and
++//!   so is a signature that would still verify after flipping one byte.
++
++use base64::Engine as _;
++use minisign_verify::{PublicKey, Signature};
++use std::path::{Path, PathBuf};
++
++fn config_path() -> PathBuf {
++    if let Ok(path) = std::env::var("PLOTINA_UPDATER_CONFIG") {
++        return PathBuf::from(path);
++    }
++    // src-tauri -> upstream -> cinny (our overlay lives beside the README)
++    Path::new(env!("CARGO_MANIFEST_DIR"))
++        .join("..")
++        .join("..")
++        .join("tauri.plotina.json")
++}
++
++/// The plugin's `base64_to_string`: standard alphabet, the result must be UTF-8.
++fn base64_to_string(value: &str) -> Result<String, String> {
++    let raw = base64::engine::general_purpose::STANDARD
++        .decode(value.trim())
++        .map_err(|e| format!("base64 decode failed: {e}"))?;
++    String::from_utf8(raw)
++        .map_err(|e| format!("decoded bytes are not utf-8: {e}"))
++}
++
++/// `plugins.updater.pubkey` from the shipped overlay, as a minisign key.
++fn shipped_public_key() -> Result<(PublicKey, String), String> {
++    let path = config_path();
++    let text = std::fs::read_to_string(&path)
++        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
++    let json: serde_json::Value =
++        serde_json::from_str(&text).map_err(|e| format!("{} is not JSON: {e}", path.display()))?;
++    let encoded = json["plugins"]["updater"]["pubkey"]
++        .as_str()
++        .ok_or_else(|| format!("no plugins.updater.pubkey in {}", path.display()))?
++        .to_string();
++    let document = base64_to_string(&encoded)?;
++    if !document.starts_with("untrusted comment: minisign public key") {
++        return Err(format!(
++            "plugins.updater.pubkey does not wrap a minisign public key (starts with {:?})",
++            document.chars().take(40).collect::<String>()
++        ));
++    }
++    let public_key = PublicKey::decode(&document)
++        .map_err(|e| format!("the pubkey in {} is not a valid minisign public key: {e}",
++                             path.display()))?;
++    Ok((public_key, encoded))
++}
++
++#[test]
++fn shipped_pubkey_is_a_usable_minisign_key() {
++    let (public_key, encoded) = shipped_public_key().expect("a usable plugins.updater.pubkey");
++    // A minisign public key carries a 32-byte ed25519 key; anything shorter means
++    // the base64 document was truncated when it was pasted into the config.
++    let document = base64_to_string(&encoded).unwrap();
++    let payload = document
++        .lines()
++        .map(str::trim)
++        .find(|line| !line.is_empty() && !line.starts_with("untrusted comment:"))
++        .expect("a base64 key line after the comment");
++    let raw = base64::engine::general_purpose::STANDARD.decode(payload).unwrap();
++    assert_eq!(&raw[..2], b"Ed", "minisign public keys start with the Ed magic");
++    assert_eq!(raw.len(), 2 + 8 + 32, "public key frame must be magic+key id+32 bytes");
++    let _ = public_key;
++}
++
++#[test]
++fn bundled_artifact_verifies_against_the_shipped_pubkey() {
++    let (Ok(artifact), Ok(signature_file)) = (
++        std::env::var("PLOTINA_UPDATE_ARTIFACT"),
++        std::env::var("PLOTINA_UPDATE_SIG"),
++    ) else {
++        eprintln!(
++            "SKIP bundled_artifact_verifies_against_the_shipped_pubkey: \
++             PLOTINA_UPDATE_ARTIFACT/PLOTINA_UPDATE_SIG are not set (no bundle to check)"
++        );
++        return;
++    };
++
++    let artifact_path = PathBuf::from(&artifact);
++    let signature_path = PathBuf::from(&signature_file);
++    assert!(
++        artifact_path.is_file(),
++        "PLOTINA_UPDATE_ARTIFACT points at nothing: {}",
++        artifact_path.display()
++    );
++    assert!(
++        signature_path.is_file(),
++        "PLOTINA_UPDATE_SIG points at nothing: {}",
++        signature_path.display()
++    );
++    let artifact_name = artifact_path
++        .file_name()
++        .and_then(|n| n.to_str())
++        .unwrap_or_default()
++        .to_string();
++    assert_eq!(
++        signature_path.file_name().and_then(|n| n.to_str()),
++        Some(&format!("{artifact_name}.sig")[..]),
++        "the signature must be the one bundled with the artifact it is published for"
++    );
++
++    let (public_key, _) = shipped_public_key().expect("a usable plugins.updater.pubkey");
++    let data = std::fs::read(&artifact_path).expect("read the built artifact");
++    let wrapped = std::fs::read_to_string(&signature_path).expect("read the signature file");
++    let document = base64_to_string(wrapped.trim())
++        .unwrap_or_else(|e| panic!("{} is not the wrapped minisign document Tauri signs with: {e}",
++                                   signature_path.display()));
++    let signature = Signature::decode(&document)
++        .map_err(|e| format!("{} cannot be decoded as minisign: {e}", signature_path.display()))
++        .unwrap();
++
++    // Exactly what the plugin does before it installs anything.
++    public_key
++        .verify(&data, &signature, true)
++        .unwrap_or_else(|e| {
++            panic!(
++                "signature {} does not verify artifact {} with the shipped pubkey: {e}",
++                signature_path.display(),
++                artifact_path.display()
++            )
++        });
++
++    // And it must not verify a modified byte: proves the check is real rather
++    // than an API call that ignores its input.
++    let mut tampered = data.clone();
++    let middle = tampered.len() / 2;
++    tampered[middle] ^= 0x01;
++    assert!(
++        public_key.verify(&tampered, &signature, true).is_err(),
++        "the signature verified a modified artifact — the check is not checking"
++    );
++
++    println!(
++        "verified {} ({} bytes) against the pubkey in {}; signed file recorded as {:?}",
++        artifact_name,
++        data.len(),
++        config_path().display(),
++        document
++            .lines()
++            .find(|line| line.contains("file:"))
++            .unwrap_or("")
++            .trim()
++    );
++}
++
++#[test]
++fn path_helper_resolves_the_repository_overlay() {
++    // The default must be the file CI ships, not something that silently reads a
++    // stale copy: it is resolved from CARGO_MANIFEST_DIR, so it works from any
++    // working directory the runner happens to use.
++    let path = config_path();
++    assert!(path.ends_with("tauri.plotina.json"), "{}", path.display());
++    if std::env::var("PLOTINA_UPDATE_SIG").is_err() {
++        // A plain checkout (no build) still has the overlay next to the clone.
++        assert!(Path::new(&path).is_file(), "missing {}", path.display());
++    }
++}

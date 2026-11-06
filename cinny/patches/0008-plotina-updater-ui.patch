@@ -1,0 +1,736 @@
+diff --git a/src/app/features/settings/Settings.tsx b/src/app/features/settings/Settings.tsx
+index 5e1a20f..c67f660 100644
+--- a/src/app/features/settings/Settings.tsx
++++ b/src/app/features/settings/Settings.tsx
+@@ -30,6 +30,8 @@ import { Devices } from './devices';
+ import { EmojisStickers } from './emojis-stickers';
+ import { DeveloperTools } from './developer-tools';
+ import { About } from './about';
++import { Updates } from './updates';
++import { isTauriDesktop } from '../../../plotina/updater';
+ import { UseStateProvider } from '../../components/UseStateProvider';
+ import { stopPropagation } from '../../utils/keyboard';
+ import { LogoutDialog } from '../../components/LogoutDialog';
+@@ -42,6 +44,7 @@ export enum SettingsPages {
+   EmojisStickersPage,
+   DeveloperToolsPage,
+   AboutPage,
++  UpdatesPage,
+ }
+ 
+ type SettingsMenuItem = {
+@@ -52,7 +55,8 @@ type SettingsMenuItem = {
+ 
+ const useSettingsMenuItems = (): SettingsMenuItem[] =>
+   useMemo(
+-    () => [
++    () => {
++      const items: SettingsMenuItem[] = [
+       {
+         page: SettingsPages.GeneralPage,
+         name: 'General',
+@@ -88,7 +92,19 @@ const useSettingsMenuItems = (): SettingsMenuItem[] =>
+         name: 'About',
+         icon: Icons.Info,
+       },
+-    ],
++    ];
++      // Only the desktop shell has an artifact the updater can replace. The
++      // browser build has no IPC to ask and nothing on disk to swap, so the
++      // row is not offered there.
++      if (isTauriDesktop()) {
++        items.push({
++          page: SettingsPages.UpdatesPage,
++          name: 'Проверить обновления',
++          icon: Icons.Download,
++        });
++      }
++      return items;
++    },
+     []
+   );
+ 
+@@ -229,6 +245,7 @@ export function Settings({ initialPage, requestClose }: SettingsProps) {
+         <DeveloperTools requestClose={handlePageRequestClose} />
+       )}
+       {activePage === SettingsPages.AboutPage && <About requestClose={handlePageRequestClose} />}
++      {activePage === SettingsPages.UpdatesPage && <Updates requestClose={handlePageRequestClose} />}
+     </PageRoot>
+   );
+ }
+diff --git a/src/app/features/settings/updates/Updates.tsx b/src/app/features/settings/updates/Updates.tsx
+new file mode 100644
+index 0000000..fddeabf
+--- /dev/null
++++ b/src/app/features/settings/updates/Updates.tsx
+@@ -0,0 +1,445 @@
++import React, { useCallback, useEffect, useRef, useState } from 'react';
++import {
++  Badge,
++  Box,
++  Button,
++  Icon,
++  IconButton,
++  Icons,
++  IconSrc,
++  ProgressBar,
++  Scroll,
++  Spinner,
++  Text,
++} from 'folds';
++import { Page, PageContent, PageHeader } from '../../../components/page';
++import { SequenceCard } from '../../../components/sequence-card';
++import { SettingTile } from '../../../components/setting-tile';
++import { SequenceCardStyle } from '../styles.css';
++import {
++  UpdaterHandle,
++  InstallKind,
++  checkForUpdate,
++  describePlotinaVersion,
++  downloadPercent,
++  fetchAppVersion,
++  fetchInstallKind,
++  humanBytes,
++  isUpdatableKind,
++  manualDownloadUrl,
++  probeArtifactSize,
++  relaunchApp,
++} from '../../../../plotina/updater';
++
++type UpdatesProps = {
++  requestClose: () => void;
++};
++
++type UpdaterState =
++  | { kind: 'idle' }
++  | { kind: 'checking' }
++  | { kind: 'upToDate'; checkedVersion: string }
++  | {
++      kind: 'available';
++      version: string;
++      notes?: string;
++      date?: string;
++      size?: number;
++      sizeUnknown: boolean;
++    }
++  | { kind: 'downloading'; received: number; total?: number }
++  | { kind: 'installing' }
++  | { kind: 'installed'; version: string }
++  | { kind: 'manual'; reason: ManualReason }
++  | { kind: 'error'; message: string };
++
++type ManualReason = 'msi' | 'package' | 'other' | 'unknown';
++
++/** Any install the updater cannot move collapses to one of the four manual
++ * states; a kind we did not recognise is treated as the safest option. */
++function asManualReason(kind: InstallKind): ManualReason {
++  if (kind === 'msi' || kind === 'package' || kind === 'other') return kind;
++  return 'unknown';
++}
++
++const MANUAL_MESSAGES: Record<ManualReason, { title: string; body: string }> = {
++  msi: {
++    title: 'Нужна ручная установка',
++    body: 'Автообновление недоступно для MSI-установки. Скачайте новый MSI и установите вручную.',
++  },
++  package: {
++    title: 'Нужна ручная установка',
++    body: 'Автообновление недоступно при установке из deb/rpm: обновите пакет менеджером пакетов либо используйте AppImage.',
++  },
++  other: {
++    title: 'Нужна ручная установка',
++    body: 'Это приложение запущено не из AppImage и не из NSIS-установщика, поэтому обновить себя оно не может. Скачайте свежий установщик.',
++  },
++  unknown: {
++    title: 'Не удалось определить тип установки',
++    body: 'Оболочка приложения не сообщила, как установлена Plotina Lite Desktop, поэтому автообновление не запускается. Скачайте установщик вручную.',
++  },
++};
++
++/** Turn the plugin's English error into something a user can act on. */
++export function describeUpdaterError(error: unknown): string {
++  const raw = error instanceof Error ? error.message : String(error);
++  const message = raw.trim();
++  if (!message) return 'Неизвестная ошибка.';
++  if (/no endpoints|not configured/i.test(message)) {
++    return 'В этой сборке не настроен источник обновлений.';
++  }
++  if (/404|not found/i.test(message)) {
++    return 'Файл обновлений не найден на сервере (plotina.cc/dl/lite/latest.json).';
++  }
++  if (/timeout|timed out/i.test(message)) {
++    return 'Сервер обновлений не ответил за отведённое время. Проверьте подключение и повторите.';
++  }
++  if (/signature|verify|minisign/i.test(message)) {
++    return `Подпись обновления не прошла проверку — обновление не установлено: ${message}`;
++  }
++  return message;
++}
++
++export function Updates({ requestClose }: UpdatesProps) {
++  const [state, setState] = useState<UpdaterState>({ kind: 'idle' });
++  const [installKind, setInstallKind] = useState<InstallKind>('unknown');
++  const [version, setVersion] = useState('');
++  const updateRef = useRef<UpdaterHandle | undefined>(undefined);
++
++  useEffect(() => {
++    let mounted = true;
++    fetchInstallKind().then((kind) => {
++      if (!mounted) return;
++      setInstallKind(kind);
++      // A deb/rpm/MSI install can never update itself: say so at once instead
++      // of letting the user press a button that only fails.
++      if (!isUpdatableKind(kind) && kind !== 'web') {
++        setState({ kind: 'manual', reason: asManualReason(kind) });
++      }
++    });
++    fetchAppVersion().then((value) => mounted && setVersion(value));
++    return () => {
++      mounted = false;
++    };
++  }, []);
++
++  const handleClose = useCallback(() => {
++    updateRef.current?.close().catch(() => undefined);
++    updateRef.current = undefined;
++    requestClose();
++  }, [requestClose]);
++
++  const handleCheck = useCallback(async () => {
++    setState({ kind: 'checking' });
++    try {
++      if (!isUpdatableKind(installKind)) {
++        setState({ kind: 'manual', reason: asManualReason(installKind) });
++        return;
++      }
++      const update = await checkForUpdate(installKind);
++      if (!update) {
++        setState({ kind: 'upToDate', checkedVersion: version });
++        return;
++      }
++      updateRef.current = update;
++      const size = await probeArtifactSize(update.info.artifactUrl);
++      setState({
++        kind: 'available',
++        version: update.info.version,
++        notes: update.info.notes,
++        date: update.info.date,
++        size,
++        sizeUnknown: size === undefined,
++      });
++    } catch (error) {
++      setState({ kind: 'error', message: describeUpdaterError(error) });
++    }
++  }, [installKind, version]);
++
++  const handleInstall = useCallback(async () => {
++    const update = updateRef.current;
++    if (!update) return;
++    try {
++      setState({ kind: 'downloading', received: 0 });
++      await update.download((received, total) => setState({ kind: 'downloading', received, total }));
++      setState({ kind: 'installing' });
++      await update.install();
++      setState({ kind: 'installed', version: update.info.version });
++    } catch (error) {
++      setState({ kind: 'error', message: describeUpdaterError(error) });
++    }
++  }, []);
++
++  const handleRelaunch = useCallback(async () => {
++    try {
++      await relaunchApp();
++    } catch (error) {
++      setState({ kind: 'error', message: describeUpdaterError(error) });
++    }
++  }, []);
++
++  const busy = state.kind === 'checking' || state.kind === 'downloading' || state.kind === 'installing';
++  const manual = state.kind === 'manual' ? MANUAL_MESSAGES[state.reason] : undefined;
++
++  return (
++    <Page>
++      <PageHeader outlined={false}>
++        <Box grow="Yes" gap="200">
++          <Box grow="Yes" alignItems="Center" gap="200">
++            <Text size="H3" truncate>
++              Обновления
++            </Text>
++          </Box>
++          <Box shrink="No">
++            <IconButton onClick={handleClose} variant="Surface">
++              <Icon src={Icons.Cross} />
++            </IconButton>
++          </Box>
++        </Box>
++      </PageHeader>
++      <Box grow="Yes">
++        <Scroll hideTrack visibility="Hover">
++          <PageContent>
++            <Box direction="Column" gap="700">
++              <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column" gap="400">
++                <SettingTile
++                  title="Установленная версия"
++                  description={
++                    version
++                      ? `${describePlotinaVersion(version)} (${version})`
++                      : 'Определяем версию приложения…'
++                  }
++                  after={
++                    <Badge variant={isUpdatableKind(installKind) ? 'Secondary' : 'Warning'} fill="Soft" radii="Pill">
++                      <Text size="L400">{installKindLabel(installKind)}</Text>
++                    </Badge>
++                  }
++                />
++                <Box gap="200" alignItems="Center">
++                  <Button
++                    size="300"
++                    variant="Primary"
++                    fill="Soft"
++                    radii="Pill"
++                    before={
++                      state.kind === 'checking' ? (
++                        <Spinner size="50" variant="Primary" fill="Soft" />
++                      ) : (
++                        <Icon src={Icons.Download} size="100" />
++                      )
++                    }
++                    disabled={busy}
++                    onClick={handleCheck}
++                  >
++                    <Text size="B400">
++                      {state.kind === 'idle' ? 'Проверить обновления' : 'Проверить ещё раз'}
++                    </Text>
++                  </Button>
++                  {!isUpdatableKind(installKind) && (
++                    <Button
++                      size="300"
++                      variant="Secondary"
++                      fill="Soft"
++                      radii="Pill"
++                      before={<Icon src={Icons.External} size="100" />}
++                      as="a"
++                      href={manualDownloadUrl(installKind)}
++                      target="_blank"
++                      rel="noreferrer noopener"
++                    >
++                      <Text size="B400">Скачать установщик</Text>
++                    </Button>
++                  )}
++                </Box>
++              </SequenceCard>
++
++              {state.kind === 'checking' && (
++                <StatusCard variant="Secondary" text="Проверяем обновления…" busy />
++              )}
++
++              {state.kind === 'upToDate' && (
++                <StatusCard
++                  variant="Success"
++                  icon={Icons.CheckTwice}
++                  title="Обновлений нет"
++                  text={`Установлена последняя версия (${describePlotinaVersion(state.checkedVersion) || '—'}).`}
++                />
++              )}
++
++              {state.kind === 'available' && (
++                <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column" gap="300">
++                  <Box gap="200" alignItems="Center">
++                    <Icon src={Icons.ArrowGoRightPlus} size="100" />
++                    <Text size="T300">
++                      Доступно обновление: <b>{describePlotinaVersion(state.version)}</b>
++                    </Text>
++                  </Box>
++                  {state.notes && (
++                    <Text size="T200" priority="300" style={{ whiteSpace: 'pre-wrap' }}>
++                      {state.notes}
++                    </Text>
++                  )}
++                  <Text size="T200" priority="400">
++                    {state.size ? `Размер загрузки: ${humanBytes(state.size)}` : ''}
++                    {state.sizeUnknown ? 'Размер станет известен в начале загрузки.' : ''}
++                    {state.date ? ` Опубликовано: ${state.date}` : ''}
++                  </Text>
++                  <Box gap="200">
++                    <Button
++                      size="400"
++                      variant="Primary"
++                      radii="Pill"
++                      before={<Icon src={Icons.Download} size="100" />}
++                      onClick={handleInstall}
++                    >
++                      <Text size="B300">Скачать и установить</Text>
++                    </Button>
++                    <Button
++                      size="400"
++                      variant="Secondary"
++                      fill="Soft"
++                      radii="Pill"
++                      onClick={() => {
++                        updateRef.current?.close().catch(() => undefined);
++                        updateRef.current = undefined;
++                        setState({ kind: 'idle' });
++                      }}
++                    >
++                      <Text size="B300">Не сейчас</Text>
++                    </Button>
++                  </Box>
++                </SequenceCard>
++              )}
++
++              {state.kind === 'downloading' && (
++                <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column" gap="300">
++                  <Box grow="Yes" gap="200" alignItems="Center">
++                    <Badge variant="Secondary" fill="Solid" radii="300">
++                      <Text size="L400">
++                        Загрузка: {state.total ? `${downloadPercent(state.received, state.total)}%` : '…'}
++                      </Text>
++                    </Badge>
++                    <Box grow="Yes">
++                      <ProgressBar
++                        variant="Primary"
++                        size="300"
++                        min={0}
++                        max={state.total ?? Math.max(state.received, 1)}
++                        value={state.received}
++                      />
++                    </Box>
++                    <Text size="T200" priority="300">
++                      {`${humanBytes(state.received)}${state.total ? ` / ${humanBytes(state.total)}` : ''}`}
++                    </Text>
++                    <Spinner size="50" variant="Secondary" fill="Soft" />
++                  </Box>
++                </SequenceCard>
++              )}
++
++              {state.kind === 'installing' && (
++                <StatusCard
++                  variant="Secondary"
++                  text={
++                    installKind === 'nsis'
++                      ? 'Устанавливаем обновление. Приложение сейчас перезапустится.'
++                      : 'Заменяем AppImage обновлённым…'
++                  }
++                  busy
++                />
++              )}
++
++              {state.kind === 'installed' && (
++                <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column" gap="300">
++                  <SettingTile
++                    title={`Обновление до ${describePlotinaVersion(state.version)} установлено`}
++                    description="Перезапустите приложение, чтобы заработала новая версия."
++                    after={
++                      <Button
++                        size="300"
++                        variant="Primary"
++                        radii="Pill"
++                        before={<Icon src={Icons.ArrowGoRight} size="100" />}
++                        onClick={handleRelaunch}
++                      >
++                        <Text size="B400">Перезапустить</Text>
++                      </Button>
++                    }
++                  />
++                </SequenceCard>
++              )}
++
++              {manual && (
++                <StatusCard variant="Warning" icon={Icons.Warning} title={manual.title} text={manual.body} />
++              )}
++
++              {state.kind === 'error' && (
++                <StatusCard
++                  variant="Critical"
++                  icon={Icons.Warning}
++                  title="Не удалось проверить обновления"
++                  text={state.message}
++                  action={{ label: 'Повторить', onClick: handleCheck }}
++                />
++              )}
++            </Box>
++          </PageContent>
++        </Scroll>
++      </Box>
++    </Page>
++  );
++}
++
++function installKindLabel(kind: InstallKind): string {
++  if (kind === 'appimage') return 'AppImage';
++  if (kind === 'nsis') return 'NSIS (Windows)';
++  if (kind === 'msi') return 'MSI (Windows)';
++  if (kind === 'package') return 'deb/rpm';
++  if (kind === 'web') return 'веб-версия';
++  if (kind === 'other') return 'ручная установка';
++  return 'тип установки неизвестен';
++}
++
++type StatusCardProps = {
++  variant: 'Primary' | 'Secondary' | 'Success' | 'Warning' | 'Critical';
++  title?: string;
++  text: string;
++  busy?: boolean;
++  icon?: IconSrc;
++  action?: { label: string; onClick: () => void };
++};
++
++function StatusCard({ variant, title, text, busy, icon, action }: StatusCardProps) {
++  return (
++    <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" direction="Column" gap="200">
++      <Box gap="200" alignItems="Center">
++        {icon && <Icon src={icon} size="100" />}
++        {title && (
++          <Text size="T300">
++            <b>{title}</b>
++          </Text>
++        )}
++        {busy && <Spinner size="50" variant={variant} fill="Soft" />}
++      </Box>
++      <Text size="T200" priority="300" style={{ wordBreak: 'break-word' }}>
++        {text}
++      </Text>
++      {action && (
++        <Box>
++          <Button
++            size="300"
++            variant="Secondary"
++            fill="Soft"
++            radii="Pill"
++            before={<Icon src={Icons.ArrowGoRight} size="100" />}
++            onClick={action.onClick}
++          >
++            <Text size="B400">{action.label}</Text>
++          </Button>
++        </Box>
++      )}
++    </SequenceCard>
++  );
++}
++
++export type { UpdaterState };
+diff --git a/src/app/features/settings/updates/index.ts b/src/app/features/settings/updates/index.ts
+new file mode 100644
+index 0000000..ec22c9f
+--- /dev/null
++++ b/src/app/features/settings/updates/index.ts
+@@ -0,0 +1 @@
++export * from './Updates';
+diff --git a/src/plotina/updater.ts b/src/plotina/updater.ts
+new file mode 100644
+index 0000000..11af04d
+--- /dev/null
++++ b/src/plotina/updater.ts
+@@ -0,0 +1,212 @@
++/**
++ * Plotina Lite Desktop — the Tauri updater, wrapped for a codebase that is also
++ * built for the browser.
++ *
++ * Every Tauri module is loaded dynamically and only from functions that first
++ * proved they are running inside the desktop shell (`isTauriDesktop`). A browser
++ * build therefore resolves none of it at runtime: Settings simply does not show
++ * the update row, and nothing tries to talk to a non-existent IPC layer.
++ *
++ * The install kind matters more here than it looks. Our feed carries one signed
++ * artifact per platform — the AppImage and the NSIS setup.exe — and the plugin
++ * resolves `<os>-<arch>-<installer>` before falling back to the bare
++ * `<os>-<arch>`. So a deb/rpm install that asks this feed would be handed an
++ * AppImage to `dpkg -i`, and an MSI install an NSIS setup.exe to run over a
++ * Windows Installer product: two uninstall entries and a package database that
++ * no longer matches the files on disk. Rather than let that happen, we ask the
++ * shell which kind of install this is and show a manual-install state instead —
++ * the user then updates through apt/dnf or by installing the new MSI, which is
++ * what those managers are for anyway. See `src-tauri/src/install_kind.rs` and
++ * the "Updater" section of cinny/README.md.
++ */
++
++export type InstallKind =
++  | 'appimage'
++  | 'nsis'
++  | 'msi'
++  | 'package'
++  | 'other'
++  | 'unknown'
++  | 'web';
++
++/** Kinds the built-in updater can actually complete for. */
++export function isUpdatableKind(kind: InstallKind): boolean {
++  return kind === 'appimage' || kind === 'nsis';
++}
++
++export const DL_BASE = 'https://plotina.cc/dl/';
++
++/** Stable manual-install artifacts, one per non-updatable install kind. These
++ * are the aliases the edge mirrors from our releases (infra scripts/assets.map),
++ * so they always point at the newest build. */
++export const MANUAL_ARTIFACTS: Record<string, string> = {
++  msi: 'Plotina-Lite-Desktop.msi',
++  package: 'Plotina-Lite-Desktop.deb',
++  appimage: 'Plotina-Lite-Desktop.AppImage',
++  other: 'Plotina-Lite-Desktop.AppImage',
++  unknown: 'Plotina-Lite-Desktop.AppImage',
++};
++
++export function manualDownloadUrl(kind: InstallKind): string {
++  return `${DL_BASE}${MANUAL_ARTIFACTS[kind] ?? MANUAL_ARTIFACTS.other}`;
++}
++
++export function isTauriDesktop(): boolean {
++  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
++}
++
++/**
++ * Version the app was built with, e.g. '4.12.818'.
++ *
++ * CI stamps it as <major>.<minor>.<upstream patch * 100 + build counter> so
++ * that successive Plotina builds compare correctly (see cinny/scripts/
++ * build_config.py for why a plain semver prerelease is not usable: '-' is
++ * illegal in an RPM Version). This turns it back into what the user expects.
++ */
++export function describePlotinaVersion(version?: string): string {
++  const raw = (version ?? '').trim().replace(/^v/, '');
++  const parts = raw.split('.');
++  if (parts.length !== 3 || parts.some((part) => !/^\d+$/.test(part))) {
++    return raw || '—';
++  }
++  const [major, minor, patch] = parts.map((part) => Number.parseInt(part, 10));
++  const base = `${major}.${minor}.${Math.floor(patch / 100)}`;
++  const build = patch % 100;
++  return build === 0 ? `${base} (dev-сборка)` : `${base}, сборка ${build}`;
++}
++
++/** 15461882 -> '14.7 МБ'. Deliberately Russian: the whole update flow is. */
++export function humanBytes(bytes?: number): string {
++  if (typeof bytes !== 'number' || !Number.isFinite(bytes) || bytes <= 0) return '';
++  const units = ['Б', 'КБ', 'МБ', 'ГБ'];
++  let value = bytes;
++  let unit = 0;
++  while (value >= 1024 && unit < units.length - 1) {
++    value /= 1024;
++    unit += 1;
++  }
++  const rounded = value >= 10 || unit === 0 ? Math.round(value) : Math.round(value * 10) / 10;
++  return `${rounded} ${units[unit]}`;
++}
++
++/** Percent for a progress bar; never above 100 and never NaN. */
++export function downloadPercent(received: number, total?: number): number {
++  if (!total || total <= 0) return 0;
++  return Math.min(100, Math.max(0, Math.round((received / total) * 100)));
++}
++
++export type UpdaterInfo = {
++  version: string;
++  currentVersion: string;
++  notes?: string;
++  date?: string;
++  /** Where the artifact will be downloaded from, when the feed told us. */
++  artifactUrl?: string;
++};
++
++export type UpdaterHandle = {
++  info: UpdaterInfo;
++  /** Downloads the signed artifact; `total` is unknown until the transfer starts. */
++  download: (onProgress: (received: number, total?: number) => void) => Promise<void>;
++  install: () => Promise<void>;
++  close: () => Promise<void>;
++};
++
++export async function fetchInstallKind(): Promise<InstallKind> {
++  if (!isTauriDesktop()) return 'web';
++  try {
++    const { invoke } = await import('@tauri-apps/api/core');
++    const kind = await invoke<string>('plotina_install_kind');
++    const normalised = typeof kind === 'string' ? kind.toLowerCase() : 'unknown';
++    const known: InstallKind[] = ['appimage', 'nsis', 'msi', 'package', 'other', 'unknown'];
++    return known.indexOf(normalised as InstallKind) !== -1 ? (normalised as InstallKind) : 'unknown';
++  } catch {
++    // No answer from the shell: treat the install as manual rather than
++    // starting a download that may end half-applied.
++    return 'unknown';
++  }
++}
++
++export async function fetchAppVersion(): Promise<string> {
++  if (!isTauriDesktop()) return '';
++  try {
++    const { getVersion } = await import('@tauri-apps/api/app');
++    return await getVersion();
++  } catch {
++    return '';
++  }
++}
++
++/** The artifact this platform would download, read out of the feed response. */
++function artifactUrlFor(raw: Record<string, unknown>, kind: InstallKind): string | undefined {
++  const platforms = raw?.platforms as Record<string, { url?: unknown }> | undefined;
++  if (!platforms || typeof platforms !== 'object') return undefined;
++  const suffix = kind === 'nsis' || kind === 'msi' ? '.exe' : '.AppImage';
++  const entries = Object.keys(platforms).map((key) => platforms[key]);
++  for (const entry of entries) {
++    if (entry && typeof entry.url === 'string' && entry.url.endsWith(suffix)) return entry.url;
++  }
++  return undefined;
++}
++
++/**
++ * Ask the feed for an update. Resolves to `null` when there is nothing newer.
++ * Throws with a readable message when the check itself failed (no network, no
++ * endpoint, a manifest we cannot verify) — the caller shows that as an error.
++ */
++export async function checkForUpdate(kind: InstallKind): Promise<UpdaterHandle | null> {
++  const { check } = await import('@tauri-apps/plugin-updater');
++  const update = await check({ timeout: 30000 });
++  if (!update) return null;
++  const raw = (update.rawJson ?? {}) as Record<string, unknown>;
++  const handle: UpdaterHandle = {
++    info: {
++      version: update.version,
++      currentVersion: update.currentVersion,
++      notes: typeof update.body === 'string' ? update.body : undefined,
++      date: update.date,
++      artifactUrl: artifactUrlFor(raw, kind),
++    },
++    download: async (onProgress) => {
++      let received = 0;
++      let total: number | undefined;
++      await update.download((event) => {
++        if (event.event === 'Started') {
++          total = event.data.contentLength;
++          received = 0;
++        } else if (event.event === 'Progress') {
++          received += event.data.chunkLength;
++        }
++        onProgress(received, total);
++      });
++    },
++    install: () => update.install(),
++    close: () => update.close(),
++  };
++  return handle;
++}
++
++/**
++ * Size of the artifact before the download starts, from a HEAD request through
++ * the Tauri HTTP plugin (a browser fetch would be CORS-blocked). Purely
++ * cosmetic: any failure just means the dialog shows the size once the transfer
++ * has begun.
++ */
++export async function probeArtifactSize(url?: string): Promise<number | undefined> {
++  if (!url || !isTauriDesktop()) return undefined;
++  try {
++    const { fetch: tauriFetch } = await import('@tauri-apps/plugin-http');
++    const response = await tauriFetch(url, { method: 'HEAD' });
++    if (!response.ok) return undefined;
++    const header = response.headers.get('content-length');
++    const size = header ? Number.parseInt(header, 10) : Number.NaN;
++    return Number.isFinite(size) && size > 0 ? size : undefined;
++  } catch {
++    return undefined;
++  }
++}
++
++export async function relaunchApp(): Promise<void> {
++  const { relaunch } = await import('@tauri-apps/plugin-process');
++  await relaunch();
++}

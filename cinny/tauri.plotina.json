@@ -8,13 +8,16 @@
   "app": {},
   "bundle": {
     "active": true,
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "shortDescription": "Matrix client for plotina.cc",
     "longDescription": "Matrix client for plotina.cc with DeepFilterNet3 noise suppression; updates come only from plotina.cc builds."
   },
   "plugins": {
     "updater": {
-      "endpoints": []
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlFQjI2QjE3NEVFRkYwQTgKUldTbzhPOU9GMnV5bnBBLzFWZW1KOGZka3R5VUpsS0k2aHZUcHJMSGJVZ3pnbG82cXAwa2ZLd3gK",
+      "endpoints": [
+        "https://plotina.cc/dl/lite/latest.json"
+      ]
     }
   }
 }

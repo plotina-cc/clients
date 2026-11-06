@@ -54,9 +54,15 @@ echo "==> web build"
 [ -d node_modules ] || npm ci
 # @sentry/browser is not in upstream's package.json on purpose: --no-save
 # leaves both package.json and package-lock.json untouched, and letting npm
-# read the lock file keeps transitive pins like @swc/core intact (a newer
+# read the lock file keeps transitive pins like @swc/core intact (a newer)
 # @swc/core breaks vite-plugin-top-level-await).
 npm install --no-save --no-audit --no-fund "@sentry/browser@${SENTRY_SDK_VERSION:-10.27.0}"
+# Same policy for the desktop updater UI: the Settings page imports the Tauri
+# plugin JS, which upstream's frontend does not list as a dependency.
+# Versions must match the root package.json of the pinned cinny-desktop tag.
+npm install --no-save --no-audit --no-fund \
+  "@tauri-apps/api@2.7.0" "@tauri-apps/plugin-updater@2.9.0" \
+  "@tauri-apps/plugin-process@2.3.0" "@tauri-apps/plugin-http@2.5.1"
 VITE_SENTRY_DSN="${VITE_SENTRY_DSN:-}" VITE_SENTRY_RELEASE="$SENTRY_RELEASE" npm run build
 
 # Maps are stripped before the dist goes into a Tauri binary or onto the edge.
@@ -101,12 +107,44 @@ echo "==> tauri shell deps"
 export NO_STRIP=1
 export APPIMAGE_EXTRACT_AND_RUN=1
 
+echo "==> updater signing"
+# CI signs every bundle (bundle.createUpdaterArtifacts is true). Locally the key
+# is picked up from ~/.tauri/plotina-lite.key when it is there — Tauri takes
+# either the file content or its path, so a machine holding the key needs no
+# extra setup. NO_UPDATER=1 builds an unsigned, NOT FOR RELEASE bundle for
+# throwaway testing; see cinny/README.md ("Updater") before publishing from
+# anywhere but CI.
+if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -f "$HOME/.tauri/plotina-lite.key" ]; then
+  export TAURI_SIGNING_PRIVATE_KEY="$HOME/.tauri/plotina-lite.key"
+fi
+if [ -z "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ] && [ -f "$HOME/.tauri/plotina-lite.key.password" ]; then
+  export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(cat "$HOME/.tauri/plotina-lite.key.password")"
+fi
+if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ] && [ -z "${NO_UPDATER:-}" ]; then
+  echo "build.sh: no updater signing key available." >&2
+  echo "  set TAURI_SIGNING_PRIVATE_KEY (+ _PASSWORD), put the key at" >&2
+  echo "  ~/.tauri/plotina-lite.key, or run with NO_UPDATER=1 for an unsigned" >&2
+  echo "  local-only bundle that no client can install as an update." >&2
+  exit 1
+fi
+
+echo "==> stamped build config"
+# Upstream pins the app version to the Cinny tag; the updater needs a version
+# that changes with every Plotina build, so the version is stamped from the tag
+# this checkout sits on (empty for a branch build -> the dev slot).
+REF_NAME="${REF_NAME:-$(git -C "$ROOT" describe --tags --exact-match 2>/dev/null || true)}"
+BUILD_CONFIG="$WORK/tauri.plotina.build.json"
+CONFIG_ARGS=(config --overlay "$OVERLAY" --out "$BUILD_CONFIG"
+             --ref-name "$REF_NAME" --upstream-tag-file "$ROOT/UPSTREAM_TAG")
+if [ -n "${NO_UPDATER:-}" ]; then CONFIG_ARGS+=(--no-updater-artifacts); fi
+python3 "$HERE/build_config.py" "${CONFIG_ARGS[@]}"
+
 echo "==> installers"
 # Windows can be produced from Linux via cargo-xwin + NSIS (experimental upstream):
 #   CROSS=windows scripts/build.sh
 if [ "${CROSS:-}" = "windows" ]; then
   export PATH="$HOME/.cargo/bin:$PATH"
-  npm run tauri -- build --config "$OVERLAY" \
+  npm run tauri -- build --config "$BUILD_CONFIG" \
     --runner cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis
   echo
   echo "done:"
@@ -119,7 +157,7 @@ case "$(uname -s)" in
   Darwin) BUNDLES=dmg ;;
   *)      BUNDLES=nsis ;;
 esac
-npm run tauri -- build --config "$OVERLAY" --bundles "$BUNDLES"
+npm run tauri -- build --config "$BUILD_CONFIG" --bundles "$BUNDLES"
 
 # Tauri keeps the upstream maintainer in the deb control file and would show
 # it in package managers; reuse the desktop post-processor with our name.
@@ -131,4 +169,9 @@ done
 
 echo
 echo "done:"
-find src-tauri/target/release/bundle -maxdepth 2 -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.msi' -o -name '*.exe' -o -name '*.dmg' \) -printf '  %p (%s bytes)\n'
+find src-tauri/target/release/bundle -maxdepth 2 -type f \( -name '*.AppImage' -o -name '*.AppImage.sig' -o -name '*.deb' -o -name '*.msi' -o -name '*.exe' -o -name '*.exe.sig' -o -name '*.dmg' \) -printf '  %p (%s bytes)\n'
+if [ -n "${NO_UPDATER:-}" ]; then
+  echo
+  echo "UNSIGNED local build (NO_UPDATER=1): these files are not installable as an"
+  echo "update and must not be published. Release bundles come from CI, which signs."
+fi
