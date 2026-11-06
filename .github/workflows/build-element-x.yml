@@ -215,7 +215,8 @@ jobs:
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0012-plotina-about-minimal.patch"
           # 0013: no PostHog analytics and no Sentry reporting.
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0013-plotina-analytics-off.patch"
-          # 0014: the in-app updater. About grows a "Проверить обновления" row and MainActivity runs a
+          # 0014: the in-app updater. The Settings root grows a "Проверить обновления" row right
+          # above About, and MainActivity runs a
           # silent once-a-day check; both open PlotinaUpdateActivity, which fetches
           # https://plotina.cc/dl/update-x.json, downloads the APK with DownloadManager, verifies
           # sha256 and size, and hands it to the system PackageInstaller. The same patch derives the
@@ -643,7 +644,8 @@ jobs:
             - `Plotina-X.apk` is the arm64-v8a build (every phone from the last several
               years); `Plotina-X-armv7.apk` covers older 32-bit devices. There is no universal
               APK on purpose: one file for all four ABIs is 400 MB.
-            - **Updates from inside the app**: Settings → About → «Проверить обновления», plus a
+            - **Updates from inside the app**: the «Проверить обновления» row at the top of the
+              Settings list, right above «О приложении», opens the full-screen updater page, plus a
               silent check once a day at start. `update-x.json` (attached to this release next to
               the APK, and mirrored to https://plotina.cc/dl/update-x.json by
               `scripts/publish-clients.sh`) carries the APK's sha256, size and versionCode; the

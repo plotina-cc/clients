@@ -57,9 +57,12 @@ There is no Play channel here, so Plotina X ships its own updater: platform APIs
 `HttpURLConnection` for the manifest, `DownloadManager` for the APK, `PackageInstaller` for the
 install, no third-party update SDK.
 
-- **Settings → About → «Проверить обновления»** opens the dialog, and a **silent check runs at
-  most once a day** when the app starts; it only opens the dialog when the manifest really is
-  newer.
+- **«Проверить обновления» lives at the root of Settings, right above «О приложении»**, and opens
+  the full-screen updater page; a **silent check runs at most once a day** when the app starts and
+  opens that page only when the manifest really is newer. The page mirrors the Plotina Mobile
+  updater route: AppBar «Проверка обновлений», one centred 480 dp column, a stage per state
+  (checking / available / up to date / permission / downloading / error + retry), all colours from
+  the app theme.
 - Manifest: `https://plotina.cc/dl/update-x.json` with exactly
   `{"client":"x","package":"cc.plotina.x","versionName":"26.10.1","versionCode":2026100252,
   "apkUrl":"https://plotina.cc/dl/Plotina-X.apk","sha256":"<hex>","size":<bytes>,
@@ -68,7 +71,7 @@ install, no third-party update SDK.
   under those stable names. The updater refuses a manifest whose `client`, `package`, `apkUrl`
   scheme, `sha256` shape or numbers do not check out, and discards a download whose sha256 or
   size mismatch before the installer ever sees it.
-- Before the hand-off, the dialog asks for the **"install unknown apps"** permission through
+- Before the hand-off, the page asks for the **"install unknown apps"** permission through
   `Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES` if the system has not been told Plotina X may
   install apps.
 
@@ -89,7 +92,7 @@ under this scheme is greater than the base of the pre-updater releases (upstream
 which is why the `(2000 + YY)` prefix stays: `Plotina-X.apk` always upgrades an installed
 Plotina X. Locally, add `-PplotinaBuildNumber=N` or leave it out for upstream's own value.
 
-### Testing the dialog against a local manifest
+### Testing the updater page against a local manifest
 
     python3 -m http.server 8000   # serving an update-x.json (+ the APK it names)
     adb shell am start -n cc.plotina.x.debug/io.element.android.x.updater.PlotinaUpdateActivity \
