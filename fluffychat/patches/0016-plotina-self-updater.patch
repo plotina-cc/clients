@@ -204,10 +204,10 @@ index 0000000..1e567a2
 +    <cache-path name="updates" path="updates" />
 +</paths>
 diff --git a/lib/l10n/intl_en.arb b/lib/l10n/intl_en.arb
-index 29d7b1a..1011735 100644
+index 29d7b1a..7cddd8d 100644
 --- a/lib/l10n/intl_en.arb
 +++ b/lib/l10n/intl_en.arb
-@@ -2310,6 +2310,26 @@
+@@ -2310,6 +2310,30 @@
          }
      },
      "download": "Download",
@@ -227,18 +227,22 @@ index 29d7b1a..1011735 100644
 +    "updateFailed": "The update download failed.",
 +    "updateVerifyFailed": "The downloaded file does not match the published checksum. The install was aborted.",
 +    "updateUnknownSourcesTitle": "Allow app installation",
-+    "updateUnknownSourcesText": "Android only installs apps from sources you allow. In the settings screen that opens, allow Plotina Mobile to install unknown apps, then tap \"Check for updates\" again.",
++    "updateUnknownSourcesText": "Android installs apps only from sources you allow. Tap \"Open settings\", allow Plotina Mobile to install unknown apps, and return to the app - the update continues by itself.",
 +    "updateOpenSettings": "Open settings",
 +    "updateInstallerOpened": "Continue the installation in the system installer.",
 +    "updateArm64Only": "This phone is 32-bit (armv7) and the automatic update is built for arm64. Download Plotina-Mobile-armv7.apk from the release page instead.",
++    "checkingUpdates": "Checking for updates…",
++    "noUpdatesAvailable": "No updates available",
++    "updateRetry": "Try again",
++    "updateInstallPermissionHint": "Android installs apps only from sources you allow. Tap \"Open settings\", allow Plotina Mobile to install unknown apps, and return here – the download continues by itself.",
      "sendCanceled": "Sending canceled",
      "loginWithMatrixId": "Login with Matrix-ID",
      "doesNotSeemToBeAValidHomeserver": "Doesn't seem to be a compatible homeserver. Wrong URL?",
 diff --git a/lib/l10n/intl_ru.arb b/lib/l10n/intl_ru.arb
-index b165c17..b62e5a4 100644
+index b165c17..417c011 100644
 --- a/lib/l10n/intl_ru.arb
 +++ b/lib/l10n/intl_ru.arb
-@@ -2836,6 +2836,26 @@
+@@ -2836,6 +2836,30 @@
          }
      },
      "download": "Загрузить",
@@ -258,10 +262,14 @@ index b165c17..b62e5a4 100644
 +    "updateFailed": "\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043a\u0430\u0447\u0430\u0442\u044c \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435.",
 +    "updateVerifyFailed": "\u0417\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u043d\u044b\u0439 \u0444\u0430\u0439\u043b \u043d\u0435 \u0441\u043e\u0432\u043f\u0430\u0434\u0430\u0435\u0442 \u0441 \u043a\u043e\u043d\u0442\u0440\u043e\u043b\u044c\u043d\u043e\u0439 \u0441\u0443\u043c\u043c\u043e\u0439 \u0438\u0437 \u0440\u0435\u043b\u0438\u0437\u0430. \u0423\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0430 \u043e\u0442\u043c\u0435\u043d\u0435\u043d\u0430.",
 +    "updateUnknownSourcesTitle": "\u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u044c \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0443 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0439",
-+    "updateUnknownSourcesText": "Android \u0443\u0441\u0442\u0430\u043d\u0430\u0432\u043b\u0438\u0432\u0430\u0435\u0442 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u044f \u0442\u043e\u043b\u044c\u043a\u043e \u0438\u0437 \u0440\u0430\u0437\u0440\u0435\u0448\u0451\u043d\u043d\u044b\u0445 \u0438\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u043e\u0432. \u041d\u0430 \u043e\u0442\u043a\u0440\u044b\u0432\u0448\u0435\u043c\u0441\u044f \u044d\u043a\u0440\u0430\u043d\u0435 \u0440\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u0435 Plotina Mobile \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043a\u0443 \u0438\u0437 \u043d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u044b\u0445 \u0438\u0441\u0442\u043e\u0447\u043d\u0438\u043a\u043e\u0432, \u0437\u0430\u0442\u0435\u043c \u0441\u043d\u043e\u0432\u0430 \u043d\u0430\u0436\u043c\u0438\u0442\u0435 \u00ab\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f\u00bb.",
++    "updateUnknownSourcesText": "Android разрешает установку только из источников, которые вы одобрили. Нажмите «Открыть настройки», разрешите Plotina Mobile установку из неизвестных источников и вернитесь в приложение — обновление продолжится само.",
 +    "updateOpenSettings": "\u041e\u0442\u043a\u0440\u044b\u0442\u044c \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0438",
 +    "updateInstallerOpened": "Установку продолжите в системном установщике.",
 +    "updateArm64Only": "Телефон работает на 32-битной архитектуре (armv7), а автоматическое обновление собирается под arm64. Скачайте Plotina-Mobile-armv7.apk со страницы релизов вручную.",
++    "checkingUpdates": "Проверка обновлений…",
++    "noUpdatesAvailable": "Обновлений нет",
++    "updateRetry": "Повторить",
++    "updateInstallPermissionHint": "Android разрешает установку только из источников, которые вы одобрили. Нажмите «Открыть настройки», разрешите Plotina Mobile установку из неизвестных источников и вернитесь на этот экран — загрузка продолжится автоматически.",
      "unifiedPushDistributors": "Дистрибьюторы Unified Push:",
      "sharedLocation": "Общие геометки",
      "sound": "Звук",
@@ -293,6 +301,575 @@ index d1d8d9c..d2a81a5 100644
              ListTile(
                leading: const Icon(Icons.info_outline_rounded),
                title: Text(L10n.of(context).about),
+diff --git a/lib/pages/updater/plotina_updater_page.dart b/lib/pages/updater/plotina_updater_page.dart
+new file mode 100644
+index 0000000..bbeb041
+--- /dev/null
++++ b/lib/pages/updater/plotina_updater_page.dart
+@@ -0,0 +1,563 @@
++// SPDX-FileCopyrightText: 2026 Plotina
++//
++// SPDX-License-Identifier: AGPL-3.0-or-later
++
++/// plotina.cc: the full-screen "Check for updates" page.
++///
++/// A dedicated route instead of bare dialogs: the page is built inside the
++/// app's own Navigator and Theme, so it always follows the app theme (dark
++/// stays dark), the check finally has a visible "no updates" state instead of
++/// a silent no-op, and the download progress lives here rather than in a
++/// dialog whose pop could race the installer call (the .25 hang at 100 %).
++///
++/// Stages: checking -> (upToDate | checkFailed | armv7Only | available) ->
++/// needsPermission? -> downloading -> installerOpened, with retry paths from
++/// every failure state. When Android has not granted "install unknown apps",
++/// the page explains and offers "Open settings"; as a WidgetsBindingObserver
++/// it re-checks the permission on app resume and continues the download
++/// automatically - no second tap - and stays on the explanation if the grant
++/// is still missing.
++library;
++
++import 'dart:async';
++import 'dart:io';
++
++import 'package:fluffychat/l10n/l10n.dart';
++import 'package:fluffychat/utils/updater/plotina_updater.dart';
++import 'package:fluffychat/utils/updater/update_manifest.dart';
++import 'package:flutter/material.dart';
++import 'package:matrix/matrix.dart';
++
++class PlotinaUpdaterPage extends StatefulWidget {
++  const PlotinaUpdaterPage({
++    super.key,
++    this.manifest,
++    this.autoStart = false,
++    this.fileProvider,
++  });
++
++  /// Preloaded result of the silent daily dialog: skip the fetch.
++  final UpdateManifest? manifest;
++
++  /// Open straight into the download (the user already confirmed on the
++  /// daily dialog).
++  final bool autoStart;
++
++  /// Injectable target-file provider so tests do not need path_provider.
++  final Future<File> Function()? fileProvider;
++
++  @override
++  State<PlotinaUpdaterPage> createState() => _PlotinaUpdaterPageState();
++}
++
++enum _Stage {
++  checking,
++  upToDate,
++  checkFailed,
++  armv7Only,
++  available,
++  needsPermission,
++  downloading,
++  installerOpened,
++  downloadFailed,
++  verifyFailed,
++  installFailed,
++}
++
++class _PlotinaUpdaterPageState extends State<PlotinaUpdaterPage>
++    with WidgetsBindingObserver {
++  _Stage _stage = _Stage.checking;
++  UpdateManifest? _manifest;
++  double? _progress;
++  String _versionName = '';
++  bool _canceled = false;
++  bool _flowRunning = false;
++
++  @override
++  void initState() {
++    super.initState();
++    WidgetsBinding.instance.addObserver(this);
++    // The first frame already shows the "checking" state; the work itself
++    // starts after inflation so that its setState calls are legal.
++    WidgetsBinding.instance.addPostFrameCallback((_) {
++      if (mounted) unawaited(_run());
++    });
++  }
++
++  @override
++  void dispose() {
++    WidgetsBinding.instance.removeObserver(this);
++    // Leaving the page cancels an in-flight download; the file sink is closed
++    // by the flow itself, so nothing keeps writing into the cache.
++    _canceled = true;
++    super.dispose();
++  }
++
++  @override
++  void didChangeAppLifecycleState(AppLifecycleState state) {
++    // Returning from the "install unknown apps" settings page: continue
++    // automatically when the permission arrived, stay on the explanation
++    // when it did not.
++    if (state != AppLifecycleState.resumed) return;
++    if (_stage != _Stage.needsPermission || _flowRunning) return;
++    unawaited(_resumeAfterPermission());
++  }
++
++  Future<void> _resumeAfterPermission() async {
++    if (!await PlotinaUpdater.canRequestInstall()) return;
++    if (!mounted) return;
++    _startFlow();
++  }
++
++  Future<void> _run() async {
++    final preload = widget.manifest;
++    if (preload != null && widget.autoStart) {
++      _manifest = preload;
++      _startFlow();
++      return;
++    }
++    if (mounted) {
++      setState(() {
++        _stage = _Stage.checking;
++        _progress = null;
++      });
++    }
++    final manifest = preload ?? await PlotinaUpdater.fetchManifest();
++    final decision = await PlotinaUpdater.decide(manifest);
++    if (!mounted) return;
++    switch (decision) {
++      case UpdateDecision.upToDate:
++        final info = await PlotinaUpdater.packageInfoProvider();
++        if (!mounted) return;
++        setState(() {
++          _versionName = info.version;
++          _stage = _Stage.upToDate;
++        });
++      case UpdateDecision.checkFailed:
++        setState(() => _stage = _Stage.checkFailed);
++      case UpdateDecision.armv7Only:
++        setState(() => _stage = _Stage.armv7Only);
++      case UpdateDecision.updateAvailable:
++        setState(() {
++          _manifest = manifest;
++          _stage = _Stage.available;
++        });
++    }
++  }
++
++  void _startFlow() {
++    final manifest = _manifest;
++    if (manifest == null || _flowRunning) return;
++    _flowRunning = true;
++    _canceled = false;
++    setState(() {
++      _stage = _Stage.downloading;
++      _progress = null;
++    });
++    unawaited(_flow(manifest));
++  }
++
++  Future<void> _flow(UpdateManifest manifest) async {
++    final InstallOutcome outcome;
++    try {
++      final target = await (widget.fileProvider ??
++          PlotinaUpdater.cachedApkFile)();
++      outcome = await PlotinaUpdater.runInstallFlow(
++        manifest: manifest,
++        target: target,
++        onProgress: (fraction) {
++          if (mounted) setState(() => _progress = fraction);
++        },
++        isCanceled: () => _canceled,
++      );
++    } catch (e, s) {
++      // runInstallFlow converts its own failures into outcomes; a throw here
++      // is a bug or a platform shock. Report it and leave the downloading
++      // state - never sit at "100 %" forever, which is exactly what the
++      // dialog-based .25 flow did.
++      Logs().w('Updater: the install flow threw', e, s);
++      _flowRunning = false;
++      if (mounted) {
++        setState(() {
++          _progress = null;
++          _stage = _Stage.downloadFailed;
++        });
++      }
++      return;
++    }
++    _flowRunning = false;
++    if (!mounted) return;
++    setState(() {
++      _progress = null;
++      _stage = switch (outcome) {
++        InstallOutcome.installerOpened => _Stage.installerOpened,
++        InstallOutcome.needsPermission => _Stage.needsPermission,
++        InstallOutcome.canceled => _Stage.available,
++        InstallOutcome.downloadFailed => _Stage.downloadFailed,
++        InstallOutcome.verifyFailed => _Stage.verifyFailed,
++        InstallOutcome.installFailed => _Stage.installFailed,
++      };
++    });
++  }
++
++  @override
++  Widget build(BuildContext context) {
++    final theme = Theme.of(context);
++    final scheme = theme.colorScheme;
++    final l10n = L10n.of(context);
++
++    // Every colour comes from the app theme explicitly: scaffold, app bar,
++    // headings, body text, card and progress track. A light default leaking
++    // through is impossible.
++
++    Widget stage;
++    switch (_stage) {
++      case _Stage.checking:
++        stage = _Info(
++          icon: null,
++          indicator: const CircularProgressIndicator(),
++          headline: l10n.checkingUpdates,
++          body: null,
++          actions: const [],
++        );
++      case _Stage.upToDate:
++        stage = _Info(
++          icon: Icon(
++            Icons.check_circle_outline_rounded,
++            size: 56,
++            color: scheme.primary,
++          ),
++          headline: l10n.noUpdatesAvailable,
++          body: l10n.updateIsLatest(_versionName),
++          actions: const [],
++        );
++      case _Stage.checkFailed:
++        stage = _Info(
++          icon: Icon(Icons.wifi_off_rounded, size: 56, color: scheme.error),
++          headline: l10n.updateCheckFailed,
++          body: null,
++          actions: [
++            FilledButton.icon(
++              onPressed: () => unawaited(_run()),
++              icon: const Icon(Icons.refresh),
++              label: Text(l10n.updateRetry),
++            ),
++          ],
++        );
++      case _Stage.armv7Only:
++        stage = _Info(
++          icon: Icon(Icons.smartphone_rounded, size: 56, color: scheme.tertiary),
++          headline: l10n.updateArm64Only,
++          body: null,
++          actions: const [],
++        );
++      default:
++        // One of the manifest-carrying stages. A missing manifest here is a
++        // broken state, not a crash: fall back to the failed-check view.
++        final manifest = _manifest;
++        if (manifest == null) {
++          stage = _Info(
++            icon: Icon(
++              Icons.error_outline_rounded,
++              size: 56,
++              color: scheme.error,
++            ),
++            headline: l10n.updateCheckFailed,
++            body: null,
++            actions: [
++              FilledButton.icon(
++                onPressed: () => unawaited(_run()),
++                icon: const Icon(Icons.refresh),
++                label: Text(l10n.updateRetry),
++              ),
++            ],
++          );
++        } else {
++          stage = switch (_stage) {
++            _Stage.available => _UpdateCard(
++              manifest: manifest,
++              onStart: _startFlow,
++            ),
++            _Stage.needsPermission => _Info(
++              icon: Icon(
++                Icons.verified_user_outlined,
++                size: 56,
++                color: scheme.primary,
++              ),
++              headline: l10n.updateUnknownSourcesTitle,
++              body: l10n.updateInstallPermissionHint,
++              actions: [
++                FilledButton.icon(
++                  onPressed: () =>
++                      unawaited(PlotinaUpdater.openUnknownSourcesSettings()),
++                  icon: const Icon(Icons.settings_outlined),
++                  label: Text(l10n.updateOpenSettings),
++                ),
++              ],
++            ),
++            _Stage.downloading => _Downloading(
++              progress: _progress,
++              onCancel: () => _canceled = true,
++            ),
++            _Stage.installerOpened => _Info(
++              icon: Icon(
++                Icons.download_done_rounded,
++                size: 56,
++                color: scheme.primary,
++              ),
++              headline: l10n.updateInstallerOpened,
++              body: null,
++              actions: [
++                TextButton(
++                  onPressed: () => Navigator.of(context).pop(),
++                  child: Text(l10n.close),
++                ),
++              ],
++            ),
++            _Stage.downloadFailed || _Stage.installFailed => _Info(
++              icon: Icon(
++                Icons.error_outline_rounded,
++                size: 56,
++                color: scheme.error,
++              ),
++              headline: l10n.updateFailed,
++              body: null,
++              actions: [
++                FilledButton.icon(
++                  onPressed: _startFlow,
++                  icon: const Icon(Icons.refresh),
++                  label: Text(l10n.updateRetry),
++                ),
++              ],
++            ),
++            _Stage.verifyFailed => _Info(
++              icon: Icon(
++                Icons.report_gmailerrorred_rounded,
++                size: 56,
++                color: scheme.error,
++              ),
++              headline: l10n.updateVerifyFailed,
++              body: null,
++              actions: [
++                FilledButton.icon(
++                  onPressed: _startFlow,
++                  icon: const Icon(Icons.refresh),
++                  label: Text(l10n.updateRetry),
++                ),
++              ],
++            ),
++            _ => _Info(
++              icon: Icon(
++                Icons.error_outline_rounded,
++                size: 56,
++                color: scheme.error,
++              ),
++              headline: l10n.updateCheckFailed,
++              body: null,
++              actions: [
++                FilledButton.icon(
++                  onPressed: () => unawaited(_run()),
++                  icon: const Icon(Icons.refresh),
++                  label: Text(l10n.updateRetry),
++                ),
++              ],
++            ),
++          };
++        }
++    }
++
++    return Scaffold(
++      backgroundColor: theme.scaffoldBackgroundColor,
++      appBar: AppBar(
++        backgroundColor: theme.appBarTheme.backgroundColor,
++        foregroundColor: theme.appBarTheme.foregroundColor,
++        title: Text(l10n.checkForUpdates),
++      ),
++      body: SafeArea(
++        child: SingleChildScrollView(
++          padding: const EdgeInsets.all(24),
++          child: Center(child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 480), child: stage)),
++        ),
++      ),
++    );
++  }
++}
++
++class _Info extends StatelessWidget {
++  const _Info({
++    required this.icon,
++    this.indicator,
++    required this.headline,
++    required this.body,
++    required this.actions,
++  });
++
++  final Widget? icon;
++  final Widget? indicator;
++  final String headline;
++  final String? body;
++  final List<Widget> actions;
++
++  @override
++  Widget build(BuildContext context) {
++    final theme = Theme.of(context);
++    final scheme = theme.colorScheme;
++    return Column(
++      mainAxisSize: MainAxisSize.min,
++      crossAxisAlignment: CrossAxisAlignment.stretch,
++      children: [
++        if (indicator != null)
++          Center(
++            child: SizedBox(height: 56, child: Center(child: indicator)),
++          )
++        else if (icon != null)
++          Center(child: icon),
++        const SizedBox(height: 16),
++        Text(
++          headline,
++          textAlign: TextAlign.center,
++          style: theme.textTheme.titleMedium?.copyWith(
++            color: scheme.onSurface,
++          ),
++        ),
++        if (body != null) ...[
++          const SizedBox(height: 12),
++          Text(
++            body!,
++            textAlign: TextAlign.center,
++            style: theme.textTheme.bodyMedium?.copyWith(
++              color: scheme.onSurfaceVariant,
++            ),
++          ),
++        ],
++        if (actions.isNotEmpty) ...[
++          const SizedBox(height: 24),
++          Column(
++            crossAxisAlignment: CrossAxisAlignment.stretch,
++            children: actions,
++          ),
++        ],
++      ],
++    );
++  }
++}
++
++class _UpdateCard extends StatelessWidget {
++  const _UpdateCard({required this.manifest, required this.onStart});
++
++  final UpdateManifest manifest;
++  final VoidCallback onStart;
++
++  @override
++  Widget build(BuildContext context) {
++    final theme = Theme.of(context);
++    final scheme = theme.colorScheme;
++    final l10n = L10n.of(context);
++    return Column(
++      mainAxisSize: MainAxisSize.min,
++      crossAxisAlignment: CrossAxisAlignment.stretch,
++      children: [
++        Card(
++          color: scheme.surfaceContainerHigh,
++          surfaceTintColor: Colors.transparent,
++          shape: RoundedRectangleBorder(
++            borderRadius: BorderRadius.circular(16),
++            side: BorderSide(color: scheme.outlineVariant),
++          ),
++          child: Padding(
++            padding: const EdgeInsets.all(16),
++            child: Column(
++              crossAxisAlignment: CrossAxisAlignment.start,
++              children: [
++                Row(
++                  children: [
++                    Icon(Icons.system_update_alt, color: scheme.primary),
++                    const SizedBox(width: 12),
++                    Expanded(
++                      child: Text(
++                        l10n.updateAvailable(manifest.versionName),
++                        style: theme.textTheme.titleMedium?.copyWith(
++                          color: scheme.onSurface,
++                        ),
++                      ),
++                    ),
++                  ],
++                ),
++                if (manifest.notes.isNotEmpty) ...[
++                  const SizedBox(height: 12),
++                  Text(
++                    manifest.notes,
++                    style: theme.textTheme.bodyMedium?.copyWith(
++                      color: scheme.onSurfaceVariant,
++                    ),
++                  ),
++                ],
++                const SizedBox(height: 8),
++                Text(
++                  PlotinaUpdater.prettySize(manifest.size),
++                  style: theme.textTheme.bodySmall?.copyWith(
++                    color: scheme.onSurfaceVariant,
++                  ),
++                ),
++              ],
++            ),
++          ),
++        ),
++        const SizedBox(height: 24),
++        FilledButton.icon(
++          onPressed: onStart,
++          icon: const Icon(Icons.file_download_outlined),
++          label: Text(l10n.updateDownloadInstall),
++        ),
++      ],
++    );
++  }
++}
++
++class _Downloading extends StatelessWidget {
++  const _Downloading({required this.progress, required this.onCancel});
++
++  final double? progress;
++  final VoidCallback onCancel;
++
++  @override
++  Widget build(BuildContext context) {
++    final theme = Theme.of(context);
++    final scheme = theme.colorScheme;
++    final l10n = L10n.of(context);
++    return Column(
++      mainAxisSize: MainAxisSize.min,
++      crossAxisAlignment: CrossAxisAlignment.stretch,
++      children: [
++        Text(
++          l10n.updateDownloading,
++          textAlign: TextAlign.center,
++          style: theme.textTheme.titleMedium?.copyWith(
++            color: scheme.onSurface,
++          ),
++        ),
++        const SizedBox(height: 16),
++        ClipRRect(
++          borderRadius: BorderRadius.circular(4),
++          child: LinearProgressIndicator(
++            value: progress,
++            minHeight: 8,
++            backgroundColor: scheme.surfaceContainerHighest,
++          ),
++        ),
++        const SizedBox(height: 8),
++        Text(
++          progress == null
++              ? ''
++              : '${(progress! * 100).round()} %',
++          textAlign: TextAlign.center,
++          style: theme.textTheme.bodyMedium?.copyWith(
++            color: scheme.onSurfaceVariant,
++          ),
++        ),
++        const SizedBox(height: 16),
++        TextButton(onPressed: onCancel, child: Text(l10n.cancel)),
++      ],
++    );
++  }
++}
 diff --git a/lib/utils/platform_infos.dart b/lib/utils/platform_infos.dart
 index 0c2f20e..2ca80af 100644
 --- a/lib/utils/platform_infos.dart
@@ -364,10 +941,10 @@ index dee8b07..58bd0d9 100644
      try {
 diff --git a/lib/utils/updater/plotina_updater.dart b/lib/utils/updater/plotina_updater.dart
 new file mode 100644
-index 0000000..5604147
+index 0000000..8af3150
 --- /dev/null
 +++ b/lib/utils/updater/plotina_updater.dart
-@@ -0,0 +1,486 @@
+@@ -0,0 +1,591 @@
 +// SPDX-FileCopyrightText: 2026 Plotina
 +//
 +// SPDX-License-Identifier: AGPL-3.0-or-later
@@ -377,7 +954,7 @@ index 0000000..5604147
 +/// We do not ship through Google Play: the APK is published on
 +/// https://plotina.cc/dl. The app periodically (at most once a day, from
 +/// `UpdateNotifier.showUpdateAvailableBanner`) and on demand (Settings ->
-+/// "Check for updates") fetches
++/// "Check for updates" opens a dedicated updater page) fetches
 +///
 +///   https://plotina.cc/dl/update-mobile.json
 +///
@@ -393,15 +970,24 @@ index 0000000..5604147
 +/// space our own PackageManager reports, so the comparison is apples to apples.
 +///
 +/// If it is greater than our own (read from the PackageManager through the
-+/// `cc.plotina.mobile/updater` method channel), the user gets a dialog, the APK
-+/// is streamed into the app cache while sha256 and size are verified against
-+/// the manifest, and a verified file is handed to the system installer through
-+/// a FileProvider content:// URI. Android 8+ refuses the handoff unless the
-+/// user granted this package "install unknown apps"; we detect that with
-+/// `canRequestPackageInstalls()` and send the user to the matching settings
-+/// page with an explanation before downloading anything. The manifest offers
-+/// only the arm64 APK, so a 32-bit-only device is told to fetch the armv7 APK
-+/// by hand instead of being handed a file the installer would reject.
++/// `cc.plotina.mobile/updater` method channel) the updater page offers the
++/// update; the silent daily check keeps a themed dialog that hands over to the
++/// same page. The APK is streamed into the app cache while sha256 and size are
++/// verified against the manifest, and a verified file is handed to the system
++/// installer through a FileProvider content:// URI. Android 8+ refuses the
++/// handoff unless the user granted this package "install unknown apps"; we
++/// detect that with `canRequestPackageInstalls()` and show an explanation with
++/// an "Open settings" button *before* downloading anything - the updater page
++/// then re-checks on app resume and continues the download by itself. The
++/// manifest offers only the arm64 APK, so a 32-bit-only device is told to
++/// fetch the armv7 APK by hand instead of being handed a file the installer
++/// would reject.
++///
++/// Download completion is defined by the *byte count*, not by the server
++/// closing the connection. The .25 build hung at 100 % because `await for`
++/// waited for a stream end that never came after the last byte; see
++/// [PlotinaUpdater.streamApk] and the regression test that streams a full
++/// body over a never-closed stream.
 +///
 +/// The manifest URL can be pointed at a local server for testing with
 +/// `--dart-define=PLOTINA_UPDATE_URL=http://10.0.2.2:8000/update-mobile.json`.
@@ -413,6 +999,7 @@ index 0000000..5604147
 +import 'package:crypto/crypto.dart';
 +import 'package:fluffychat/config/setting_keys.dart';
 +import 'package:fluffychat/l10n/l10n.dart';
++import 'package:fluffychat/pages/updater/plotina_updater_page.dart';
 +import 'package:fluffychat/utils/platform_infos.dart';
 +import 'package:fluffychat/utils/updater/update_manifest.dart';
 +import 'package:flutter/material.dart';
@@ -423,7 +1010,9 @@ index 0000000..5604147
 +import 'package:path_provider/path_provider.dart';
 +
 +abstract class PlotinaUpdater {
-+  static const MethodChannel _channel = MethodChannel(
++  /// Public so tests can answer it with
++  /// `TestDefaultBinaryMessengerBinding.setMockMethodCallHandler`.
++  static const MethodChannel channel = MethodChannel(
 +    'cc.plotina.mobile/updater',
 +  );
 +
@@ -440,6 +1029,27 @@ index 0000000..5604147
 +
 +  static const Duration _fetchTimeout = Duration(seconds: 20);
 +
++  /// No byte on the wire for this long -> the download has stalled.
++  static const Duration _chunkIdleTimeout = Duration(seconds: 60);
++
++  /// Waiting for the first response header for this long is a failure too.
++  static const Duration _sendTimeout = Duration(seconds: 30);
++
++  /// Injectable so tests never touch the network: used by [fetchManifest]
++  /// (GET of the JSON) and [streamApk] (`send` of the APK request).
++  static http.Client Function() clientFactory = http.Client.new;
++
++  /// Package name and human version of *this* install. Injectable because
++  /// package_info_plus has no implementation under `flutter test`.
++  static Future<({String packageName, String version})> Function()
++  packageInfoProvider = _defaultPackageInfo;
++
++  static Future<({String packageName, String version})> _defaultPackageInfo()
++  async {
++    final info = await PackageInfo.fromPlatform();
++    return (packageName: info.packageName, version: info.version);
++  }
++
 +  /// True on the platforms where the updater makes sense.
 +  static bool get isSupported => PlatformInfos.isAndroid;
 +
@@ -448,7 +1058,7 @@ index 0000000..5604147
 +  /// `fluffychat/scripts/version-code.py`).
 +  static Future<int> currentVersionCode() async {
 +    try {
-+      return await _channel.invokeMethod<int>('getVersionCode') ?? -1;
++      return await channel.invokeMethod<int>('getVersionCode') ?? -1;
 +    } catch (e, s) {
 +      Logs().w('Updater: getVersionCode failed', e, s);
 +      return -1;
@@ -458,20 +1068,49 @@ index 0000000..5604147
 +  /// Whether this device can install the arm64 APK the manifest offers.
 +  /// Defaults to true when the native side does not answer (an updater built
 +  /// without the channel should not silently stop checking).
-+  static Future<bool> _canInstallArm64() async {
++  static Future<bool> canInstallArm64() async {
 +    try {
-+      return await _channel.invokeMethod<bool>('canInstallArm64') ?? true;
++      return await channel.invokeMethod<bool>('canInstallArm64') ?? true;
 +    } catch (e, s) {
 +      Logs().w('Updater: canInstallArm64 failed', e, s);
 +      return true;
 +    }
 +  }
 +
++  /// Whether Android already lets this app launch an installer. False means
++  /// the user must grant "install unknown apps" first; we must not download
++  /// ~85 MB before asking.
++  static Future<bool> canRequestInstall() async {
++    try {
++      return await channel.invokeMethod<bool>('canRequestInstall') ?? false;
++    } catch (e, s) {
++      Logs().w('Updater: canRequestInstall failed', e, s);
++      return false;
++    }
++  }
++
++  /// Opens the per-app "install unknown apps" settings page. The updater page
++  /// re-checks [canRequestInstall] when the app resumes, so the user does not
++  /// have to tap anything after coming back.
++  static Future<void> openUnknownSourcesSettings() async {
++    try {
++      await channel.invokeMethod('openUnknownSourcesSettings');
++    } catch (e, s) {
++      Logs().w('Updater: cannot open the install permission page', e, s);
++    }
++  }
++
 +  static Future<UpdateManifest?> fetchManifest() async {
 +    try {
-+      final response = await http
-+          .get(Uri.parse(_manifestUrl))
-+          .timeout(_fetchTimeout);
++      final client = clientFactory();
++      final http.Response response;
++      try {
++        response = await client
++            .get(Uri.parse(_manifestUrl))
++            .timeout(_fetchTimeout);
++      } finally {
++        client.close();
++      }
 +      if (response.statusCode != 200) {
 +        Logs().w(
 +          'Updater: manifest HTTP ${response.statusCode} from $_manifestUrl',
@@ -480,11 +1119,12 @@ index 0000000..5604147
 +      }
 +      final manifest = UpdateManifest.tryParse(response.body);
 +      if (manifest == null) return null;
-+      final packageName = (await PackageInfo.fromPlatform()).packageName;
-+      if (manifest.client != 'mobile' || manifest.package != packageName) {
++      final info = await packageInfoProvider();
++      if (manifest.client != 'mobile' || manifest.package != info.packageName) {
 +        Logs().w(
 +          'Updater: manifest is not for this package '
-+          '(${manifest.client}/${manifest.package}, we are $packageName)',
++          '(${manifest.client}/${manifest.package}, '
++          'we are ${info.packageName})',
 +        );
 +        return null;
 +      }
@@ -495,314 +1135,219 @@ index 0000000..5604147
 +    }
 +  }
 +
-+  /// Fetches the manifest and, if it names a newer version, walks the user
-+  /// through dialog -> download -> verify -> system installer.
-+  ///
-+  /// `manual` is the Settings button: every failure gets a visible message.
-+  /// The silent once-a-day check only speaks up when there really is an
-+  /// update the user has not declined.
-+  static Future<void> checkForUpdate(
-+    BuildContext context, {
-+    bool manual = false,
-+  }) async {
-+    if (!isSupported) return;
-+    final l10n = L10n.of(context);
-+
-+    final manifest = await fetchManifest();
-+    if (!context.mounted) return;
-+    if (manifest == null) {
-+      if (manual) _showMessage(context, l10n.updateCheckFailed);
-+      return;
-+    }
-+
++  /// The result of comparing the manifest with this install; the updater page
++  /// turns each value into a visible state. Kept free of BuildContext so it
++  /// is unit-testable.
++  static Future<UpdateDecision> decide(UpdateManifest? manifest) async {
++    if (manifest == null) return UpdateDecision.checkFailed;
 +    final localCode = await currentVersionCode();
 +    // A versionCode we cannot read must not fall through to `<= -1`: the
 +    // silent daily check would then offer the same update on every launch.
 +    if (localCode <= 0) {
-+      Logs().w(
-+        'Updater: our own versionCode is unreadable, not offering an update',
-+      );
-+      if (manual) {
-+        if (!context.mounted) return;
-+        _showMessage(context, l10n.updateCheckFailed);
-+      }
-+      return;
++      Logs().w('Updater: our own versionCode is unreadable, not offering');
++      return UpdateDecision.checkFailed;
 +    }
-+    if (manifest.versionCode <= localCode) {
-+      if (manual) {
-+        final localName = (await PackageInfo.fromPlatform()).version;
-+        if (!context.mounted) return;
-+        _showMessage(context, l10n.updateIsLatest(localName));
-+      }
-+      return;
-+    }
-+
++    if (manifest.versionCode <= localCode) return UpdateDecision.upToDate;
 +    // The manifest offers one arm64 APK. A 32-bit-only phone cannot install
-+    // it, so the daily check stays quiet and the manual one says what to get
-+    // by hand instead of handing the installer a file it rejects.
-+    if (!await _canInstallArm64()) {
-+      if (manual) {
-+        if (!context.mounted) return;
-+        _showMessage(context, l10n.updateArm64Only);
-+      }
-+      return;
-+    }
-+
-+    final store = AppSettings.store;
-+    if (!manual && store.getInt(_dismissedKey) == manifest.versionCode) return;
-+
-+    if (!context.mounted) return;
-+    final start = await _showUpdateDialog(context, manifest);
-+    if (!context.mounted) return;
-+    if (start != true) {
-+      await store.setInt(_dismissedKey, manifest.versionCode);
-+      return;
-+    }
-+    await _downloadAndInstall(context, manifest);
++    // it, so the updater says what to get by hand instead of handing the
++    // installer a file it rejects.
++    if (!await canInstallArm64()) return UpdateDecision.armv7Only;
++    return UpdateDecision.updateAvailable;
 +  }
 +
-+  static Future<bool?> _showUpdateDialog(
-+    BuildContext context,
-+    UpdateManifest manifest,
-+  ) {
-+    final l10n = L10n.of(context);
-+    return showDialog<bool>(
-+      context: context,
-+      builder: (dialogContext) => AlertDialog(
-+        title: Text(l10n.updateAvailable(manifest.versionName)),
-+        content: Column(
-+          mainAxisSize: MainAxisSize.min,
-+          crossAxisAlignment: CrossAxisAlignment.start,
-+          children: [
-+            if (manifest.notes.isNotEmpty) Text(manifest.notes),
-+            Text(
-+              _prettySize(manifest.size),
-+              style: Theme.of(dialogContext).textTheme.bodySmall,
-+            ),
-+          ],
-+        ),
-+        actions: [
-+          TextButton(
-+            onPressed: () => Navigator.of(dialogContext).pop(false),
-+            child: Text(l10n.later),
-+          ),
-+          FilledButton.icon(
-+            onPressed: () => Navigator.of(dialogContext).pop(true),
-+            icon: const Icon(Icons.file_download_outlined),
-+            label: Text(l10n.updateDownloadInstall),
-+          ),
-+        ],
-+      ),
-+    );
-+  }
-+
-+  static Future<void> _downloadAndInstall(
-+    BuildContext context,
-+    UpdateManifest manifest,
-+  ) async {
-+    final l10n = L10n.of(context);
-+
++  /// The full handoff: permission -> (cached | streamed+verified) download ->
++  /// installer. UI-free and dependency-injected, so a test can feed a fake
++  /// byte stream through it and count the `installApk` calls. Returns
++  /// [InstallOutcome.needsPermission] without touching the network when
++  /// Android has not granted the install permission yet.
++  ///
++  /// `installApk` is invoked exactly once per successful call; the caller is
++  /// responsible for not running two flows concurrently. A verified file from
++  /// an earlier attempt is reused instead of downloaded again.
++  static Future<InstallOutcome> runInstallFlow({
++    required UpdateManifest manifest,
++    required File target,
++    void Function(double? fraction)? onProgress,
++    bool Function()? isCanceled,
++  }) async {
++    bool canceled() => isCanceled?.call() == true;
 +    // Ask for the permission *before* burning the mobile data: without
 +    // "install unknown apps" the handoff below is refused by the system.
-+    final canInstall =
-+        await _channel.invokeMethod<bool>('canRequestInstall') ?? false;
-+    if (!canInstall) {
-+      if (!context.mounted) return;
-+      await _explainUnknownSources(context);
-+      return;
-+    }
-+
-+    final file = await _cachedApkFile();
-+    // A verified download from an earlier attempt (e.g. the user granted the
-+    // permission and came back): do not download 100 MB again.
-+    if (!await _fileMatches(file, manifest)) {
-+      if (!context.mounted) return;
-+      final ok = await _download(context, file, manifest);
-+      if (!ok) return;
-+      if (!await _fileMatches(file, manifest)) {
-+        await file.delete().catchError((_) => file);
-+        if (!context.mounted) return;
-+        _showMessage(context, l10n.updateVerifyFailed);
-+        return;
++    if (!await canRequestInstall()) return InstallOutcome.needsPermission;
++    if (!await fileMatches(target, manifest)) {
++      final client = clientFactory();
++      final StreamResult result;
++      try {
++        result = await streamApk(
++          client: client,
++          file: target,
++          manifest: manifest,
++          onProgress: (fraction) => onProgress?.call(fraction),
++          isCanceled: canceled,
++        );
++      } finally {
++        client.close();
++      }
++      switch (result) {
++        case StreamResult.canceled:
++          await deleteQuietly(target);
++          return InstallOutcome.canceled;
++        case StreamResult.ok:
++          break;
++        case StreamResult.shaMismatch:
++          await deleteQuietly(target);
++          return InstallOutcome.verifyFailed;
++        case StreamResult.httpError:
++        case StreamResult.truncated:
++        case StreamResult.networkFailed:
++          await deleteQuietly(target);
++          return InstallOutcome.downloadFailed;
 +      }
 +    }
-+    if (!context.mounted) return;
++    onProgress?.call(1.0);
++    // The caller shows its progress UI until this returns; a throw here must
++    // never end the flow silently, so it is converted into a visible outcome.
 +    try {
-+      await _channel.invokeMethod('installApk', {'path': file.path});
-+      if (context.mounted) _showMessage(context, l10n.updateInstallerOpened);
++      await channel.invokeMethod('installApk', {'path': target.path});
 +    } catch (e, s) {
 +      Logs().w('Updater: the installer could not be started', e, s);
-+      if (context.mounted) _showMessage(context, l10n.updateFailed);
++      return InstallOutcome.installFailed;
 +    }
++    return InstallOutcome.installerOpened;
 +  }
 +
-+  /// Streams the APK into the app cache while hashing it, with a cancellable
-+  /// progress dialog. Returns true when the download completed.
-+  static Future<bool> _download(
-+    BuildContext context,
-+    File file,
-+    UpdateManifest manifest,
-+  ) async {
-+    final l10n = L10n.of(context);
-+    final progress = ValueNotifier<double?>(null);
-+    var canceled = false;
-+    var dialogOpen = true;
-+    final client = http.Client();
-+
-+    unawaited(
-+      showDialog<void>(
-+        context: context,
-+        barrierDismissible: false,
-+        builder: (dialogContext) => ValueListenableBuilder<double?>(
-+          valueListenable: progress,
-+          builder: (innerContext, value, _) => AlertDialog(
-+            title: Text(l10n.updateDownloading),
-+            content: Column(
-+              mainAxisSize: MainAxisSize.min,
-+              children: [
-+                LinearProgressIndicator(value: value),
-+                const SizedBox(height: 12),
-+                Text(
-+                  value == null
-+                      ? _prettySize(file.existsSync() ? file.lengthSync() : 0)
-+                      : '${(value * 100).round()} %',
-+                ),
-+              ],
-+            ),
-+            actions: [
-+              TextButton(
-+                onPressed: () {
-+                  canceled = true;
-+                  Navigator.of(dialogContext).pop();
-+                  client.close();
-+                },
-+                child: Text(l10n.cancel),
-+              ),
-+            ],
-+          ),
-+        ),
-+      ).whenComplete(() => dialogOpen = false),
-+    );
-+
-+    var verified = false;
-+    try {
-+      verified = await _streamApk(client, file, manifest, progress);
-+    } catch (e, s) {
-+      if (!canceled) Logs().w('Updater: download failed', e, s);
-+    } finally {
-+      progress.dispose();
-+      if (dialogOpen && context.mounted) {
-+        Navigator.of(context).pop();
-+      }
-+    }
-+
-+    if (canceled) {
-+      await file.delete().catchError((_) => file);
-+      return false;
-+    }
-+    if (!verified) {
-+      await file.delete().catchError((_) => file);
-+      if (context.mounted) _showMessage(context, l10n.updateFailed);
-+      return false;
-+    }
-+    return true;
-+  }
-+
-+  static Future<bool> _streamApk(
-+    http.Client client,
-+    File file,
-+    UpdateManifest manifest,
-+    ValueNotifier<double?> progress,
-+  ) async {
++  /// Streams the APK into [file] while hashing it. Completes as soon as
++  /// `manifest.size` bytes have arrived - even if the server has not closed
++  /// the connection (the .25 hang) - then verifies sha256 and size. An idle
++  /// timeout covers streams that stall mid-download.
++  static Future<StreamResult> streamApk({
++    required http.Client client,
++    required File file,
++    required UpdateManifest manifest,
++    required void Function(double? fraction) onProgress,
++    required bool Function() isCanceled,
++  }) async {
 +    final request = http.Request('GET', Uri.parse(manifest.apkUrl));
-+    final response = await client.send(request);
++    final http.StreamedResponse response;
++    try {
++      response = await client.send(request).timeout(_sendTimeout);
++    } catch (e, s) {
++      if (isCanceled()) return StreamResult.canceled;
++      Logs().w('Updater: APK download request failed', e, s);
++      return StreamResult.networkFailed;
++    }
 +    if (response.statusCode != 200) {
 +      Logs().w(
-+        'Updater: APK download HTTP ${response.statusCode} from ${manifest.apkUrl}',
++        'Updater: APK download HTTP ${response.statusCode} '
++        'from ${manifest.apkUrl}',
 +      );
-+      return false;
++      await _drainQuietly(response.stream);
++      return StreamResult.httpError;
 +    }
-+    final total = response.contentLength ?? manifest.size;
 +
++    final expected = manifest.size;
 +    final digestSink = _OneShotSink<Digest>();
 +    final hasher = sha256.startChunkedConversion(digestSink);
 +    final sink = file.openWrite();
-+    var done = 0;
-+    try {
-+      await for (final chunk in response.stream) {
-+        sink.add(chunk);
-+        hasher.add(chunk);
-+        done += chunk.length;
-+        if (total > 0) progress.value = (done / total).clamp(0.0, 1.0);
++    final done = Completer<StreamResult>();
++    StreamSubscription<List<int>>? subscription;
++    var received = 0;
++
++    Future<StreamResult> finish(StreamResult result) async {
++      await subscription?.cancel();
++      subscription = null;
++      try {
++        await sink.flush();
++        await sink.close();
++      } catch (e, s) {
++        Logs().w('Updater: could not close the download file', e, s);
 +      }
-+    } finally {
-+      await sink.flush();
-+      await sink.close();
 +      hasher.close();
-+      client.close();
++      if (result == StreamResult.ok &&
++          (digestSink.value == null ||
++              received != expected ||
++              digestSink.value.toString().toLowerCase() !=
++                  manifest.sha256.toLowerCase())) {
++        Logs().w(
++          'Updater: checksum/size mismatch: sha256 ${digestSink.value}, '
++          '$received bytes; manifest says ${manifest.sha256}, '
++          '$expected bytes',
++        );
++        result = StreamResult.shaMismatch;
++      }
++      return result;
 +    }
 +
-+    final digest = digestSink.value;
-+    final expected = manifest.size;
-+    final expectedSha = manifest.sha256.toLowerCase();
-+    if (digest == null ||
-+        digest.toString() != expectedSha ||
-+        (expected > 0 && done != expected)) {
-+      Logs().w(
-+        'Updater: checksum/size mismatch: sha256 $digest',
-+        '$done bytes; manifest says ${manifest.sha256}, $expected bytes',
-+      );
-+      return false;
++    void complete(StreamResult result) {
++      if (!done.isCompleted) done.complete(result);
 +    }
-+    return true;
++
++    subscription = response.stream
++        .timeout(
++          _chunkIdleTimeout,
++          onTimeout: (timeoutSink) => timeoutSink.addError(
++            TimeoutException('No APK bytes for $_chunkIdleTimeout'),
++          ),
++        )
++        .listen(
++          (chunk) {
++            // Chunks that still trickle in after completion (cancel is
++            // asynchronous) must not reach the file or the hash: the file
++            // and digest cover exactly the manifest's byte count.
++            if (done.isCompleted) return;
++            if (isCanceled()) {
++              complete(StreamResult.canceled);
++              return;
++            }
++            sink.add(chunk);
++            hasher.add(chunk);
++            received += chunk.length;
++            if (expected > 0) {
++              onProgress((received / expected).clamp(0.0, 1.0));
++            }
++            // Completion is defined by the *byte count*: a CDN that keeps
++            // the connection open after the last byte must not hang us.
++            if (expected > 0 && received >= expected) {
++              complete(StreamResult.ok);
++            }
++          },
++          onError: (Object e, StackTrace s) {
++            if (isCanceled()) {
++              complete(StreamResult.canceled);
++            } else {
++              Logs().w('Updater: APK download stream failed', e, s);
++              complete(StreamResult.networkFailed);
++            }
++          },
++          onDone: () {
++            // The server closed the stream. Fewer bytes than promised are a
++            // truncation; the byte-exact case is verified in finish().
++            if (done.isCompleted) return;
++            complete(
++              received >= expected
++                  ? StreamResult.ok
++                  : StreamResult.truncated,
++            );
++          },
++          cancelOnError: true,
++        );
++
++    return await finish(await done.future);
 +  }
 +
-+  static Future<void> _explainUnknownSources(BuildContext context) async {
-+    final l10n = L10n.of(context);
-+    await showDialog<void>(
-+      context: context,
-+      builder: (dialogContext) => AlertDialog(
-+        icon: const Icon(Icons.verified_user_outlined),
-+        title: Text(l10n.updateUnknownSourcesTitle),
-+        content: Text(l10n.updateUnknownSourcesText),
-+        actions: [
-+          TextButton(
-+            onPressed: () => Navigator.of(dialogContext).pop(),
-+            child: Text(l10n.close),
-+          ),
-+          FilledButton.icon(
-+            onPressed: () {
-+              Navigator.of(dialogContext).pop();
-+              _channel.invokeMethod('openUnknownSourcesSettings').catchError((
-+                e,
-+                s,
-+              ) {
-+                Logs().w(
-+                  'Updater: cannot open the install permission page',
-+                  e,
-+                  s,
-+                );
-+              });
-+            },
-+            icon: const Icon(Icons.settings_outlined),
-+            label: Text(l10n.updateOpenSettings),
-+          ),
-+        ],
-+      ),
-+    );
-+  }
-+
-+  static Future<File> _cachedApkFile() async {
++  /// The file the verified APK lives in while the installer takes it. Mirrors
++  /// `<cache-path name="updates" path="updates"/>` from
++  /// res/xml/updater_file_paths.xml: getTemporaryDirectory()/updates on the
++  /// Flutter side is context.cacheDir/updates on the native side, the only
++  /// path the FileProvider will turn into a content:// URI.
++  static Future<File> cachedApkFile() async {
 +    final temp = await getTemporaryDirectory();
-+    // Mirrors <cache-path name="updates" path="updates"/> from
-+    // res/xml/updater_file_paths.xml; only files below it reach the
-+    // FileProvider content:// URI.
 +    final dir = Directory('${temp.path}/updates');
 +    if (!dir.existsSync()) await dir.create(recursive: true);
 +    return File('${dir.path}/Plotina-Mobile.apk');
 +  }
 +
-+  static Future<bool> _fileMatches(File file, UpdateManifest manifest) async {
++  static Future<bool> fileMatches(File file, UpdateManifest manifest) async {
 +    try {
 +      if (!file.existsSync()) return false;
 +      if (manifest.size > 0 && file.lengthSync() != manifest.size) {
@@ -816,6 +1361,14 @@ index 0000000..5604147
 +    }
 +  }
 +
++  static Future<void> deleteQuietly(File file) async {
++    try {
++      if (file.existsSync()) await file.delete();
++    } catch (_) {
++      // Leftover cache files are pruned by the OS; never fail the flow for it.
++    }
++  }
++
 +  static Future<Digest?> _hashFile(File file) async {
 +    final sink = _OneShotSink<Digest>();
 +    final hasher = sha256.startChunkedConversion(sink);
@@ -826,13 +1379,54 @@ index 0000000..5604147
 +    return sink.value;
 +  }
 +
-+  static void _showMessage(BuildContext context, String message) {
-+    ScaffoldMessenger.of(context)
-+      ..hideCurrentSnackBar()
-+      ..showSnackBar(SnackBar(content: Text(message)));
++  static Future<void> _drainQuietly(Stream<List<int>> stream) async {
++    try {
++      final sub = stream.listen(null);
++      await sub.cancel();
++    } catch (_) {
++      // The socket is released either way; nothing actionable here.
++    }
 +  }
 +
-+  static String _prettySize(int bytes) {
++  /// Manual: open the dedicated updater page (a full-screen route inside the
++  /// app theme - never a bare dialog on an unthemed overlay). Silent: fetch,
++  /// and only when there really is a not-yet-declined update show the themed
++  /// dialog, which hands "Download and install" to the same page.
++  static Future<void> checkForUpdate(
++    BuildContext context, {
++    bool manual = false,
++  }) async {
++    if (!isSupported) return;
++    if (manual) {
++      await Navigator.of(context).push(
++        MaterialPageRoute(builder: (context) => const PlotinaUpdaterPage()),
++      );
++      return;
++    }
++
++    final manifest = await fetchManifest();
++    final decision = await decide(manifest);
++    if (decision != UpdateDecision.updateAvailable || manifest == null) return;
++
++    final store = AppSettings.store;
++    if (store.getInt(_dismissedKey) == manifest.versionCode) return;
++
++    if (!context.mounted) return;
++    final start = await showPlotinaUpdateDialog(context, manifest);
++    if (start != true) {
++      await store.setInt(_dismissedKey, manifest.versionCode);
++      return;
++    }
++    if (!context.mounted) return;
++    await Navigator.of(context).push(
++      MaterialPageRoute(
++        builder: (context) =>
++            PlotinaUpdaterPage(manifest: manifest, autoStart: true),
++      ),
++    );
++  }
++
++  static String prettySize(int bytes) {
 +    if (bytes <= 0) return '';
 +    const units = ['B', 'KB', 'MB', 'GB'];
 +    var size = bytes.toDouble();
@@ -842,6 +1436,94 @@ index 0000000..5604147
 +      unit++;
 +    }
 +    return '${size.toStringAsFixed(size >= 10 || unit == 0 ? 0 : 1)} ${units[unit]}';
++  }
++}
++
++enum UpdateDecision { upToDate, checkFailed, armv7Only, updateAvailable }
++
++enum InstallOutcome {
++  installerOpened,
++  needsPermission,
++  canceled,
++  downloadFailed,
++  verifyFailed,
++  installFailed,
++}
++
++enum StreamResult {
++  ok,
++  httpError,
++  truncated,
++  networkFailed,
++  shaMismatch,
++  canceled,
++}
++
++/// The themed "update is available" dialog of the silent daily check. The
++/// caller's [Theme] is captured and forced onto the dialog overlay, and every
++/// colour inside comes from that theme's colorScheme - never a hard-coded
++/// white surface - so the dialog is dark when the app is dark.
++Future<bool?> showPlotinaUpdateDialog(
++  BuildContext context,
++  UpdateManifest manifest,
++) {
++  final appTheme = Theme.of(context);
++  return showDialog<bool>(
++    context: context,
++    builder: (dialogContext) =>
++        Theme(data: appTheme, child: PlotinaUpdateDialog(manifest: manifest)),
++  );
++}
++
++class PlotinaUpdateDialog extends StatelessWidget {
++  const PlotinaUpdateDialog({super.key, required this.manifest});
++
++  final UpdateManifest manifest;
++
++  @override
++  Widget build(BuildContext context) {
++    final theme = Theme.of(context);
++    final scheme = theme.colorScheme;
++    final l10n = L10n.of(context);
++    return AlertDialog(
++      backgroundColor: scheme.surfaceContainerHigh,
++      surfaceTintColor: Colors.transparent,
++      icon: Icon(Icons.system_update_alt, color: scheme.primary),
++      title: Text(
++        l10n.updateAvailable(manifest.versionName),
++        style: theme.textTheme.titleLarge?.copyWith(color: scheme.onSurface),
++      ),
++      content: Column(
++        mainAxisSize: MainAxisSize.min,
++        crossAxisAlignment: CrossAxisAlignment.start,
++        children: [
++          if (manifest.notes.isNotEmpty)
++            Text(
++              manifest.notes,
++              style: theme.textTheme.bodyMedium?.copyWith(
++                color: scheme.onSurfaceVariant,
++              ),
++            ),
++          Text(
++            PlotinaUpdater.prettySize(manifest.size),
++            style: theme.textTheme.bodySmall?.copyWith(
++              color: scheme.onSurfaceVariant,
++            ),
++          ),
++        ],
++      ),
++      actions: [
++        TextButton(
++          onPressed: () => Navigator.of(context).pop(false),
++          child: Text(l10n.later),
++        ),
++        FilledButton.icon(
++          onPressed: () => Navigator.of(context).pop(true),
++          icon: const Icon(Icons.file_download_outlined),
++          label: Text(l10n.updateDownloadInstall),
++        ),
++      ],
++    );
 +  }
 +}
 +
@@ -981,3 +1663,896 @@ index 899be1b..7bc75ea 100644
    cupertino_ui: ^1.1.2
    desktop_drop: ^0.8.4
    device_info_plus: ^13.3.0
+diff --git a/test/utils/updater/plotina_updater_flow_test.dart b/test/utils/updater/plotina_updater_flow_test.dart
+new file mode 100644
+index 0000000..45056df
+--- /dev/null
++++ b/test/utils/updater/plotina_updater_flow_test.dart
+@@ -0,0 +1,240 @@
++// SPDX-FileCopyrightText: 2026 Plotina
++//
++// SPDX-License-Identifier: AGPL-3.0-or-later
++
++// Regression tests for the download/verify/install handoff. The headline one
++// reproduces the .25 failure: a server that sends every byte but never closes
++// the HTTP stream used to leave `await for` spinning forever, so the progress
++// dialog hung at 100 % and the installer was never invoked. The flow now
++// completes on the manifest byte count and must call installApk exactly once
++// without throwing - all without touching the network.
++
++import 'dart:io';
++
++import 'package:fluffychat/utils/updater/plotina_updater.dart';
++import 'package:fluffychat/utils/updater/update_manifest.dart';
++import 'package:flutter_test/flutter_test.dart';
++
++import 'updater_fakes.dart';
++
++List<List<int>> chunksOf(List<int> bytes, int chunkSize) => [
++  for (var i = 0; i < bytes.length; i += chunkSize)
++    bytes.sublist(i, i + chunkSize > bytes.length ? bytes.length : i + chunkSize),
++];
++
++void main() {
++  TestWidgetsFlutterBinding.ensureInitialized();
++
++  late Directory tmp;
++  late File target;
++  late List<int> apkBytes;
++
++  setUp(() {
++    tmp = Directory.systemTemp.createTempSync('plotina_updater_test');
++    target = File('${tmp.path}/updates/Plotina-Mobile.apk');
++    target.parent.createSync();
++    apkBytes = List<int>.generate(1000, (i) => i % 251);
++  });
++
++  tearDown(() {
++    tmp.deleteSync(recursive: true);
++  });
++
++  Future<InstallOutcome> runFlow(
++    UpdateManifest manifest, {
++    bool Function()? isCanceled,
++    void Function(double?)? onProgress,
++  }) => PlotinaUpdater.runInstallFlow(
++    manifest: manifest,
++    target: target,
++    isCanceled: isCanceled,
++    onProgress: onProgress,
++  ).timeout(
++    const Duration(seconds: 10),
++    onTimeout: () =>
++        fail('runInstallFlow did not finish - the download logic hung'),
++  );
++
++  group('runInstallFlow', () {
++    test('completes at 100 % and installs once when the stream never closes',
++        () async {
++          // The .25 hang: all bytes delivered, server keeps the connection
++          // open forever.
++          final platform = FakeUpdaterPlatform();
++          final client = useUpdaterFakes(
++            platform: platform,
++            manifestBody: '{}',
++            apkChunks: chunksOf(apkBytes, 250),
++            closeApkStream: false,
++          );
++          final manifest = makeManifest(apkBytes: apkBytes);
++          final progress = <double?>[];
++
++          final outcome = await runFlow(
++            manifest,
++            onProgress: progress.add,
++          );
++
++          expect(outcome, InstallOutcome.installerOpened);
++          expect(platform.installApkCalls, 1);
++          expect(platform.installedPaths, [target.path]);
++          expect(progress.whereType<double>().last, 1.0);
++          expect(target.readAsBytesSync(), apkBytes);
++          expect(client.requestedUrls, contains(kApkUrl));
++        });
++
++    test('installs once when the stream ends normally', () async {
++      final platform = FakeUpdaterPlatform();
++      useUpdaterFakes(
++        platform: platform,
++        manifestBody: '{}',
++        apkChunks: chunksOf(apkBytes, 300),
++      );
++      final manifest = makeManifest(apkBytes: apkBytes);
++
++      expect(
++        await runFlow(manifest),
++        InstallOutcome.installerOpened,
++      );
++      expect(platform.installApkCalls, 1);
++    });
++
++    test('asks for the permission before touching the network', () async {
++      final platform = FakeUpdaterPlatform(canInstall: false);
++      final client = useUpdaterFakes(
++        platform: platform,
++        manifestBody: '{}',
++        apkChunks: [apkBytes],
++      );
++      final manifest = makeManifest(apkBytes: apkBytes);
++
++      expect(await runFlow(manifest), InstallOutcome.needsPermission);
++      expect(platform.installApkCalls, 0);
++      expect(client.requestedUrls, isEmpty);
++      expect(target.existsSync(), isFalse);
++    });
++
++    test('reuses a cached, verified APK without downloading again', () async {
++      final platform = FakeUpdaterPlatform();
++      final client = useUpdaterFakes(
++        platform: platform,
++        manifestBody: '{}',
++        apkChunks: [apkBytes],
++      );
++      final manifest = makeManifest(apkBytes: apkBytes);
++      target.writeAsBytesSync(apkBytes);
++
++      expect(await runFlow(manifest), InstallOutcome.installerOpened);
++      expect(platform.installApkCalls, 1);
++      expect(client.requestedUrls, isEmpty);
++    });
++
++    test('rejects a file whose sha256 does not match the manifest', () async {
++      final platform = FakeUpdaterPlatform();
++      useUpdaterFakes(
++        platform: platform,
++        manifestBody: '{}',
++        apkChunks: chunksOf(apkBytes, 250),
++      );
++      final manifest = makeManifest(
++        apkBytes: apkBytes,
++        shaOverride: 'a' * 64,
++      );
++
++      expect(await runFlow(manifest), InstallOutcome.verifyFailed);
++      expect(platform.installApkCalls, 0);
++      expect(target.existsSync(), isFalse);
++    });
++
++    test('reports a download failure on HTTP 404', () async {
++      final platform = FakeUpdaterPlatform();
++      useUpdaterFakes(
++        platform: platform,
++        manifestBody: '{}',
++        apkStatus: 404,
++      );
++
++      expect(
++        await runFlow(makeManifest(apkBytes: apkBytes)),
++        InstallOutcome.downloadFailed,
++      );
++      expect(platform.installApkCalls, 0);
++    });
++
++    test('reports a download failure when the stream ends early', () async {
++      final platform = FakeUpdaterPlatform();
++      useUpdaterFakes(
++        platform: platform,
++        manifestBody: '{}',
++        apkChunks: [apkBytes.sublist(0, 400)],
++      );
++
++      expect(
++        await runFlow(makeManifest(apkBytes: apkBytes)),
++        InstallOutcome.downloadFailed,
++      );
++      expect(platform.installApkCalls, 0);
++      expect(target.existsSync(), isFalse);
++    });
++
++    test('cancel stops the flow and never calls the installer', () async {
++      final platform = FakeUpdaterPlatform();
++      useUpdaterFakes(
++        platform: platform,
++        manifestBody: '{}',
++        apkChunks: chunksOf(apkBytes, 250),
++        closeApkStream: false,
++      );
++      var cancel = false;
++
++      final outcome = await runFlow(
++        makeManifest(apkBytes: apkBytes),
++        isCanceled: () => cancel,
++        onProgress: (_) => cancel = true,
++      );
++
++      expect(outcome, InstallOutcome.canceled);
++      expect(platform.installApkCalls, 0);
++      expect(target.existsSync(), isFalse);
++    });
++
++    test('a failing installer channel surfaces as installFailed', () async {
++      final platform = FakeUpdaterPlatform(failInstall: true);
++      useUpdaterFakes(
++        platform: platform,
++        manifestBody: '{}',
++        apkChunks: [apkBytes],
++      );
++      target.writeAsBytesSync(apkBytes);
++
++      expect(
++        await runFlow(makeManifest(apkBytes: apkBytes)),
++        InstallOutcome.installFailed,
++      );
++      // The verified file stays so a retry installs without re-downloading.
++      expect(target.existsSync(), isTrue);
++    });
++  });
++
++  group('decide', () {
++    test('maps manifest and local codes to visible decisions', () async {
++      final newer = makeManifest(versionCode: 2112326);
++      final same = makeManifest(versionCode: 2112300);
++
++      final platform = FakeUpdaterPlatform(versionCode: 2112300);
++      useUpdaterFakes(platform: platform, manifestBody: '{}');
++
++      expect(await PlotinaUpdater.decide(newer),
++          UpdateDecision.updateAvailable);
++      expect(await PlotinaUpdater.decide(same), UpdateDecision.upToDate);
++      expect(await PlotinaUpdater.decide(null),
++          UpdateDecision.checkFailed);
++
++      platform.installArm64 = false;
++      expect(
++        await PlotinaUpdater.decide(newer),
++        UpdateDecision.armv7Only,
++      );
++    });
++  });
++}
+diff --git a/test/utils/updater/plotina_updater_page_test.dart b/test/utils/updater/plotina_updater_page_test.dart
+new file mode 100644
+index 0000000..c3f531b
+--- /dev/null
++++ b/test/utils/updater/plotina_updater_page_test.dart
+@@ -0,0 +1,321 @@
++// SPDX-FileCopyrightText: 2026 Plotina
++//
++// SPDX-License-Identifier: AGPL-3.0-or-later
++
++// Widget tests for the updater UI:
++// * the silent-check dialog must follow a dark theme (the .25 build showed a
++//   white dialog on a black app),
++// * the updater page must show a spinner while checking and a visible
++//   "no updates" state instead of a dead button,
++// * the permission flow must continue by itself after the user returns from
++//   the system settings, and the installer must be invoked exactly once.
++
++import 'dart:io';
++
++import 'package:fluffychat/l10n/l10n.dart';
++import 'package:fluffychat/pages/updater/plotina_updater_page.dart';
++import 'package:fluffychat/utils/updater/plotina_updater.dart';
++import 'package:flutter/material.dart';
++import 'package:flutter_test/flutter_test.dart';
++
++import 'updater_fakes.dart';
++
++ThemeData darkTheme() => ThemeData(
++  useMaterial3: true,
++  brightness: Brightness.dark,
++  colorScheme: ColorScheme.fromSeed(
++    seedColor: const Color(0xFF00B294),
++    brightness: Brightness.dark,
++  ),
++);
++
++Widget harness({required ThemeData theme, required Widget home}) => MaterialApp(
++  theme: theme,
++  localizationsDelegates: L10n.localizationsDelegates,
++  supportedLocales: L10n.supportedLocales,
++  locale: const Locale('en'),
++  home: home,
++);
++
++/// Advances the fake clock and the real event loop alternately until
++/// [finder] matches: the microtask pump alone would freeze the dart:io work
++/// of the download, and the real loop alone would never render frames.
++Future<void> settleTo(WidgetTester tester, Finder finder) async {
++  for (var i = 0; i < 200; i++) {
++    if (finder.evaluate().isNotEmpty) return;
++    await tester.runAsync(
++      () => Future<void>.delayed(const Duration(milliseconds: 5)),
++    );
++    await tester.pump(const Duration(milliseconds: 16));
++  }
++  debugDumpApp();
++  fail('updater UI never reached the expected state');
++}
++
++void main() {
++  late Directory tmp;
++  late File target;
++  late List<int> apkBytes;
++
++  setUp(() {
++    tmp = Directory.systemTemp.createTempSync('plotina_updater_page_test');
++    target = File('${tmp.path}/updates/Plotina-Mobile.apk');
++    target.parent.createSync();
++    apkBytes = List<int>.generate(1000, (i) => (i * 7) % 251);
++  });
++
++  tearDown(() {
++    tmp.deleteSync(recursive: true);
++  });
++
++  group('PlotinaUpdateDialog theme', () {
++    testWidgets('stays dark under a dark app theme (not white)', (
++      tester,
++    ) async {
++      final theme = darkTheme();
++      BuildContext? captured;
++      await tester.pumpWidget(
++        harness(
++          theme: theme,
++          home: Scaffold(
++            body: Builder(
++              builder: (context) {
++                captured = context;
++                return const SizedBox.shrink();
++              },
++            ),
++          ),
++        ),
++      );
++      // Two frames: the Localizations delegate resolves after an async gap
++      // before MaterialApp renders its home.
++      await tester.pump();
++      await tester.pump(const Duration(milliseconds: 50));
++
++      final result = showPlotinaUpdateDialog(
++        captured!,
++        makeManifest(),
++      );
++      await tester.pump();
++      await tester.pump(const Duration(milliseconds: 400));
++
++      final material = tester.widget<Material>(
++        find
++            .descendant(
++              of: find.byType(AlertDialog),
++              matching: find.byType(Material),
++            )
++            .first,
++      );
++      expect(
++        material.color,
++        isNot(Colors.white),
++        reason: 'the update dialog must never be white on a dark theme',
++      );
++      expect(material.color!.computeLuminance(), lessThan(0.5));
++      expect(material.color, theme.colorScheme.surfaceContainerHigh);
++      expect(find.text('Update 2.11.3 available'), findsOneWidget);
++      expect(find.text('Download and install'), findsOneWidget);
++      expect(find.text('Later'), findsOneWidget);
++
++      await tester.tap(find.text('Later'));
++      await tester.pump(const Duration(milliseconds: 400));
++      expect(await result, isFalse);
++    });
++
++    testWidgets('accept returns true', (tester) async {
++      BuildContext? captured;
++      await tester.pumpWidget(
++        harness(
++          theme: darkTheme(),
++          home: Scaffold(
++            body: Builder(
++              builder: (context) {
++                captured = context;
++                return const SizedBox.shrink();
++              },
++            ),
++          ),
++        ),
++      );
++      await tester.pump();
++      await tester.pump(const Duration(milliseconds: 50));
++
++      final result = showPlotinaUpdateDialog(
++        captured!,
++        makeManifest(),
++      );
++      await tester.pump();
++      await tester.pump(const Duration(milliseconds: 400));
++      await tester.tap(find.text('Download and install'));
++      await tester.pump(const Duration(milliseconds: 400));
++      expect(await result, isTrue);
++    });
++  });
++
++  group('PlotinaUpdaterPage', () {
++    testWidgets('spinner while checking, then the up-to-date state', (
++      tester,
++    ) async {
++      final platform = FakeUpdaterPlatform(versionCode: 2112300);
++      final client = useUpdaterFakes(
++        platform: platform,
++        manifestBody: manifestJsonOf(
++          makeManifest(versionCode: 2112300, apkBytes: apkBytes),
++        ),
++        gateManifest: true,
++      );
++      final gate = client.manifestGate;
++
++      await tester.pumpWidget(
++        harness(
++          theme: darkTheme(),
++          home: PlotinaUpdaterPage(fileProvider: () async => target),
++        ),
++      );
++      // First frames build Localizations, then the page itself; the fetch is
++      // still gated so the checking state is what we see.
++      await tester.pump();
++      await tester.pump(const Duration(milliseconds: 50));
++      await tester.pump(const Duration(milliseconds: 50));
++
++      expect(find.byType(CircularProgressIndicator), findsWidgets);
++      expect(find.text('Checking for updates…'), findsOneWidget);
++
++      gate.complete();
++      await settleTo(tester, find.text('No updates available'));
++      expect(
++        find.text('You are already running the latest version (2.11.3)'),
++        findsOneWidget,
++      );
++      expect(platform.installApkCalls, 0);
++    });
++
++    testWidgets('shows the update card with version, notes and size', (
++      tester,
++    ) async {
++      final manifest = makeManifest(apkBytes: apkBytes, versionCode: 2112326);
++      final platform = FakeUpdaterPlatform();
++      useUpdaterFakes(
++        platform: platform,
++        manifestBody: manifestJsonOf(manifest),
++      );
++
++      await tester.pumpWidget(
++        harness(
++          theme: darkTheme(),
++          home: PlotinaUpdaterPage(fileProvider: () async => target),
++        ),
++      );
++      await settleTo(tester, find.text('Download and install'));
++      expect(find.text('Update 2.11.3 available'), findsOneWidget);
++      expect(find.text('Test release notes'), findsOneWidget);
++      expect(find.text('1000 B'), findsOneWidget);
++    });
++
++    testWidgets('tells a 32-bit device to fetch the armv7 APK', (
++      tester,
++    ) async {
++      final platform = FakeUpdaterPlatform(installArm64: false);
++      useUpdaterFakes(
++        platform: platform,
++        manifestBody: manifestJsonOf(
++          makeManifest(apkBytes: apkBytes, versionCode: 2112326),
++        ),
++      );
++
++      await tester.pumpWidget(
++        harness(
++          theme: darkTheme(),
++          home: PlotinaUpdaterPage(fileProvider: () async => target),
++        ),
++      );
++      await settleTo(tester, find.textContaining('32-bit'));
++      expect(find.text('Download and install'), findsNothing);
++    });
++
++    testWidgets('failed check is visible and retryable', (tester) async {
++      final platform = FakeUpdaterPlatform();
++      final client = useUpdaterFakes(
++        platform: platform,
++        manifestBody: '{}',
++        manifestStatus: 500,
++      );
++      client.manifestGate.complete();
++
++      await tester.pumpWidget(
++        harness(
++          theme: darkTheme(),
++          home: PlotinaUpdaterPage(fileProvider: () async => target),
++        ),
++      );
++      await settleTo(
++        tester,
++        find.text(
++          'Could not check for updates. Check your connection and try again.',
++        ),
++      );
++      expect(find.text('Try again'), findsOneWidget);
++    });
++
++    testWidgets(
++      'permission request resumes the download automatically after the '
++      'user returns from settings - one tap on download, one install call',
++      (tester) async {
++        final manifest = makeManifest(apkBytes: apkBytes, versionCode: 2112326);
++        final platform = FakeUpdaterPlatform(canInstall: false);
++        final client = useUpdaterFakes(
++          platform: platform,
++          manifestBody: manifestJsonOf(manifest),
++          apkChunks: [
++            for (var i = 0; i < apkBytes.length; i += 250)
++              apkBytes.sublist(i, i + 250 > apkBytes.length ? apkBytes.length : i + 250),
++          ],
++        );
++
++        await tester.pumpWidget(
++          harness(
++            theme: darkTheme(),
++            home: PlotinaUpdaterPage(fileProvider: () async => target),
++          ),
++        );
++        await settleTo(tester, find.text('Download and install'));
++        await tester.tap(find.text('Download and install'));
++        await settleTo(tester, find.text('Allow app installation'));
++
++        // No download was started while the permission was missing.
++        expect(client.requestedUrls, isNot(contains(kApkUrl)));
++        expect(platform.installApkCalls, 0);
++
++        await tester.tap(find.text('Open settings'));
++        await settleTo(
++          tester,
++          find.text('Allow app installation'),
++        ); // still the explanation - not granted yet
++        expect(platform.settingsOpens, 1);
++
++        // The user grants in system settings and comes back: Android pauses
++        // and resumes the activity; the page must continue by itself.
++        platform.canInstall = true;
++        tester.binding.handleAppLifecycleStateChanged(
++          AppLifecycleState.inactive,
++        );
++        await tester.pump();
++        tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
++
++        await settleTo(
++          tester,
++          find.text('Continue the installation in the system installer.'),
++        );
++
++        expect(platform.installApkCalls, 1);
++        expect(platform.installedPaths, [target.path]);
++        expect(target.readAsBytesSync(), apkBytes);
++        expect(
++          client.requestedUrls.where((url) => url == kApkUrl),
++          hasLength(1),
++        );
++      },
++    );
++  });
++}
+diff --git a/test/utils/updater/update_manifest_test.dart b/test/utils/updater/update_manifest_test.dart
+new file mode 100644
+index 0000000..a3a2f0d
+--- /dev/null
++++ b/test/utils/updater/update_manifest_test.dart
+@@ -0,0 +1,91 @@
++// SPDX-FileCopyrightText: 2026 Plotina
++//
++// SPDX-License-Identifier: AGPL-3.0-or-later
++
++// Parsing rules of the update manifest: a broken or hostile JSON must never
++// reach the download step, and never throws.
++
++import 'dart:convert';
++
++import 'package:fluffychat/utils/updater/update_manifest.dart';
++import 'package:flutter_test/flutter_test.dart';
++
++Map<String, Object?> goodJson() => {
++  'client': 'mobile',
++  'package': 'cc.plotina.mobile',
++  'versionName': '2.11.3',
++  'versionCode': 2112326,
++  'apkUrl': 'https://plotina.cc/dl/Plotina-Mobile.apk',
++  'sha256':
++      '0000000000000000000000000000000000000000000000000000000000000000',
++  'size': 87000000,
++  'notes': 'test',
++};
++
++String encodeJson(Map<String, Object?> json) => jsonEncode(json);
++
++void main() {
++  group('UpdateManifest.tryParse', () {
++    test('accepts a good manifest', () {
++      final manifest = UpdateManifest.tryParse(encodeJson(goodJson()));
++      expect(manifest, isNotNull);
++      expect(manifest!.versionCode, 2112326);
++      expect(manifest.size, 87000000);
++      expect(manifest.package, 'cc.plotina.mobile');
++    });
++
++    test('lowercases the sha256', () {
++      final json = goodJson();
++      json['sha256'] = 'ABC${'0' * 61}';
++      final manifest = UpdateManifest.tryParse(encodeJson(json));
++      expect(manifest!.sha256, 'abc${'0' * 61}');
++    });
++
++    test('accepts a string versionCode', () {
++      final json = goodJson();
++      json['versionCode'] = '2112326';
++      expect(UpdateManifest.tryParse(encodeJson(json))!.versionCode, 2112326);
++    });
++
++    test('rejects non-JSON without throwing', () {
++      expect(UpdateManifest.tryParse('<html>404</html>'), isNull);
++      expect(UpdateManifest.tryParse('[1,2,3]'), isNull);
++    });
++
++    test('rejects a missing sha256', () {
++      final json = goodJson()..remove('sha256');
++      expect(UpdateManifest.tryParse(encodeJson(json)), isNull);
++    });
++
++    test('rejects a wrong-length or non-hex sha256', () {
++      final short = goodJson()..['sha256'] = 'deadbeef';
++      expect(UpdateManifest.tryParse(encodeJson(short)), isNull);
++      final nonHex = goodJson();
++      nonHex['sha256'] =
++          'g000000000000000000000000000000000000000000000000000000000000000';
++      expect(UpdateManifest.tryParse(encodeJson(nonHex)), isNull);
++    });
++
++    test('rejects non-positive versionCode and size', () {
++      expect(
++        UpdateManifest.tryParse(
++          encodeJson(goodJson()..['versionCode'] = 0),
++        ),
++        isNull,
++      );
++      expect(
++        UpdateManifest.tryParse(encodeJson(goodJson()..['size'] = -5)),
++        isNull,
++      );
++    });
++
++    test('rejects a relative apkUrl', () {
++      expect(
++        UpdateManifest.tryParse(
++          encodeJson(goodJson()..['apkUrl'] = 'Plotina-Mobile.apk'),
++        ),
++        isNull,
++      );
++    });
++  });
++}
+diff --git a/test/utils/updater/updater_fakes.dart b/test/utils/updater/updater_fakes.dart
+new file mode 100644
+index 0000000..8e922be
+--- /dev/null
++++ b/test/utils/updater/updater_fakes.dart
+@@ -0,0 +1,217 @@
++// SPDX-FileCopyrightText: 2026 Plotina
++//
++// SPDX-License-Identifier: AGPL-3.0-or-later
++
++// Shared fakes for the updater tests: a method-channel platform double and an
++// http client double, so no test ever touches the network or a real
++// PackageManager.
++
++import 'dart:async';
++import 'dart:convert';
++
++import 'package:crypto/crypto.dart';
++import 'package:fluffychat/utils/updater/plotina_updater.dart';
++import 'package:fluffychat/utils/updater/update_manifest.dart';
++import 'package:flutter/services.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:http/http.dart' as http;
++
++const String kManifestUrl = 'https://plotina.cc/dl/update-mobile.json';
++const String kApkUrl = 'https://plotina.cc/dl/Plotina-Mobile.apk';
++const String kPackageName = 'cc.plotina.mobile';
++
++UpdateManifest makeManifest({
++  List<int> apkBytes = const [1, 2, 3, 4],
++  int versionCode = 2112326,
++  String? shaOverride,
++  int? sizeOverride,
++}) {
++  return UpdateManifest(
++    client: 'mobile',
++    package: kPackageName,
++    versionName: '2.11.3',
++    versionCode: versionCode,
++    apkUrl: kApkUrl,
++    sha256: shaOverride ?? sha256.convert(apkBytes).toString(),
++    size: sizeOverride ?? apkBytes.length,
++    notes: 'Test release notes',
++  );
++}
++
++String manifestJsonOf(UpdateManifest manifest) => jsonEncode({
++  'client': manifest.client,
++  'package': manifest.package,
++  'versionName': manifest.versionName,
++  'versionCode': manifest.versionCode,
++  'apkUrl': manifest.apkUrl,
++  'sha256': manifest.sha256,
++  'size': manifest.size,
++  'notes': manifest.notes,
++});
++
++/// Doubles the `cc.plotina.mobile/updater` MethodChannel.
++class FakeUpdaterPlatform {
++  FakeUpdaterPlatform({
++    this.versionCode = 2112300,
++    this.installArm64 = true,
++    this.canInstall = true,
++    this.failInstall = false,
++  });
++
++  int versionCode;
++  bool installArm64;
++  bool canInstall;
++  bool failInstall;
++
++  int installApkCalls = 0;
++  int settingsOpens = 0;
++  final List<String> installedPaths = [];
++
++  void register() {
++    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
++        .setMockMethodCallHandler(PlotinaUpdater.channel, (
++          MethodCall call,
++        ) async {
++          switch (call.method) {
++            case 'getVersionCode':
++              return versionCode;
++            case 'canRequestInstall':
++              return canInstall;
++            case 'canInstallArm64':
++              return installArm64;
++            case 'openUnknownSourcesSettings':
++              settingsOpens++;
++              return true;
++            case 'installApk':
++              installApkCalls++;
++              installedPaths.add(
++                (call.arguments as Map)['path']! as String,
++              );
++              if (failInstall) {
++                throw PlatformException(code: 'no_activity');
++              }
++              return true;
++          }
++          return null;
++        });
++  }
++
++  void dispose() {
++    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
++        .setMockMethodCallHandler(PlotinaUpdater.channel, null);
++  }
++}
++
++/// Answers the manifest URL with fixed JSON and the APK URL with the given
++/// chunks. When [closeApkStream] is false the APK stream holds every byte but
++/// never ends - the exact condition that hung the .25 build at 100 %.
++class FakeUpdaterClient extends http.BaseClient {
++  FakeUpdaterClient({
++    required this.manifestBody,
++    this.apkChunks = const [],
++    this.apkStatus = 200,
++    this.closeApkStream = true,
++    this.manifestStatus = 200,
++    this.gateManifest = false,
++  });
++
++  final String manifestBody;
++  final List<List<int>> apkChunks;
++  final int apkStatus;
++  final int manifestStatus;
++  final bool closeApkStream;
++  final bool gateManifest;
++
++  final List<String> requestedUrls = [];
++  final Completer<void> manifestGate = Completer<void>();
++  StreamController<List<int>>? apkController;
++
++  @override
++  Future<http.StreamedResponse> send(http.BaseRequest request) async {
++    final url = request.url.toString();
++    requestedUrls.add(url);
++    if (url == kManifestUrl) {
++      // When gated, the fetch freezes until the test opens the gate - used
++      // to catch the spinner state of the updater page.
++      if (gateManifest) await manifestGate.future;
++      final body = utf8.encode(manifestBody);
++      return http.StreamedResponse(
++        Stream.value(body),
++        manifestStatus,
++        contentLength: body.length,
++        headers: const {'content-type': 'application/json'},
++      );
++    }
++    if (url == kApkUrl) {
++      final controller = StreamController<List<int>>();
++      apkController = controller;
++      if (apkStatus != 200) {
++        controller.close();
++        return http.StreamedResponse(const Stream.empty(), apkStatus);
++      }
++      final bytes = [for (final chunk in apkChunks) ...chunk];
++      for (final chunk in apkChunks) {
++        controller.add(chunk);
++      }
++      if (closeApkStream) {
++        // Not awaited: the close future only settles once a listener has
++        // seen the done event, and the production code has not listened yet.
++        controller.close();
++      }
++      return http.StreamedResponse(
++        controller.stream,
++        apkStatus,
++        contentLength: bytes.isEmpty ? null : bytes.length,
++      );
++    }
++    throw StateError('unexpected request to $url');
++  }
++
++  /// The production code closes its client after every use; this fake is
++  /// handed out repeatedly, so closing must be a no-op.
++  @override
++  void close() {}
++
++  /// Frees the never-closed APK stream so the test ends without dangling
++  /// controllers.
++  void dispose() {
++    apkController?.close();
++  }
++}
++
++/// Installs the fakes into [PlotinaUpdater]'s DI seams and restores whatever
++/// was there before (the first restore therefore puts the real, private
++/// defaults back). Returns the client for per-test assertions.
++FakeUpdaterClient useUpdaterFakes({
++  required FakeUpdaterPlatform platform,
++  required String manifestBody,
++  List<List<int>> apkChunks = const [],
++  int apkStatus = 200,
++  int manifestStatus = 200,
++  bool closeApkStream = true,
++  bool gateManifest = false,
++}) {
++  final previousClientFactory = PlotinaUpdater.clientFactory;
++  final previousPackageInfo = PlotinaUpdater.packageInfoProvider;
++  final client = FakeUpdaterClient(
++    manifestBody: manifestBody,
++    apkChunks: apkChunks,
++    apkStatus: apkStatus,
++    manifestStatus: manifestStatus,
++    closeApkStream: closeApkStream,
++    gateManifest: gateManifest,
++  );
++  platform.register();
++  PlotinaUpdater.clientFactory = () => client;
++  PlotinaUpdater.packageInfoProvider = () async => (
++    packageName: kPackageName,
++    version: '2.11.3',
++  );
++  addTearDown(() {
++    PlotinaUpdater.clientFactory = previousClientFactory;
++    PlotinaUpdater.packageInfoProvider = previousPackageInfo;
++    platform.dispose();
++    client.dispose();
++  });
++  return client;
++}
