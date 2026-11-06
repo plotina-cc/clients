@@ -61,7 +61,7 @@ install, no third-party update SDK.
   most once a day** when the app starts; it only opens the dialog when the manifest really is
   newer.
 - Manifest: `https://plotina.cc/dl/update-x.json` with exactly
-  `{"client":"x","package":"cc.plotina.x","versionName":"26.10.1","versionCode":202610025,
+  `{"client":"x","package":"cc.plotina.x","versionName":"26.10.1","versionCode":2026100252,
   "apkUrl":"https://plotina.cc/dl/Plotina-X.apk","sha256":"<hex>","size":<bytes>,
   "notes":"<short ru text>"}`. `build-element-x.yml` writes it from the built APK and attaches it
   to the release; `scripts/publish-clients.sh` copies it and `Plotina-X.apk` to the edge host
@@ -80,9 +80,11 @@ A release tag `vYY.MM.p-plotina-x.N` maps to the base versionCode
 
 CI derives `N` from the tag and passes it as `-PplotinaBuildNumber` (see "Work out the
 versionCode" in `build-element-x.yml` and the `defaultConfig` block patch 0014 adds to
-`app/build.gradle.kts`). `update-x.json` carries that base. The packaged APK additionally gets
-upstream's ABI digit appended (`base * 10 + abiCode`; arm64-v8a is 2, armeabi-v7a 1) and the
-updater strips the digit again before comparing, so arm64 and armv7 installs agree. Every base
+`app/build.gradle.kts`). `update-x.json` carries the packaged versionCode of the **arm64** APK,
+which CI reads back with `aapt` - the base with upstream's ABI digit appended (`base * 10 +
+abiCode`; arm64-v8a is 2, armeabi-v7a 1). `PlotinaUpdate.baseCodeOf` strips that digit from the
+manifest number *and* the installed number before comparing, so arm64 and armv7 installs agree
+and an update to the newest build is never offered again on the same build. Every base
 under this scheme is greater than the base of the pre-updater releases (upstream's `20261001`),
 which is why the `(2000 + YY)` prefix stays: `Plotina-X.apk` always upgrades an installed
 Plotina X. Locally, add `-PplotinaBuildNumber=N` or leave it out for upstream's own value.

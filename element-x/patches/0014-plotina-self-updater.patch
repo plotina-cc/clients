@@ -1,8 +1,8 @@
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index 50847073..29503829 100644
+index 50847073..aa323681 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
-@@ -55,6 +55,24 @@ android {
+@@ -55,6 +55,25 @@ android {
          versionCode = Versions.VERSION_CODE
          versionName = Versions.VERSION_NAME
  
@@ -19,8 +19,9 @@ index 50847073..29503829 100644
 +            versionCode = (2000 + cal[0]) * 100_000 + cal[1] * 1_000 + plotinaBuildNumber
 +        }
 +        // The packaged APK still gets the ABI digit the androidComponents block appends
-+        // (base * 10 + abiCode, arm64-v8a = 2). update-x.json carries the base value, and
-+        // io.element.android.x.updater.PlotinaUpdate compares it with the digit dropped again.
++        // (base * 10 + abiCode, arm64-v8a = 2). update-x.json carries the arm64 APK's full
++        // number - what CI reads back with aapt - and io.element.android.x.updater.PlotinaUpdate
++        // drops the digit from it before comparing with the installed base code.
 +        // Base codes under this scheme are greater than every previous Plotina build (whose base
 +        // was upstream's 20261001), so the installer accepts them as upgrades of an install.
 +
@@ -85,10 +86,10 @@ index cc058d0f..9588b8f1 100644
      /**
 diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt
 new file mode 100644
-index 00000000..38f6beef
+index 00000000..bc17b81e
 --- /dev/null
 +++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,189 @@
 +/*
 + * Plotina: the in-app updater's manifest side.
 + *
@@ -116,10 +117,14 @@ index 00000000..38f6beef
 + * with the other Plotina clients:
 + *
 + * ```json
-+ * {"client":"x","package":"cc.plotina.x","versionName":"26.10.1","versionCode":202610025,
++ * {"client":"x","package":"cc.plotina.x","versionName":"26.10.1","versionCode":2026100252,
 + *  "apkUrl":"https://plotina.cc/dl/Plotina-X.apk","sha256":"<hex>","size":<bytes>,
 + *  "notes":"<short ru text>"}
 + * ```
++ *
++ * `versionCode` is what the arm64 APK reports - the base code with the ABI digit (2) still on it -
++ * because that is the file the manifest points at. [isUpdateAvailable] drops the digit before
++ * comparing, so an armv7 install sees the same answer as an arm64 one for the same build.
 + */
 +data class UpdateInfo(
 +    val packageName: String,
@@ -180,10 +185,10 @@ index 00000000..38f6beef
 + * `(2000 + YY) * 100_000 + MM * 1_000 + N`, so `v26.10.1-plotina-x.25` is `202610025`. CI passes
 + * `N` as `-PplotinaBuildNumber` (see `app/build.gradle.kts` and build-element-x.yml). The packaged
 + * APK's own versionCode additionally carries upstream's ABI digit
-+ * (`base * 10 + abiCode`, arm64-v8a = 2, armeabi-v7a = 1), which [installedBaseCode] drops again.
-+ * The manifest carries the base value, and base codes are strictly greater than those of the
-+ * pre-updater builds (whose base was upstream's `20261001`), so every installed Plotina X can be
-+ * upgraded by this scheme.
++ * (`base * 10 + abiCode`, arm64-v8a = 2, armeabi-v7a = 1). update-x.json carries the arm64 APK's
++ * full number - the file it points at - and [isUpdateAvailable] drops the digit from both sides
++ * before comparing. Base codes are strictly greater than those of the pre-updater builds (whose
++ * base was upstream's `20261001`), so every installed Plotina X can be upgraded by this scheme.
 + */
 +object PlotinaUpdate {
 +    const val MANIFEST_URL = "https://plotina.cc/dl/update-x.json"
@@ -204,17 +209,33 @@ index 00000000..38f6beef
 +    fun activityIntent(context: Context): Intent =
 +        Intent().setClassName(context.packageName, ACTIVITY_CLASS)
 +
++    /**
++     * Drops the ABI digit the packaging step appends (`base * 10 + abiCode`, arm64-v8a = 2,
++     * armeabi-v7a = 1). Every versionCode comparison goes through this, on both sides.
++     */
++    fun baseCodeOf(versionCode: Long): Long = versionCode / 10L
++
 +    /** The installed version's base code, without the ABI digit the packaging step appends. */
 +    fun installedBaseCode(context: Context): Long {
 +        val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
-+        return PackageInfoCompat.getLongVersionCode(packageInfo) / 10L
++        return baseCodeOf(PackageInfoCompat.getLongVersionCode(packageInfo))
 +    }
 +
 +    fun installedVersionName(context: Context): String =
 +        context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
 +
++    /**
++     * Whether the manifest describes a newer build. CI writes the arm64 split's full versionCode,
++     * ABI digit included, into update-x.json, while a phone may run either split, so the digit is
++     * dropped from the manifest number too before comparing base codes. Comparing the raw manifest
++     * number against a base code made it always greater - the same build was offered forever
++     * after updating (the .28 report); integer division keeps an armv7 install quiet as well.
++     */
++    fun isUpdateAvailable(manifestVersionCode: Long, installedBase: Long): Boolean =
++        baseCodeOf(manifestVersionCode) > installedBase
++
 +    fun isUpdateAvailable(context: Context, info: UpdateInfo): Boolean =
-+        info.versionCode > installedBaseCode(context)
++        isUpdateAvailable(manifestVersionCode = info.versionCode, installedBase = installedBaseCode(context))
 +
 +    /**
 +     * Silent once-a-day check started from MainActivity.onCreate. Only when the manifest really
@@ -260,10 +281,10 @@ index 00000000..38f6beef
 +}
 diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt
 new file mode 100644
-index 00000000..bc6f9fba
+index 00000000..baee7182
 --- /dev/null
 +++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt
-@@ -0,0 +1,447 @@
+@@ -0,0 +1,476 @@
 +/*
 + * Plotina: the in-app updater's screen. A small dialog over the app: check the manifest, ask,
 + * download, verify sha256 + size, and hand the file to the system installer. No third-party
@@ -295,19 +316,24 @@ index 00000000..bc6f9fba
 +import androidx.compose.material3.AlertDialog
 +import androidx.compose.material3.Button
 +import androidx.compose.material3.LinearProgressIndicator
-+import androidx.compose.material3.MaterialTheme
 +import androidx.compose.material3.Text
 +import androidx.compose.material3.TextButton
 +import androidx.compose.runtime.Composable
++import androidx.compose.runtime.collectAsState
 +import androidx.compose.runtime.getValue
 +import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
 +import androidx.compose.runtime.setValue
 +import androidx.compose.ui.Modifier
 +import androidx.compose.ui.res.stringResource
 +import androidx.compose.ui.unit.dp
 +import androidx.core.content.ContextCompat
 +import androidx.lifecycle.lifecycleScope
++import io.element.android.compound.colors.SemanticColorsLightDark
++import io.element.android.libraries.architecture.bindings
++import io.element.android.libraries.designsystem.theme.ElementThemeApp
 +import io.element.android.x.R
++import io.element.android.x.di.AppBindings
 +import java.io.File
 +import java.security.MessageDigest
 +import kotlinx.coroutines.Dispatchers
@@ -340,6 +366,7 @@ index 00000000..bc6f9fba
 +        data object Installing : UiState
 +    }
 +
++    private lateinit var appBindings: AppBindings
 +    private var uiState by mutableStateOf<UiState>(UiState.Checking)
 +    private var pendingInfo: UpdateInfo? = null
 +    private var downloadId: Long = -1L
@@ -348,8 +375,11 @@ index 00000000..bc6f9fba
 +
 +    override fun onCreate(savedInstanceState: Bundle?) {
 +        super.onCreate(savedInstanceState)
++        // The app graph lives on the Application, so the updater can use the very same theme and
++        // preferences the rest of the app renders with. See MainActivity.MainContent.
++        appBindings = bindings()
 +        handleIntent(intent)
-+        setContent { MaterialTheme { UpdaterDialog() } }
++        setContent { UpdaterTheme { UpdaterDialog() } }
 +    }
 +
 +    override fun onNewIntent(intent: Intent) {
@@ -604,6 +634,26 @@ index 00000000..bc6f9fba
 +        }
 +    }
 +
++    /**
++     * The app's own theme wrapper, exactly as `MainActivity` uses it: Compound's colours and the
++     * user's light/dark preference from the preferences store. A bare `MaterialTheme` here was the
++     * bug - a light dialog with the default purple palette over a dark app.
++     */
++    @Composable
++    private fun UpdaterTheme(content: @Composable () -> Unit) {
++        val colors by remember {
++            appBindings.enterpriseService().semanticColorsFlow(sessionId = null)
++        }.collectAsState(SemanticColorsLightDark.default)
++        ElementThemeApp(
++            appPreferencesStore = appBindings.preferencesStore(),
++            featureFlagService = appBindings.featureFlagService(),
++            compoundLight = colors.light,
++            compoundDark = colors.dark,
++            buildMeta = appBindings.buildMeta(),
++            content = content,
++        )
++    }
++
 +    @Composable
 +    private fun ResultDialog(text: String) {
 +        AlertDialog(
@@ -772,20 +822,88 @@ index 00000000..1d30685c
 +    <string name="plotina_update_close">Close</string>
 +</resources>
 diff --git a/app/src/main/res/values/themes.xml b/app/src/main/res/values/themes.xml
-index 26cb0a56..bfb744eb 100644
+index 26cb0a56..2dfcabd5 100644
 --- a/app/src/main/res/values/themes.xml
 +++ b/app/src/main/res/values/themes.xml
-@@ -20,4 +20,10 @@
+@@ -20,4 +20,15 @@
          <item name="android:statusBarColor">@color/splashscreen_bg_light</item>
          <item name="android:navigationBarColor">@color/splashscreen_bg_light</item>
      </style>
-+    <!-- Plotina: the updater dialog over the running app; the dialog itself dims. -->
++    <!-- Plotina: the updater dialog over the running app; the dialog itself dims. Translucent
++         with transparent system bars: Theme.ElementX paints the bars and the background with the
++         splash colour, hardcoded per system night mode - a light strip over a dark app the moment
++         this window is on top. The dialog's own colours come from ElementThemeApp in Compose. -->
 +    <style name="Theme.ElementX.Updater" parent="Theme.ElementX">
 +        <item name="android:windowIsTranslucent">true</item>
 +        <item name="android:windowBackground">@android:color/transparent</item>
 +        <item name="android:backgroundDimEnabled">false</item>
++        <item name="android:statusBarColor">@android:color/transparent</item>
++        <item name="android:navigationBarColor">@android:color/transparent</item>
 +    </style>
  </resources>
+diff --git a/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdateTest.kt b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdateTest.kt
+new file mode 100644
+index 00000000..ead7e918
+--- /dev/null
++++ b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdateTest.kt
+@@ -0,0 +1,57 @@
++/*
++ * Plotina: the in-app updater's versionCode comparison.
++ *
++ * Copyright (C) 2026 Plotina
++ *
++ * This program is free software: you can redistribute it and/or modify it under the terms of the
++ * GNU Affero General Public License as published by the Free Software Foundation, version 3.
++ */
++
++package io.element.android.x.updater
++
++import com.google.common.truth.Truth.assertThat
++import org.junit.Test
++
++/**
++ * update-x.json carries the arm64 split's packaged versionCode, `base * 10 + 2`, while a phone may
++ * have installed either split, so installed codes arrive as `base * 10 + 1` or `base * 10 + 2`.
++ * The comparison drops the ABI digit from both sides: with the manifest's raw number once compared
++ * against a base code, every check answered "newer" and build .28 offered itself forever.
++ */
++class PlotinaUpdateTest {
++    // Base code of v26.10.1-plotina-x.28 under the tag formula: (2000+26)*100000 + 10*1000 + 28.
++    private val base = 202610028L
++
++    /** What update-x.json publishes for that build (aapt's arm64 number). */
++    private val arm64Code = base * 10 + 2
++
++    /** What an armv7 install of the same build reports. */
++    private val armv7Code = base * 10 + 1
++
++    @Test
++    fun `test the same build is not offered again after installing the arm64 split`() {
++        assertThat(PlotinaUpdate.isUpdateAvailable(arm64Code, PlotinaUpdate.baseCodeOf(arm64Code))).isFalse()
++    }
++
++    @Test
++    fun `test the same build is not offered again after installing the armv7 split`() {
++        assertThat(PlotinaUpdate.isUpdateAvailable(arm64Code, PlotinaUpdate.baseCodeOf(armv7Code))).isFalse()
++    }
++
++    @Test
++    fun `test the next build is offered`() {
++        val nextCode = (base + 1) * 10 + 2
++        assertThat(PlotinaUpdate.isUpdateAvailable(nextCode, base)).isTrue()
++    }
++
++    @Test
++    fun `test the next build is offered to an armv7 install`() {
++        val nextCode = (base + 1) * 10 + 2
++        assertThat(PlotinaUpdate.isUpdateAvailable(nextCode, PlotinaUpdate.baseCodeOf(armv7Code))).isTrue()
++    }
++
++    @Test
++    fun `test an older manifest is not offered`() {
++        assertThat(PlotinaUpdate.isUpdateAvailable((base - 1) * 10 + 2, base)).isFalse()
++    }
++}
 diff --git a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutNode.kt b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutNode.kt
 index 4ece133b..d273b667 100644
 --- a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutNode.kt
