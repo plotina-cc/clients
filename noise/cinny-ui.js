@@ -245,14 +245,27 @@
     var beSelect = document.createElement("select");
     beSelect.setAttribute("data-plotina-backend", "");
     beSelect.setAttribute("aria-label", s.backend || "Noise suppression");
+    // A native <select> ignores background/color in WebKitGTK: the closed
+    // field is painted by GTK (light) while our text colour is light too, so
+    // the selected value disappears. Drop the native appearance, draw our own
+    // caret and tell WebKit which colour scheme the popup list must use.
+    var darkSelect = isDarkSurface(surface.background);
+    var caretColour = darkSelect ? "%239aa0a6" : "%23555b61";
     beSelect.style.cssText =
-      "font:inherit;max-width:220px;flex:0 0 auto;border-radius:6px;padding:3px 8px;" +
-      "background:" + surface.background + ";color:" + surface.color + ";border:1px solid rgba(128,128,128,.5);";
+      "font:inherit;max-width:220px;flex:0 0 auto;border-radius:6px;padding:3px 26px 3px 8px;" +
+      "background-color:" + surface.background + ";color:" + surface.color +
+      ";border:1px solid rgba(128,128,128,.5);" +
+      "-webkit-appearance:none;appearance:none;" +
+      "color-scheme:" + (darkSelect ? "dark" : "light") + ";" +
+      "background-image:url(\"data:image/svg+xml,%3Csvg xmlns=&#39;http://www.w3.org/2000/svg&#39; viewBox=&#39;0 0 16 16&#39;%3E%3Cpath fill=&#39;" + caretColour + "&#39; d=&#39;M4 6l4 4 4-4z&#39;/%3E%3C/svg%3E\");" +
+      "background-repeat:no-repeat;background-position:right 8px center;background-size:12px;";
     if (L && L.BACKENDS) {
       L.BACKENDS.forEach(function (id) {
         var opt = document.createElement("option");
         opt.value = id;
         opt.textContent = L.BACKEND_LABELS[id];
+        opt.style.backgroundColor = surface.background;
+        opt.style.color = surface.color;
         beSelect.appendChild(opt);
       });
       beSelect.value = readBackend();
