@@ -45,8 +45,10 @@ npm install                    # electron binary comes from ~/.cache/electron
 LITE_DIST=/path/to/cinny/dist bash scripts/build-packages.sh linux    # AppImage deb rpm*
 bash scripts/build-packages.sh windows                                 # NSIS + MSI (Windows host)
 node scripts/test-updater.mjs                                          # updater unit tests
+bash scripts/qa-updater-feed.sh                                        # U2/U4 against a local QA feed
 SKIP_QA_HARNESS=1 bash scripts/qa-linux-package.sh appimage            # identity smoke
 xvfb-run -a -s "-screen 0 1440x900x24" bash scripts/qa-linux-package.sh deb  # + messaging
+python3 -m unittest discover -s ../cinny/tests -p 'test_install_lite_electron.py'  # silent installer
 ```
 `* rpm needs rpmbuild on the build host (ubuntu CI installs `rpm`; Arch
 without it warns and continues). Version: tag `v4.12.8-plotina-lite-desktop.N`
@@ -165,9 +167,11 @@ feed at a local server for U1–U7; `LITE_NO_UPDATES=1` disables polling.
   dist; deb assertions (8 hicolor icons, hyphen-sortable Version, `.desktop`
   validated, WM_CLASS/StartupWMClass/`_NET_WM_ICON 128x128` via xprop);
   updater unit tests green; full qa.mjs against the PACKAGED binary.
-- rpm builds where `rpmbuild` exists (ubuntu CI installs `rpm`); NSIS/MSI
-  need the Windows CI job (`--win`) — the build script accepts
-  `windows` and the workflow wires it.
+- rpm builds where `rpmbuild` exists (ubuntu CI installs `rpm`); the NSIS
+  auto-updating installer cross-builds from Linux via
+  `bash scripts/build-packages.sh win-nsis` (proven here: exe + blockmap +
+  latest.yml); MSI needs the Windows job (WiX via wine here needs Wine-Mono,
+  absent).
 - Open for Phase 3/4: tray dark/light variants, real IdP SSO run, Element
   Call join test against `call.plotina.cc`, E2EE device-verify UX, CSP header
   for the app server, `/dl` promotion + draft-release job, U1–U7 on a real
