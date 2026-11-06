@@ -1,0 +1,182 @@
+diff --git a/src-tauri/Cargo.toml b/src-tauri/Cargo.toml
+index e10c6d4..5caafa7 100644
+--- a/src-tauri/Cargo.toml
++++ b/src-tauri/Cargo.toml
+@@ -43,6 +43,13 @@ updater = [ "tauri-plugin-updater" ]
+ tauri-plugin-global-shortcut = "2.3.2"
+ tauri-plugin-updater = { version = "2.10.1", features = ["rustls-tls"], optional = true }
+ 
++[target.'cfg(target_os = "linux")'.dependencies]
++# Pinned to the exact version wry 0.55.1 already links in Cargo.lock, so
++# linux_media operates on the same native handle `with_webview` hands out:
++# one webkit2gtk binding in the binary, not two. Bump deliberately, together
++# with a `cargo tree -d webkit2gtk` check.
++webkit2gtk = "=2.0.2"
++
+ [lib]
+ name = "app_lib"
+ crate-type = ["staticlib", "cdylib", "rlib"]
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index d2004e6..928510c 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -5,6 +5,8 @@
+ 
+ // mod menu;
+ 
++mod linux_media;
++
+ use std::sync::atomic::{AtomicUsize, Ordering};
+ use tauri::{webview::{NewWindowResponse, WebviewWindowBuilder}, WebviewUrl, TitleBarStyle};
+ use tauri_plugin_opener::OpenerExt;
+@@ -337,7 +339,13 @@ pub fn run() {
+             #[cfg(target_os = "macos")]
+             let window_builder = window_builder.title_bar_style(TitleBarStyle::Transparent);
+             
+-            window_builder.build()?;
++            let main_window = window_builder.build()?;
++
++            // WebKitGTK ships getUserMedia/WebRTC disabled and its default
++            // permission handler denies everything, which is why calls answer
++            // "browser does not support WebRTC" (Linux only; a no-op stub on
++            // Windows/macOS, where the OS prompts instead).
++            linux_media::enable_media_capture(&main_window, port);
+             Ok(())
+         })
+         .run(context)
+diff --git a/src-tauri/src/linux_media.rs b/src-tauri/src/linux_media.rs
+new file mode 100644
+index 0000000..24f721a
+--- /dev/null
++++ b/src-tauri/src/linux_media.rs
+@@ -0,0 +1,130 @@
++//! Linux-only: enable microphone/camera capture (`getUserMedia`) and WebRTC
++//! in the WebKitGTK webview of the main app window.
++//!
++//! WebKitGTK is off by default on two counts, and both must be handled or
++//! calling fails on Linux only:
++//!
++//! * `enable-media-stream` and `enable-webrtc` are **off by default**, so
++//!   `navigator.mediaDevices` has no working `getUserMedia` and
++//!   `RTCPeerConnection` does not exist; and
++//! * the default `permission-request` handler **denies every request**, so
++//!   even with the flags on, capture rejects with `NotAllowedError`.
++//!
++//! The handler installed here is deny-by-default: a `UserMedia` request is
++//! allowed only when the webview's own document sits on one of our origins -
++//! the app served by tauri-plugin-localhost (`http://localhost:<port>`) or
++//! the embedded Element Call (`https://call.plotina.cc`). The remote sign-in
++//! (SSO) child windows are built elsewhere and never receive this handler,
++//! so they keep WebKit's default deny: no remote page gains device access,
++//! and no Tauri capability is involved.
++//!
++//! The `webkit2gtk` crate is pinned to the exact version wry already links
++//! (see `Cargo.lock`), so this module operates on the very same native
++//! handle `WebviewWindow::with_webview` hands out - one binding, not two.
++
++/// The embedded Element Call iframe origin, trusted for devices next to the
++/// app's own origin.
++#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
++const CALL_ORIGIN: &str = "https://call.plotina.cc";
++
++/// Whether `uri` sits on a device-trusted origin: the app origin built from
++/// `app_port`, or the Element Call origin. Matching is exact-origin-or-path-
++/// prefix, so `http://localhost:44548.evil.com` and
++/// `https://call.plotina.cc.attacker.net` do not slip through. Pure and
++/// platform-independent so it can be unit-tested everywhere.
++#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
++fn is_trusted_media_uri(uri: &str, app_port: u16) -> bool {
++  fn matches(uri: &str, origin: &str) -> bool {
++    uri == origin
++      || uri
++        .strip_prefix(origin)
++        .is_some_and(|rest| rest.starts_with('/'))
++  }
++
++  let app_origin = format!("http://localhost:{app_port}");
++  matches(uri, &app_origin) || matches(uri, CALL_ORIGIN)
++}
++
++/// Enable media capture for the main window's webview on WebKitGTK. A no-op
++/// on every other platform, so the shared startup code calls it
++/// unconditionally.
++#[cfg(target_os = "linux")]
++pub fn enable_media_capture(window: &tauri::WebviewWindow, app_port: u16) {
++  use webkit2gtk::{
++    glib::prelude::Cast, PermissionRequestExt, SettingsExt, UserMediaPermissionRequest,
++    UserMediaPermissionRequestExt, WebViewExt,
++  };
++
++  // `with_webview` runs the closure on the UI thread, which GTK requires.
++  let result = window.with_webview(move |platform| {
++    // On Linux this is the underlying `webkit2gtk::WebView` wry created.
++    let webview = platform.inner();
++
++    if let Some(settings) = webview.settings() {
++      settings.set_enable_media_stream(true);
++      settings.set_enable_webrtc(true);
++    }
++
++    // Deny-by-default: only our own origins get mic/camera. Anything else
++    // that ends up in this webview is refused; returning `true` marks the
++    // request handled so WebKit's own default does not double-answer it.
++    // Non-`UserMedia` requests return `false` and keep their default.
++    webview.connect_permission_request(move |wv, request| {
++      let Some(user_media) = request.downcast_ref::<UserMediaPermissionRequest>() else {
++        return false;
++      };
++      let uri = wv.uri().map(|u| u.to_string()).unwrap_or_default();
++      let for_device = user_media.is_for_audio_device() || user_media.is_for_video_device();
++      if for_device && is_trusted_media_uri(&uri, app_port) {
++        user_media.allow();
++      } else {
++        user_media.deny();
++      }
++      true
++    });
++  });
++
++  if let Err(e) = result {
++    eprintln!("could not enable WebKitGTK media capture: {e}");
++  }
++}
++
++/// No-op stub so shared startup code compiles and runs on every platform.
++/// macOS (WKWebView) and Windows (WebView2) route media permissions through
++/// the OS automatically.
++#[cfg(not(target_os = "linux"))]
++pub fn enable_media_capture(_window: &tauri::WebviewWindow, _app_port: u16) {}
++
++#[cfg(test)]
++mod tests {
++  use super::is_trusted_media_uri;
++
++  #[test]
++  fn allows_the_app_origin_and_paths_on_it() {
++    assert!(is_trusted_media_uri("http://localhost:44548", 44548));
++    assert!(is_trusted_media_uri("http://localhost:44548/", 44548));
++    assert!(is_trusted_media_uri("http://localhost:44548/#/room/1", 44548));
++  }
++
++  #[test]
++  fn allows_the_embedded_call_origin() {
++    assert!(is_trusted_media_uri("https://call.plotina.cc", 44548));
++    assert!(is_trusted_media_uri("https://call.plotina.cc/", 44548));
++    assert!(is_trusted_media_uri("https://call.plotina.cc/room/x?conf=1", 44548));
++  }
++
++  #[test]
++  fn denies_lookalikes_and_everything_else() {
++    assert!(!is_trusted_media_uri("", 44548));
++    assert!(!is_trusted_media_uri("http://localhost:44548.evil.com/", 44548));
++    assert!(!is_trusted_media_uri("http://localhost:445480/", 44548));
++    assert!(!is_trusted_media_uri("http://localhost:1420/", 44548));
++    assert!(!is_trusted_media_uri("http://evil.com@localhost:44548/", 44548));
++    assert!(!is_trusted_media_uri("https://call.plotina.cc.attacker.net/", 44548));
++    assert!(!is_trusted_media_uri("https://call.plotina.cc.evil", 44548));
++    // the remote sign-in window's document is never trusted
++    assert!(!is_trusted_media_uri("https://idp.example.com/accounts/login/", 44548));
++    // and neither is the same app on a port we did not serve it from
++    assert!(!is_trusted_media_uri("http://localhost:8080/", 44548));
++  }
++}
