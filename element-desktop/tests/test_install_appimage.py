@@ -22,11 +22,13 @@ PLOTINA_TEST_FIXTURE_DIR); если сети нет — эти тесты про
 """
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import unittest
+import zlib
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -95,6 +97,101 @@ def make_fake_deb(directory: Path) -> Path:
     return p
 
 
+# ------------------------------------------------------------- icon helpers --
+BRAND_RGB = (23, 121, 90)  # #17795a — Plotina green
+
+
+def solid_png(path, size, rgb=BRAND_RGB):
+    """Minimal 8-bit RGB PNG (filter 0), so tests need no Pillow."""
+    ihdr = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
+    raw = b"".join(b"\x00" + bytes(rgb) * size for _ in range(size))
+
+    def chunk(tag, data):
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    Path(path).write_bytes(
+        b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
+    )
+
+
+def png_decode(path):
+    """Return (w, h, center_pixel_rgb) for 8-bit RGB/RGBA PNGs, all filters."""
+    data = Path(path).read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG"
+    pos, idat, w, h, depth, ctype = 8, b"", None, None, None, None
+    while pos + 8 <= len(data):
+        (ln,) = struct.unpack(">I", data[pos:pos + 4])
+        tag, body = data[pos + 4:pos + 8], data[pos + 8:pos + 8 + ln]
+        if tag == b"IHDR":
+            w, h, depth, ctype = struct.unpack(">IIBB", body[:10])
+        elif tag == b"IDAT":
+            idat += body
+        pos += 12 + ln
+    assert depth == 8 and ctype in (2, 6), f"unsupported png depth={depth} color={ctype}"
+    bpp = 3 if ctype == 2 else 4
+    scan = zlib.decompress(idat)
+    stride = w * bpp
+
+    def paeth(a, b, c):
+        p = a + b - c
+        pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+        return a if pa <= pb and pa <= pc else (b if pb <= pc else c)
+
+    prev, off = bytearray(stride), 0
+    for y in range(h):
+        f = scan[off]
+        off += 1
+        line = bytearray(scan[off:off + stride])
+        off += stride
+        for x in range(stride):
+            a = line[x - bpp] if x >= bpp else 0
+            c = prev[x - bpp] if x >= bpp else 0
+            if f == 1:
+                line[x] = (line[x] + a) & 255
+            elif f == 2:
+                line[x] = (line[x] + prev[x]) & 255
+            elif f == 3:
+                line[x] = (line[x] + ((a + prev[x]) >> 1)) & 255
+            elif f == 4:
+                line[x] = (line[x] + paeth(a, prev[x], c)) & 255
+        if y == h // 2:
+            i = (w // 2) * bpp
+            return w, h, tuple(line[i:i + 3])
+        prev = line
+    raise AssertionError("PNG rows shorter than IHDR height")
+
+
+# --appimage-extract-able fake: writes the hicolor layout named in $ICON_SIZES.
+FAKE_EXTRACT_APPIMAGE = """#!/bin/sh
+if [ "$1" = "--appimage-extract" ]; then
+    python3 - <<'PYEOF'
+import os, struct, zlib
+def solid_png(path, size):
+    ihdr = struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0)
+    raw = b"".join(b"\\x00" + bytes((23, 121, 90)) * size for _ in range(size))
+    def chunk(tag, data):
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+    with open(path, "wb") as fh:
+        fh.write(b"\\x89PNG\\r\\n\\x1a\\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+root = "squashfs-root"
+os.makedirs(root, exist_ok=True)
+for s in os.environ.get("ICON_SIZES", "").split():
+    d = os.path.join(root, "usr/share/icons/hicolor", s + "x" + s, "apps")
+    os.makedirs(d, exist_ok=True)
+    solid_png(os.path.join(d, "plotina-desktop.png"), int(s))
+extra = os.environ.get("EXTRA_ROOT_PNG", "")
+if extra:
+    solid_png(os.path.join(root, extra), 512)
+PYEOF
+    exit 0
+fi
+echo "fake: not an appimage" >&2
+exit 1
+"""
+
+
 # ------------------------------------------------------------- mock tools --
 MOCK_SUDO = """#!/bin/sh
 if [ "$1" = "-n" ]; then
@@ -128,7 +225,7 @@ echo "update-desktop-database $*" >> "$MOCK_LOG"
 exit 0
 """
 
-CORE_TOOLS = ["bash", "sh", "cat", "curl", "id", "install", "mkdir", "mktemp", "rm", "dirname"]
+CORE_TOOLS = ["bash", "sh", "cat", "curl", "id", "install", "mkdir", "mktemp", "rm", "dirname", "python3"]
 
 
 def make_core_bin(directory: Path) -> Path:
@@ -219,6 +316,81 @@ class InstallerCase(unittest.TestCase):
         self.assertTrue(lines, "пустой stdout")
         self.assertIn("SSO", lines[-1])
         self.assertIn("Plotina Desktop", lines[-1])
+
+
+class TestAppImageIcons(InstallerCase):
+    """Иконки AppImage-пути: hicolor-раскладка из squashfs-root должна
+    устанавливаться ВСЕМИ размерами в PREFIX/share/icons/hicolor (KDE/Breeze
+    выбирает нужный; один 512x512 в .36/.37 и поиск только по
+    squashfs-root/*.png давали '?' в лончере)."""
+
+    def setUp(self):
+        super().setUp()
+        self.xdg_mocks = {
+            "xdg-settings": MOCK_XDG_SETTINGS,
+            "update-desktop-database": MOCK_UPDATE_DESKTOP_DB,
+        }
+
+    def fake_extract_appimage(self):
+        p = self.tmp / "Plotina-Desktop-Icons.AppImage"
+        p.write_text(FAKE_EXTRACT_APPIMAGE)
+        p.chmod(0o755)
+        return p
+
+    def install_with_sizes(self, sizes, extra_env=None):
+        env = {"ICON_SIZES": " ".join(sizes)}
+        if extra_env:
+            env.update(extra_env)
+        proc = self.run_installer([str(self.fake_extract_appimage())], mocks=self.xdg_mocks,
+                                  extra_env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        return proc
+
+    def test_all_hicolor_sizes_installed_with_brand_pixels(self):
+        sizes = ["16", "24", "32", "48", "64", "128", "256", "512"]
+        self.install_with_sizes(sizes)
+        icon_dir = self.prefix / "share" / "icons" / "hicolor"
+        for s in sizes:
+            png = icon_dir / f"{s}x{s}" / "apps" / "plotina-desktop.png"
+            self.assertTrue(png.is_file(), f"missing installed icon {s}x{s}")
+            w, h, px = png_decode(png)
+            self.assertEqual((w, h), (int(s), int(s)), f"icon {s}x{s} decoded as {w}x{h}")
+            self.assertEqual(px, BRAND_RGB, f"icon {s}x{s} is not brand green, got {px}")
+
+    def test_desktop_entry_wired_to_installed_icon(self):
+        self.install_with_sizes(["128", "512"])
+        desktop = (self.prefix / "share" / "applications" / "plotina-desktop.desktop").read_text()
+        self.assertIn("Icon=plotina-desktop", desktop)
+        self.assertIn("StartupWMClass=plotina-desktop", desktop)
+
+    def test_old_layout_fallback_root_png_only(self):
+        # <= .36 manually-laid images: single plain png in squashfs-root.
+        self.install_with_sizes([], extra_env={"EXTRA_ROOT_PNG": "plotina-desktop.png"})
+        png = self.prefix / "share" / "icons" / "hicolor" / "512x512" / "apps" / "plotina-desktop.png"
+        self.assertTrue(png.is_file(), "root png must fall back to 512x512")
+        w, h, px = png_decode(png)
+        self.assertEqual((w, h), (512, 512))
+        self.assertEqual(px, BRAND_RGB)
+
+    def test_real_appimage_installs_512_brand_icon(self):
+        app = real_appimage()
+        if app is None:
+            self.skipTest("real AppImage fixture unavailable (offline?)")
+        proc = self.run_installer([str(app)], mocks=self.xdg_mocks)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        icon_dir = self.prefix / "share" / "icons" / "hicolor"
+        installed = sorted(d.name for d in icon_dir.iterdir()
+                           if (d / "apps" / "plotina-desktop.png").is_file())
+        self.assertTrue(installed, f"no icons installed from real AppImage: {proc.stdout}")
+        self.assertIn("512x512", installed, installed)
+        w, h, px = png_decode(icon_dir / "512x512" / "apps" / "plotina-desktop.png")
+        self.assertEqual((w, h), (512, 512))
+        # /dl may serve any recent build; every Plotina icon is a saturated
+        # green glyph field — exact #17795a is asserted in the synthetic test.
+        r, g, b = px
+        self.assertTrue(g > r and g > b and g >= 90,
+                        f"installed 512x512 icon is not green, got {px}")
+
 
 
 class TestScriptContract(InstallerCase):

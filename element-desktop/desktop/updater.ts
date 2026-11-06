@@ -103,6 +103,30 @@ export function detectUpdateMode(platform: string, env: Record<string, string | 
 
 const UPDATE_MODE = detectUpdateMode(process.platform, process.env);
 
+/**
+ * Feed string the webapp asks for through ipc.ts' "getUpdateFeedUrl"
+ * (desktop/patch-shell.py wires it here). HelpUserSettingsTab shows the
+ * "Check for updates" button only when canSelfUpdate() =
+ * Boolean(await ipcCall("getUpdateFeedUrl")) is true, and awaiting an IPC the
+ * main process never answers because upstream's autoUpdater.getFeedURL()
+ * threw hangs that promise forever. Upstream's autoUpdater is
+ * Squirrel/macOS-only and this updater replaces it, so answer from here:
+ * a non-empty feed exactly where installUpdate() can actually update —
+ * NSIS Windows, and Linux when running from an AppImage. A deb install
+ * updates through apt, so it reports no feed and the webapp hides the
+ * button, as before.
+ */
+export const PLOTINA_RELEASES_FEED = "https://github.com/plotina-cc/clients/releases";
+
+export function plotinaUpdateFeed(platform: string, env: Record<string, string | undefined>): string {
+    const mode = detectUpdateMode(platform, env);
+    return mode === "windows-installer" || mode === "linux-appimage" ? PLOTINA_RELEASES_FEED : "";
+}
+
+export function getUpdateFeedUrl(): string {
+    return plotinaUpdateFeed(process.platform, process.env);
+}
+
 interface UpdateFeed {
     owner: string;
     repo: string;

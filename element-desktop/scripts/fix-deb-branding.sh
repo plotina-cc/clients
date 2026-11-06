@@ -70,6 +70,21 @@ text = re.sub(r"^Description: *\n", "Description: Matrix client for plotina.cc\n
 path.write_text(text, encoding="utf-8")
 PY
 
+# Opt-in guard for the Plotina Desktop build (REQUIRE_HICOLOR_ICONS=1): a
+# single 512px icon leaves KDE/GNOME hunting for a size they can render
+# crisply, so the build must ship the full hicolor set
+# (16/24/32/48/64/128/256/512, packaged at build time via
+# --config.linux.icon=icons — see element-desktop/build/icons/). The deb is
+# re-hashed into latest-linux.yml after re-packing here anyway, so checking
+# now is free. Cinny's lite debs are Tauri-packed and don't set the flag.
+if [ "${REQUIRE_HICOLOR_ICONS:-0}" = "1" ]; then
+  icon_count=$(find "$ROOT/pkg/usr/share/icons/hicolor" -path "*/apps/*.png" 2>/dev/null | wc -l)
+  if [ "${icon_count:-0}" -lt 8 ]; then
+    echo "fix-deb-branding: only $icon_count hicolor icon(s) in $DEB; expected >=8 sizes" >&2
+    exit 1
+  fi
+fi
+
 # The menu entry: electron-builder writes the executable name as Name.
 for entry in "$ROOT/pkg/usr/share/applications/"*.desktop; do
   [ -f "$entry" ] || continue

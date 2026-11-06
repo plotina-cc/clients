@@ -73,9 +73,11 @@ jobs:
 
       - name: Linux AppImage updater tests
         working-directory: element-desktop/desktop
-        # Explicit file, not the directory: `node --test <dir>` scanning of a
+        # Explicit files, not the directory: `node --test <dir>` scanning of a
         # path argument differs between Node majors; the file form is stable.
-        run: node --test tests/linux-updater.test.mjs
+        # update-feed.test.mjs guards the Settings "Check for updates" feed
+        # (ipc.ts is patched to call getUpdateFeedUrl from our updater).
+        run: node --test tests/linux-updater.test.mjs tests/update-feed.test.mjs
 
   # One webapp for both platforms: the desktop shell embeds a fixed asar, so the
   # overlay has to be applied once and handed to the packaging jobs.
@@ -213,6 +215,16 @@ jobs:
         shell: bash
         run: |
           cp "${{ github.workspace }}/element-desktop/desktop/updater.ts" "$SRC/apps/desktop/src/updater.ts"
+          # Window icon capped at 128px for _NET_WM_ICON (X11 request limit at
+          # 256px leaves the property empty -> KDE switcher shows a generic
+          # icon); patch-shell.py wires it plus the Settings "Check for
+          # updates" feed answer (upstream's Squirrel-only autoUpdater call
+          # throws on Linux, hiding the button). Must mirror scripts/build.sh.
+          cp "${{ github.workspace }}/element-desktop/desktop/icon.ts" "$SRC/apps/desktop/src/icon.ts"
+          rm -rf "$SRC/apps/desktop/build/icons"
+          cp -r "${{ github.workspace }}/element-desktop/build/icons" "$SRC/apps/desktop/build/icons"
+          if command -v python3 >/dev/null; then PY=python3; else PY=python; fi
+          "$PY" "${{ github.workspace }}/element-desktop/desktop/patch-shell.py" "$SRC/apps/desktop/src"
 
       - name: Build installers
         working-directory: element-desktop/.build/element-web/apps/desktop
@@ -261,7 +273,9 @@ jobs:
             PUB+=(--config.win.executableName=Plotina-Desktop \
                   "--config.nsis.artifactName=Plotina-Desktop-$APPVER-setup.exe")
           else
-            PUB+=("--config.appImage.artifactName=Plotina-Desktop-$APPVER.AppImage")
+            PUB+=("--config.appImage.artifactName=Plotina-Desktop-$APPVER.AppImage" \
+                  --config.linux.icon=icons \
+                  "--config.linux.desktop.entry.Name=Plotina Desktop")
           fi
           pnpm run build --publish never $TARGETS "${PUB[@]}"
 
@@ -316,8 +330,9 @@ jobs:
           # package before it is staged (see scripts/fix-deb-branding.sh).
           shopt -s nullglob
           for deb in dist/*.deb; do
-            bash "${{ github.workspace }}/element-desktop/scripts/fix-deb-branding.sh" "$deb"
+            REQUIRE_HICOLOR_ICONS=1 bash "${{ github.workspace }}/element-desktop/scripts/fix-deb-branding.sh" "$deb"
           done
+
           # Re-packing the deb changed its bytes AFTER electron-builder hashed
           # it into latest-linux.yml; refresh those entries so the published
           # metadata stays truthful. The AppImage is untouched, so its entry
@@ -350,6 +365,39 @@ jobs:
           meta.write_text(fixed, encoding="utf-8")
           print(fixed)
           PY
+
+      # The desktop shell in the built asar must carry the Plotina patches
+      # (128px window icon so _NET_WM_ICON gets data; updater-fed
+      # getUpdateFeedUrl so Settings shows the "Check for updates" button),
+      # and the Linux payloads must ship the full hicolor icon set and a
+      # consistent .desktop (Name="Plotina Desktop",
+      # StartupWMClass=plotina-desktop == observed WM_CLASS).
+      - name: Check shell patches and icon payload
+        working-directory: element-desktop/.build/element-web/apps/desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "getMainWindowIcon" lib/electron-main.js
+          grep -q 'from "./updater.js"' lib/ipc.js
+          grep -q "plotinaUpdateFeed" lib/updater.js
+          echo "compiled shell carries the Plotina patches"
+          if [ "${{ matrix.name }}" = "linux" ]; then
+            ai=$(ls dist/*.AppImage | head -1)
+            chmod +x "$ai"
+            rm -rf "$RUNNER_TEMP/appimg-check"
+            mkdir -p "$RUNNER_TEMP/appimg-check"
+            ( cd "$RUNNER_TEMP/appimg-check" && "./$ai" --appimage-extract >/dev/null )
+            d="$RUNNER_TEMP/appimg-check/squashfs-root"
+            grep -qx "Name=Plotina Desktop" "$d"/*.desktop
+            grep -qx "StartupWMClass=plotina-desktop" "$d"/*.desktop
+            n=$(find "$d/usr/share/icons/hicolor" -path "*/apps/plotina-desktop.png" | wc -l)
+            test "$n" -ge 8
+            echo "AppImage: .desktop consistent, $n hicolor icon sizes"
+            dpkg-deb -c dist/*.deb > "$RUNNER_TEMP/deb-list.txt"
+            m=$(grep -c "icons/hicolor/[0-9]*x[0-9]*/apps/plotina-desktop.png" "$RUNNER_TEMP/deb-list.txt" || true)
+            test "$m" -ge 8
+            echo "deb: $m hicolor icon sizes"
+          fi
 
       - name: Stage artifacts
         shell: bash

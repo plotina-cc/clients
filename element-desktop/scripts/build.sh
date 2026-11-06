@@ -66,6 +66,17 @@ cp "$ROOT/build.plotina.json" variant.json
 # Linux AppImage) before compiling.
 cp "$ROOT/desktop/updater.ts" src/updater.ts
 
+# Plotina shell patches (mirror of the "Apply Plotina desktop sources" CI step):
+#  * src/icon.ts: getMainWindowIcon() caps the Linux window icon at 128px so
+#    Chromium can actually serialize it into _NET_WM_ICON (a 256px icon blows
+#    the X request limit and KDE's switcher shows a generic/empty icon);
+#  * patch-shell.py: wires electron-main.ts to that helper and answers ipc.ts'
+#    getUpdateFeedUrl from our updater, so Settings -> "Check for updates"
+#    appears on Linux AppImage despite upstream's Squirrel-only call throwing.
+cp "$ROOT/desktop/icon.ts" src/icon.ts
+rm -rf build/icons && cp -r "$ROOT/build/icons" build/icons
+python3 "$ROOT/desktop/patch-shell.py" src
+
 echo "==> installers"
 # GNU tar and some containers hate hard links (electron-builder#5721).
 export USE_HARD_LINKS=false
@@ -77,7 +88,9 @@ export USE_HARD_LINKS=false
 APPVER="${VERSION:-$(node -p 'require("./package.json").version')}"
 case "$(uname -s)" in
   Linux)                TARGETS=(-l appimage deb)
-                        PUB=("--config.appImage.artifactName=Plotina-Desktop-$APPVER.AppImage") ;;
+                        PUB=("--config.appImage.artifactName=Plotina-Desktop-$APPVER.AppImage" \
+                             --config.linux.icon=icons \
+                             "--config.linux.desktop.entry.Name=Plotina Desktop") ;;
   MINGW*|MSYS*|CYGWIN*) TARGETS=(-w nsis)
                         PUB=(--config.win.executableName=Plotina-Desktop \
                              "--config.nsis.artifactName=Plotina-Desktop-$APPVER-setup.exe") ;;
@@ -105,8 +118,28 @@ VARIANT_PATH=variant.json pnpm run build --publish never "${TARGETS[@]}" \
 # assert the metadata instead of patching it).
 for deb in dist/*.deb; do
   [ -f "$deb" ] || continue
-  "$HERE/fix-deb-branding.sh" "$deb"
+  REQUIRE_HICOLOR_ICONS=1 "$HERE/fix-deb-branding.sh" "$deb"
 done
+
+# The compiled shell must carry the Plotina patches (see the cp/patch-shell
+# step above); if nx/electron-builder ever starts shipping lib/ from a cached
+# build, these greps fail the build instead of the user's icons.
+echo "==> shell patch assertions"
+grep -q "getMainWindowIcon" lib/electron-main.js || { echo "build.sh: lib/electron-main.js lacks getMainWindowIcon" >&2; exit 1; }
+grep -q 'from "./updater.js"' lib/ipc.js || { echo "build.sh: lib/ipc.js does not import our updater feed" >&2; exit 1; }
+grep -q "plotinaUpdateFeed" lib/updater.js || { echo "build.sh: lib/updater.js lacks plotinaUpdateFeed" >&2; exit 1; }
+if [ -d dist/linux-unpacked ]; then
+  ai=$(ls dist/*.AppImage 2>/dev/null | head -1)
+  [ -n "$ai" ] || { echo "build.sh: no AppImage to inspect" >&2; exit 1; }
+  rm -rf "$WORK/appimg-check"; mkdir -p "$WORK/appimg-check"
+  ( cd "$WORK/appimg-check" && "$ai" --appimage-extract >/dev/null )
+  d="$WORK/appimg-check/squashfs-root"
+  grep -qx "Name=Plotina Desktop" "$d"/*.desktop || { echo "build.sh: AppImage .desktop Name wrong" >&2; exit 1; }
+  grep -qx "StartupWMClass=plotina-desktop" "$d"/*.desktop || { echo "build.sh: AppImage .desktop StartupWMClass wrong" >&2; exit 1; }
+  n=$(find "$d/usr/share/icons/hicolor" -path "*/apps/plotina-desktop.png" | wc -l)
+  [ "$n" -ge 8 ] || { echo "build.sh: AppImage carries only $n hicolor icons; expected >=8" >&2; exit 1; }
+  echo "build.sh: AppImage .desktop + $n hicolor sizes OK"
+fi
 
 # Verify the packaged updater config instead of patching it after the fact:
 # re-packing the AppImage would change the bytes behind the sha512 that

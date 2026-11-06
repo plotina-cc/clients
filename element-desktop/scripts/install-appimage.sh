@@ -227,31 +227,52 @@ install_appimage() {
     install -m 755 "$appimage" "$bin"
     info "Установлен бинарник: $bin"
 
-    # Иконки берём из --appimage-extract; если распаковка не удалась (например,
-    # передан неподходящий файл) — пропускаем иконки, но не роняем установку.
+    # Иконки берём из --appimage-extract. Начиная с .38 AppImage несёт их в
+    # squashfs-root/usr/share/icons/hicolor/<size>/apps/plotina-desktop.png
+    # (16..512); копируем все размеры как есть, чтобы KDE/Breeze выбирал
+    # подходящий (в т.ч. для Wayland, где _NET_WM_ICON не используется).
+    # Старые образы (<= .36) лежали только в usr/share/.../512x512 — тот же
+    # цикл забирает и их; если же и там пусто (ручная раскладка с png в
+    # корне), фолбэк берёт корневой plotina-desktop.png как 512.
+    # Если распаковка не удалась (например, передан неподходящий файл) —
+    # пропускаем иконки, но не роняем установку.
     extract="$TMP/extract"
     mkdir -p "$extract"
+    found=0
     if ( cd "$extract" && "$bin" --appimage-extract >/dev/null 2>&1 ); then
-        for icon in "$extract"/squashfs-root/*.png; do
-            [ -f "$icon" ] || continue
-            name="${icon##*/}"
-            size=""
-            case "$name" in
-                *512x512*) size=512 ;;
-                *256x256*) size=256 ;;
-                *128x128*) size=128 ;;
-                *64x64*)   size=64 ;;
-                *48x48*)   size=48 ;;
-                *32x32*)   size=32 ;;
-            esac
-            [ -n "$size" ] || continue
-            install -Dm 644 "$icon" "$icon_dir/${size}x${size}/apps/plotina-desktop.png"
+        for src_png in "$extract"/squashfs-root/usr/share/icons/hicolor/*/apps/plotina-desktop.png; do
+            [ -f "$src_png" ] || continue
+            size="${src_png%/apps/plotina-desktop.png}"
+            size="${size##*/}"
+            install -Dm 644 "$src_png" "$icon_dir/$size/apps/plotina-desktop.png"
+            found=1
         done
-        # Один plain plotina-desktop.png считаем иконкой максимального размера.
-        if [ ! -f "$icon_dir/512x512/apps/plotina-desktop.png" ] \
-           && [ -f "$extract/squashfs-root/plotina-desktop.png" ]; then
-            install -Dm 644 "$extract/squashfs-root/plotina-desktop.png" \
-                "$icon_dir/512x512/apps/plotina-desktop.png"
+        if [ "$found" -eq 0 ]; then
+            for icon in "$extract"/squashfs-root/*.png; do
+                [ -f "$icon" ] || continue
+                name="${icon##*/}"
+                size=""
+                case "$name" in
+                    *512x512*) size=512 ;;
+                    *256x256*) size=256 ;;
+                    *128x128*) size=128 ;;
+                    *64x64*)   size=64 ;;
+                    *48x48*)   size=48 ;;
+                    *32x32*)   size=32 ;;
+                esac
+                [ -n "$size" ] || continue
+                install -Dm 644 "$icon" "$icon_dir/${size}x${size}/apps/plotina-desktop.png"
+                found=1
+            done
+            # Один plain plotina-desktop.png считаем иконкой максимального размера.
+            if [ "$found" -eq 0 ] && [ -f "$extract/squashfs-root/plotina-desktop.png" ]; then
+                install -Dm 644 "$extract/squashfs-root/plotina-desktop.png" \
+                    "$icon_dir/512x512/apps/plotina-desktop.png"
+                found=1
+            fi
+        fi
+        if [ "$found" -eq 1 ] && command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -q "$icon_dir" 2>/dev/null || true
         fi
     else
         warn "не удалось извлечь иконки (--appimage-extract) — пропускаю; приложение установится без иконок."
