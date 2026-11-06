@@ -2,3 +2,9 @@ node_modules/
 dist-electron/
 .qa/
 *.log
+# electron-builder output goes to dist/ (already covered by the repo-root
+# .gitignore); the staged Cinny web dist is a build artifact too:
+web/
+# generated icon set lives under build/icons (committed, small):
+build/icons-staging/
+

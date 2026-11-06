@@ -1,0 +1,81 @@
+{
+  "appId": "cc.plotina.chat",
+  "productName": "Plotina Lite Desktop",
+  "executableName": "plotina-lite-desktop",
+  "copyright": "Copyright © Plotina",
+  "directories": {
+    "output": "dist",
+    "buildResources": "build"
+  },
+  "files": [
+    "src/**/*",
+    "assets/**/*",
+    "web/**/*",
+    "package.json"
+  ],
+  "asar": true,
+  "protocols": [
+    {
+      "name": "Plotina Lite Desktop link",
+      "schemes": ["cc.plotina.chat"]
+    },
+    {
+      "name": "Matrix room link",
+      "schemes": ["matrix"]
+    }
+  ],
+  "linux": {
+    "target": ["AppImage", "deb", "rpm"],
+    "executableName": "plotina-lite-desktop",
+    "icon": "build/icons",
+    "category": "Network;InstantMessaging;Chat;",
+    "synopsis": "Matrix client for plotina.cc",
+    "description": "Plotina Lite Desktop: the Cinny Matrix client for plotina.cc in an Electron shell with full WebRTC support.",
+    "desktop": {
+      "entry": {
+        "Name": "Plotina Lite Desktop",
+        "Comment": "Matrix client for plotina.cc",
+        "Keywords": "matrix;chat;im;plotina;cinny;",
+        "StartupWMClass": "plotina-lite-desktop",
+        "MimeType": "x-scheme-handler/cc.plotina.chat;x-scheme-handler/matrix;"
+      }
+    }
+  },
+  "appImage": {
+    "artifactName": "Plotina-Lite-Desktop-${version}-${arch}.${ext}"
+  },
+  "deb": {
+    "packageName": "plotina-lite-desktop",
+    "maintainer": "Plotina <support@plotina.cc>",
+    "vendor": "Plotina",
+    "artifactName": "Plotina-Lite-Desktop-${version}-${arch}.${ext}"
+  },
+  "rpm": {
+    "packageName": "plotina-lite-desktop",
+    "artifactName": "Plotina-Lite-Desktop-${version}-${arch}.${ext}"
+  },
+  "win": {
+    "target": ["nsis", "msi"],
+    "executableName": "plotina-lite-desktop",
+    "icon": "build/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowToChangeInstallationDirectory": true,
+    "deleteAppDataOnUninstall": false,
+    "include": "build/installer.nsh",
+    "artifactName": "Plotina-Lite-Desktop-${version}-${arch}.${ext}"
+  },
+  "msi": {
+    "artifactName": "Plotina-Lite-Desktop-${version}-${arch}.${ext}"
+  },
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "plotina-cc",
+      "repo": "clients",
+      "releaseType": "release"
+    }
+  ]
+}

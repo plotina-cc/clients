@@ -1,15 +1,25 @@
 {
   "name": "plotina-lite-electron",
   "productName": "Plotina Lite Desktop",
-  "version": "0.1.0",
+  "version": "4.12.8",
   "private": true,
-  "description": "Electron shell for Plotina Lite Desktop (Cinny web build). Phase-1 prototype: no installer, no updater.",
+  "description": "Electron shell for Plotina Lite Desktop (Cinny web build).",
+  "author": {
+    "name": "Plotina",
+    "email": "support@plotina.cc"
+  },
+  "homepage": "https://plotina.cc",
+  "license": "AGPL-3.0-only",
   "main": "src/main.js",
   "scripts": {
     "start": "electron .",
-    "qa": "node scripts/qa.mjs"
+    "qa": "node scripts/qa.mjs",
+    "icons": "bash scripts/build-icons.sh",
+    "stage-web": "bash scripts/stage-web.sh",
+    "build:packages": "bash scripts/build-packages.sh"
   },
   "devDependencies": {
-    "electron": "44.4.5"
+    "electron": "44.4.5",
+    "electron-builder": "26.16.1"
   }
 }
