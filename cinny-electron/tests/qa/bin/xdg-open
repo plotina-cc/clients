@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Fake xdg-open for the QA regression run: records every URL/handler invoked
+# by the app (shell.openExternal) to $QA_XDG_LOG instead of opening real
+# browsers/mail clients. First on PATH during run-regression.sh.
+for a in "$@"; do
+  case "$a" in
+    -*) ;;                       # ignore xdg-open switches like --help
+    *) printf '%s\n' "$a" >> "${QA_XDG_LOG:-/dev/null}";;
+  esac
+done
+exit 0
