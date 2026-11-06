@@ -95,6 +95,9 @@ done
 for yml in dist/latest.yml dist/latest-linux.yml; do
   [ -e "$yml" ] && node scripts/refresh-update-yml.mjs "$yml"
 done
+# Ensure the Linux feed always advertises the AppImage, even when the rpm
+# target rewrote latest-linux.yml after the AppImage target ran.
+[ -e dist/latest-linux.yml ] && node scripts/fix-latest-linux-yml.mjs
 
 # ---- 5. identity assertions ---------------------------------------------------
 fail() { echo "PACKAGING ASSERTION FAILED: $*" >&2; exit 1; }

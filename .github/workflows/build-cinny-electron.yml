@@ -298,9 +298,12 @@ jobs:
           $exe = (Get-ChildItem pkg/Plotina-Lite-Desktop-*-x64.exe | Where-Object Name -notlike '*.blockmap' | Select-Object -First 1).FullName
           $p = Start-Process -FilePath $exe -ArgumentList '/S' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "silent NSIS install exit $($p.ExitCode)" }
-          $dir = "$env:LOCALAPPDATA\Programs\Plotina Lite Desktop"
-          $bin = "$dir\plotina-lite-desktop.exe"
-          if (-not (Test-Path $bin)) { throw "NSIS install dir missing $bin" }
+          # electron-builder may sanitize the product name in the install dir;
+          # locate the payload instead of hard-coding the folder.
+          $found = Get-ChildItem "$env:LOCALAPPDATA\Programs" -Recurse -Filter plotina-lite-desktop.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $found) { throw "NSIS install dir missing plotina-lite-desktop.exe under $env:LOCALAPPDATA\Programs" }
+          $bin = $found.FullName
+          $dir = $found.DirectoryName
           # install-kind marker drives the in-app updater state
           if ((Get-Content "$dir\install-kind").Trim() -ne 'nsis') { throw 'install-kind marker wrong' }
           # packaged app-update.yml feed must name plotina-cc/clients
