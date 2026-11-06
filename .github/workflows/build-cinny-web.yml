@@ -9,6 +9,11 @@ name: Build Plotina Lite Web
 # The artifact is what gets unpacked into /srv/cinny; the deploy itself stays
 # manual (cinny/README.md, "Cinny Web"), because only the edge host holds the
 # key that may write there.
+#
+# This workflow is independent of the desktop shell: from tag
+# v4.12.8-plotina-lite-desktop.18 the desktop is Electron
+# (build-cinny-electron.yml, which compiles its own web dist for the asar),
+# but the site bundle here keeps building on the same tags and on main.
 
 on:
   workflow_dispatch:

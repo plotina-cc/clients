@@ -32,6 +32,7 @@ cinny-electron/
   scripts/build-packages.sh # one-shot: version derive -> icons -> web -> builder -> asserts -> stable aliases
   scripts/fix-deb.sh        # restore hyphenated dpkg-sortable Version
   scripts/stage-release-assets.mjs  # stable aliases + SHA256SUMS (+latest*.yml fallback)
+  scripts/verify-release-assets.mjs # release gate: verify version+hashes+metadata, assemble upload dir
   scripts/install-lite-electron.sh  # silent curl|bash installer (deb/AppImage paths)
   scripts/qa-linux-package.sh       # packaged smoke: xprop identity + full qa.mjs
   scripts/test-updater.mjs  # updater unit tests (feed parsing, version ordering)
@@ -57,8 +58,11 @@ without it warns and continues). Version: tag `v4.12.8-plotina-lite-desktop.N`
 Artifacts: `Plotina-Lite-Desktop-<version>-<arch>.{AppImage,deb,rpm,exe,msi}`
 plus `latest.yml`/`latest-linux.yml`, `.exe.blockmap`, and stable aliases +
 `SHA256SUMS` in `dist/stable/` for `/dl`. CI: workflow
-`build-cinny-electron.yml` (workflow_dispatch only until the Phase-4 release
-switch — see the header comment for the exact activation diff).
+`build-cinny-electron.yml` is the release path from tag
+`v4.12.8-plotina-lite-desktop.18`: tag builds run the `release` job, which
+verifies everything with `scripts/verify-release-assets.mjs` and attaches the
+artifacts + stable aliases + combined SHA256SUMS to the GitHub release (the
+updater feed). `/dl` is served by the edge pulling that release, never by CI.
 
 ## Run (dev)
 

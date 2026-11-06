@@ -1,17 +1,22 @@
-# Build Plotina Lite Desktop (Electron) — Phase 2 packaging pipeline.
+# Build Plotina Lite Desktop (Electron) — the release pipeline.
 #
-# NOT ACTIVATED BY TAG YET (Phase 2 decision): this file triggers on
-# workflow_dispatch only. To activate the release path, add under `on:`:
-#   push:
-#     tags: ["v*-plotina-lite-desktop.*"]
-#     paths: ["cinny/**", "noise/**", "cinny-electron/**", ".github/workflows/build-cinny-electron.yml"]
-# and attach the Phase-4 release job; nothing here uploads or publishes
-# (--publish never everywhere), so a branch or dispatch build can never
-# overwrite a release.
+# FROM TAG v4.12.8-plotina-lite-desktop.18 THIS WORKFLOW IS THE LITE DESKTOP
+# RELEASE PATH: the old Tauri workflow (build-cinny-desktop.yml) is reduced to
+# workflow_dispatch for historical rebuilds (.17 and earlier stay published
+# as-is and keep serving updates until the feed is retired). Tags matching
+# v*-plotina-lite-desktop.* build web -> linux/windows packaging -> smoke and
+# then run the `release` job, which verifies the artifacts and attaches them
+# to the GitHub release for that tag; the in-app updater (src/updater.js)
+# reads latest.yml / latest-linux.yml from that release. Nothing is published
+# to /dl from CI: the edge host pulls the release itself (pull-release).
+#
+# workflow_dispatch stays for branch testing; builds run with --publish never
+# and the release job only runs on tags, so a branch or dispatch build can
+# never overwrite a release.
 #
 # Layout follows docs/LITE_ELECTRON_MIGRATION.md §6.7 minus the Tauri
 # cross-grade jobs (the old installed base is negligible; clean installs
-# only): web -> linux/windows packaging -> smoke.
+# only): web -> linux/windows packaging -> smoke -> release.
 name: Build Plotina Lite Desktop (Electron)
 
 on:
@@ -21,6 +26,15 @@ on:
         description: "Override APP_VERSION (default: derived from tag, else 4.12.8-plotina.0.local)"
         required: false
         default: ""
+  push:
+    tags: ["v*-plotina-lite-desktop.*"]
+    # noise/ is baked into the bundle and cinny-electron/ is the shell:
+    # only changes to those (or this file) justify a full release rebuild.
+    paths:
+      - "cinny/**"
+      - "noise/**"
+      - "cinny-electron/**"
+      - ".github/workflows/build-cinny-electron.yml"
 
 permissions:
   contents: write
@@ -301,3 +315,73 @@ jobs:
           $msi = (Get-ChildItem pkg/Plotina-Lite-Desktop-*-x64.msi | Select-Object -First 1).FullName
           $m = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru
           if ($m.ExitCode -ne 0) { throw "silent MSI install exit $($m.ExitCode)" }
+
+  # Phase 4: the GitHub release is the updater feed (app-update.yml points at
+  # plotina-cc/clients, src/updater.js reads latest*.yml from the newest
+  # stable release). The builds themselves never publish (--publish never);
+  # this job uploads the verified artifacts. Nothing goes to /dl from CI —
+  # the edge host pulls this release itself (pull-release).
+  release:
+    name: GitHub release
+    if: startsWith(github.ref, 'refs/tags/')
+    # Smoke jobs run in parallel and are advisory; packaging already asserts
+    # identity (build-packages.sh) and verify-release-assets.mjs re-verifies
+    # hashes + feed metadata before a single byte is uploaded.
+    needs: [web, linux, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Release version from the tag
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_NAME}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-plotina-lite-desktop\.([0-9]+)$ ]]; then
+            echo "app_version=${BASH_REMATCH[1]}-plotina.${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
+            echo "release APP_VERSION=${BASH_REMATCH[1]}-plotina.${BASH_REMATCH[2]}"
+          else
+            echo "FATAL: tag '${GITHUB_REF_NAME}' is not v<semver>-plotina-lite-desktop.<rev>" >&2
+            echo "       expected e.g. v4.12.8-plotina-lite-desktop.18 -> 4.12.8-plotina.18" >&2
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: plotina-lite-desktop-electron-linux
+          path: pkg-linux
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: plotina-lite-desktop-electron-windows
+          path: pkg-windows
+
+      - name: Verify hashes and feed metadata, assemble upload dir
+        shell: bash
+        run: |
+          set -euo pipefail
+          node cinny-electron/scripts/verify-release-assets.mjs \
+            --linux pkg-linux --windows pkg-windows \
+            --version "${{ steps.ver.outputs.app_version }}" \
+            --out release-assets
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          # Human-facing title: the base version plus the release counter, so
+          # this build is distinguishable from the historical Tauri releases.
+          name: "Plotina Lite Desktop ${{ steps.ver.outputs.app_version }} (Electron)"
+          # src/updater.js only trusts stable releases.
+          prerelease: false
+          make_latest: "true"
+          generate_release_notes: false
+          files: release-assets/*
+          body: |
+            Сборка Plotina Lite Desktop ${{ steps.ver.outputs.app_version }} — клиент Cinny для plotina.cc в оболочке Electron с шумоподавлением DeepFilterNet3. Начиная с этой версии Lite Desktop выпускается на Electron (прежние сборки на Tauri остаются в истории релизов).
+
+            Шумоподавление: уровень по умолчанию 60, настраивается в Настройки → General → Sound.
+            Windows: установщик NSIS обновляется автоматически из этого релиза; MSI — для ручной установки. Сборка не подписана сертификатом Authenticode, SmartScreen попросит подтверждение при первом запуске.
+            Linux: AppImage, deb (Debian/Ubuntu) и rpm (Fedora/openSUSE); AppImage обновляется автоматически.
+            Файлы без версии в имени (Plotina-Lite-Desktop.AppImage, .deb, .rpm, -setup.exe, .msi) — стабильные ссылки на текущую сборку; контрольные суммы — в SHA256SUMS.
+
+            Исходники этой сборки — в этом репозитории (AGPL-3.0): upstream-тег cinny-desktop из cinny/UPSTREAM_TAG и его submodule cinny плюс оверлей cinny/ и оболочка cinny-electron/. Полный набор: https://github.com/plotina-cc/clients/blob/main/SOURCE.md
