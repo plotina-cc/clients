@@ -106,6 +106,11 @@ cleanup() {
     sleep 1
     while read -r pid _; do [[ -n "$pid" ]] && kill -9 "$pid" 2>/dev/null; done < "$OUT/pids"
   fi
+  # token hygiene: the temp HOME/XDG tree and (belt) tmp profiles may hold
+  # app localStorage — purge unless debugging with --keep.
+  if [[ "$KEEP" != 1 ]]; then
+    rm -rf "$OUT/home" /tmp/lite-qa-profiles-"$QA_RUN_ID"-* 2>/dev/null
+  fi
   if [[ "$KEEP" == 1 ]]; then
     echo "note: --keep given but processes were still reaped; display was :$DISPLAY_NUM"
   fi

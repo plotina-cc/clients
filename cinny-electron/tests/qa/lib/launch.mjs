@@ -151,7 +151,7 @@ export function installFingerprint(targetPath) {
  * dir arg so main.js-style prototypes still see them (verified pattern from
  * scripts/qa.mjs).
  */
-export function launchApp(resolved, { args = [], env = {}, logFile = null, label = 'app' }) {
+export function launchApp(resolved, { args = [], env = {}, logFile = null, label = 'app', redact = null }) {
   const fullArgs = [...resolved.prefixArgs, ...args];
   const proc = spawn(resolved.cmd, fullArgs, {
     env: { ...process.env, ...env },
@@ -161,7 +161,8 @@ export function launchApp(resolved, { args = [], env = {}, logFile = null, label
   const log = [];
   const stream = (s, sink) => {
     s.on('data', (d) => {
-      const str = d.toString();
+      const raw = d.toString();
+      const str = redact ? redact(raw) : raw; // token hygiene: app logs go to evidence
       log.push(str);
       if (logFile) fs.appendFileSync(logFile, str);
       if (sink) process.stdout.write(`[${label}] ${str}`);

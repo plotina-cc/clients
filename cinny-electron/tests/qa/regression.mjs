@@ -18,6 +18,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { CDP, sleep, pollFor, listTargets, pageTargets, waitForPageTarget, cdpUp } from './lib/cdp.mjs';
 import { resolveTarget, launchApp, killApp, installFingerprint } from './lib/launch.mjs';
 import { Recorder, makeRedactor } from './lib/report.mjs';
@@ -55,8 +56,9 @@ const rec = new Recorder(OUT, redact);
 
 let launchSeq = 0;
 const resolved = resolveTarget(TARGET);
-const PROFILES = path.join(OUT, 'profiles');
-fs.mkdirSync(PROFILES, { recursive: true });
+// Profiles live OUTSIDE the evidence dir: the app's own localStorage keeps
+// the injected token, and evidence must never carry token material.
+const PROFILES = fs.mkdtempSync(path.join(os.tmpdir(), `lite-qa-profiles-${process.env.QA_RUN_ID || Date.now()}-`));
 
 // Frozen dist for the unpackaged prototype (packaged builds embed their own).
 const DIST = [process.env.QA_DIST,
@@ -116,10 +118,15 @@ async function attachMain(handle, profileDir) {
   return { handle, cdp, origin, target, profile: profileDir, loginPosts };
 }
 
-function baseEnv(profileDir) {
+function baseEnv(profileDir, { stablePort = false } = {}) {
   const env = {
     LITE_USER_DATA: profileDir,
-    LITE_PORT: '0', // ephemeral: never collides with a parallel QA session
+    // Main-chain launches keep the origin port stable across restarts:
+    // localStorage/IndexedDB are partitioned per origin, so an ephemeral port
+    // every launch would log the profile out by itself (packaged builds pin
+    // 44548; see matrix D3/D7). Other launches (dup/second/updater) use 0 so
+    // they can never collide with the running holder.
+    LITE_PORT: stablePort && ctx.appPort ? String(ctx.appPort) : '0',
     LITE_ECHO_CONSOLE: '1',
     QA_RUN_ID: process.env.QA_RUN_ID || '',
   };
@@ -127,13 +134,14 @@ function baseEnv(profileDir) {
   return env;
 }
 
-async function startMain(label, { keepProfile = null } = {}) {
+async function startMain(label, { keepProfile = null, stablePort = false } = {}) {
   const profile = keepProfile || fs.mkdtempSync(path.join(PROFILES, `${label}-`));
   const logFile = path.join(LOGS, `${label}-${++launchSeq}.log`);
   const handle = launchApp(resolved, {
     label,
     logFile,
-    env: baseEnv(profile),
+    redact,
+    env: baseEnv(profile, { stablePort }),
     args: [
       `--remote-debugging-port=${CDP_PORT}`,
       '--use-fake-ui-for-media-stream',
@@ -142,6 +150,9 @@ async function startMain(label, { keepProfile = null } = {}) {
     ],
   });
   const main = await attachMain(handle, profile);
+  // Record the live origin port so every later main-chain relaunch reuses it
+  // (session storage is per-origin; this mirrors the packaged 44548 pin).
+  ctx.appPort = Number(new URL(main.origin).port);
   main.logFile = logFile;
   return main;
 }
@@ -153,7 +164,7 @@ async function ensureMain(label = 'main') {
   }
   const profile = ctx.mainProfile || fs.mkdtempSync(path.join(PROFILES, `${label}-`));
   ctx.mainProfile = profile;
-  ctx.main = await startMain(`${label}-re`, { keepProfile: profile });
+  ctx.main = await startMain(`${label}-re`, { keepProfile: profile, stablePort: true });
   return ctx.main;
 }
 
@@ -167,6 +178,40 @@ async function killMain(graceful = true) {
   }
   try { ctx.main.cdp.close(); } catch { /* ignore */ }
   ctx.main = null;
+}
+
+// On this Xvfb host a Chromium launched while the previous instance's GPU/X
+// resources are still being torn down can die with
+// "GPU process isn't usable. Goodbye." (SIGTRAP) — observed once in dryrun2/3.
+// Give the teardown a beat and retry once before declaring a crash.
+async function relaunchMain(label) {
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    await sleep(attempt === 1 ? 3000 : 6000);
+    try {
+      const m = await startMain(attempt === 1 ? label : `${label}-retry`, { keepProfile: ctx.mainProfile, stablePort: true });
+      await sleep(2500); // catch immediate-crash-after-attach
+      if (m.handle.exited) {
+        lastErr = new Error(`${label} exited right after launch (code=${m.handle.exitInfo?.code} sig=${m.handle.exitInfo?.sig})`);
+        rec.note(`relaunch attempt ${attempt}: ${lastErr.message}`);
+        continue;
+      }
+      if (attempt > 1) rec.note(`${label} succeeded on relaunch attempt ${attempt} (host GPU/teardown flake)`);
+      return m;
+    } catch (e) {
+      lastErr = e;
+      rec.note(`relaunch attempt ${attempt} failed: ${e.message}`);
+    }
+  }
+  throw lastErr || new Error('relaunch failed');
+}
+
+async function waitForRooms(main, timeout = 90000) {
+  const v = await pollFor(async () => {
+    if (main.handle.exited) return 'crashed';
+    return main.cdp.eval(`document.body?.innerText.includes(${JSON.stringify(ROOM_NAME)})`);
+  }, timeout, 1000, 'room list visible');
+  if (v === 'crashed') throw Object.assign(new Error(`app crashed mid-load (code=${main.handle.exitInfo?.code} sig=${main.handle.exitInfo?.sig})`), { crashed: true });
 }
 
 async function isLoggedIn(main) {
@@ -232,18 +277,17 @@ scenario({ id: 'L-01', name: 'clean launch, app serves, login page, no early exi
   await waitForLoginRoute(main);
   await sleep(1500);
   const shot = await main.cdp.screenshot(path.join(SHOTS, '01-login.png'));
-  // Native X11 window title: main.js prevents page-title-updated and pins
-  // 'Plotina Lite Desktop'; the CDP *target* title is the page's <title>
-  // ("Cinny") and is recorded for reference only.
-  let nativeTitle = null;
-  try {
-    nativeTitle = await pollFor(async () => {
-      const wt = await main.cdp.send('Browser.getWindowForTarget', { targetId: main.target.id });
-      return /plotina/i.test(wt.title || '') ? wt.title : false;
-    }, 12000, 600, 'native title "Plotina Lite Desktop"');
-  } catch {
-    const wt = await main.cdp.send('Browser.getWindowForTarget', { targetId: main.target.id }).catch(() => ({}));
-    throw new Error(`native window title wrong: '${wt.title || nativeTitle || '(none)'}' (page target title: '${(await listTargets(CDP_PORT)).find((t) => t.id === main.target.id)?.title}')`);
+  // Native title lives on the X11 window (Electron setTitle); the CDP page
+  // target title is the document <title> ("Cinny"). Browser.getWindowForTarget
+  // is unavailable on page-level WebSockets, so L-02 (xdotool/xprop) asserts
+  // the native title; here we record both for the report.
+  let nativeTitle = 'n/a (no X11 tools)';
+  if (spawnSync('xdotool', ['--version'], { encoding: 'utf8' }).stdout) {
+    const win = await xdotool(['search', '--name', 'Plotina Lite Desktop']);
+    if (win) {
+      const wm = await xprop(win.split('\n')[0].trim(), 'WM_NAME');
+      nativeTitle = wm ? (/= "(.*)"/.exec(wm)?.[1] ?? wm.trim()) : '(none)';
+    } else nativeTitle = '(xdotool found no window)';
   }
   const pageTitle = (await listTargets(CDP_PORT)).find((t) => t.id === main.target.id)?.title || null;
   const errScan = /ERR_[A-Z_]+|uncaught/i.test(main.handle.logText());
@@ -272,7 +316,7 @@ scenario({ id: 'L-02', name: 'WM_CLASS + _NET_WM_ICON non-empty + title (X11)', 
   const found = await xdotool(['search', '--name', 'Plotina Lite Desktop']);
   if (!found) return { status: 'fail', detail: 'xdotool found no window named "Plotina Lite Desktop"' };
   const ids = found.split('\n').map((s) => s.trim()).filter(Boolean);
-  let wmClass = null; let iconDims = null; let iconTokens = 0; let winId = null;
+  let wmClass = null; let iconDims = null; let iconTokens = 0; let winId = null; let wmName = null;
   for (const id of ids) {
     const c = await xprop(id, 'WM_CLASS');
     if (!c) continue;
@@ -281,20 +325,26 @@ scenario({ id: 'L-02', name: 'WM_CLASS + _NET_WM_ICON non-empty + title (X11)', 
     if (!hasIcon && !/plotina/i.test(c)) continue;
     winId = id;
     wmClass = c;
+    wmName = (await xprop(id, 'WM_NAME')) || '';
+    wmName = /= "(.*)"/.exec(wmName)?.[1] ?? wmName.trim();
     if (hasIcon) {
       const vals = icon.slice(icon.indexOf('=') + 1).split(',').map((s) => s.trim()).filter((s) => /^-?\d+$/.test(s));
-      const w = Number(vals[0]); const h = Number(vals[1]);
-      iconDims = { w, h, pixelsProvided: vals.length - 2 };
-      iconTokens = vals.length;
+      if (vals.length >= 3) {
+        const w = Number(vals[0]); const h = Number(vals[1]);
+        iconDims = { w, h, pixelsProvided: vals.length - 2 };
+        iconTokens = vals.length;
+      } // else: property exists but is EMPTY (Electron dev build without icon registration)
     }
     if (hasIcon && wmClass) break;
   }
   const xpropDump = path.join(OUT, 'xprop-window.txt');
-  fs.writeFileSync(xpropDump, `winid=${winId}\nWM_CLASS:\n${wmClass || '(none)'}\n_ICON dims: ${JSON.stringify(iconDims)} tokens=${iconTokens}\n`);
+  fs.writeFileSync(xpropDump, `winid=${winId}\nWM_NAME: ${wmName}\nWM_CLASS:\n${wmClass || '(none)'}\n_ICON dims: ${JSON.stringify(iconDims)} tokens=${iconTokens}\n`);
   if (!wmClass) throw new Error('no app window found via xdotool/xprop');
+  const titleOk = /Plotina Lite Desktop/.test(wmName || '');
   const classOk = /plotina/i.test(wmClass);
   const iconOk = iconDims && iconDims.w >= 128 && iconDims.pixelsProvided >= iconDims.w * iconDims.h;
-  const detail = `WM_CLASS=${(wmClass.split('=')[1] || '').trim()} icon=${iconDims ? `${iconDims.w}x${iconDims.h} (${iconDims.pixelsProvided}px)` : 'EMPTY'}`;
+  const detail = `WM_NAME='${wmName}' WM_CLASS=${(wmClass.split('=')[1] || '').trim()} icon=${iconDims ? `${iconDims.w}x${iconDims.h} (${iconDims.pixelsProvided}px)` : 'EMPTY'}`;
+  if (!titleOk) throw new Error(`native window title not 'Plotina Lite Desktop' — ${detail}`);
   if (!iconOk) throw new Error(`_NET_WM_ICON missing or <128px — ${detail}`);
   if (!classOk) throw new Error(`WM_CLASS does not contain 'plotina' — ${detail}`);
   return { detail, evidence: [xpropDump] };
@@ -402,6 +452,7 @@ scenario({ id: 'S-02', name: 'deep-link loginToken reaches the running instance 
   const second = launchApp(resolved, {
     label: 'deeplink',
     logFile: path.join(LOGS, 'deeplink.log'),
+    redact,
     env,
     args: [`cc.plotina.chat://login?loginToken=${SYN2}`],
   });
@@ -496,35 +547,72 @@ scenario({ id: 'M-01', name: 'messaging: injected session loads rooms; send echo
 });
 
 // ---------------------------------------------------------- R-01 restart
-scenario({ id: 'R-01', name: 'session survives restart (same profile, no re-login)', matrix: ['A-05', 'A-06'], priority: 'P0' }, async () => {
+scenario({ id: 'R-01', name: 'session survives restart (same profile+origin, no re-login)', matrix: ['A-05', 'A-06'], priority: 'P0' }, async () => {
   await killMain(true);
-  ctx.main = await startMain('restart', { keepProfile: ctx.mainProfile });
-  const { main } = ctx;
-  await pollFor(async () => main.cdp.eval(`document.body?.innerText.includes(${JSON.stringify(ROOM_NAME)})`), 60000, 1000, 'room list after restart');
-  const href = await main.cdp.eval('location.href');
+  ctx.main = await relaunchMain('restart');
+  let roomsOk = false;
+  let crashedOnce = false;
+  for (const budget of [60000, 90000]) {
+    try {
+      await waitForRooms(ctx.main, budget);
+      roomsOk = true;
+      break;
+    } catch (e) {
+      if (e.crashed && !crashedOnce) {
+        crashedOnce = true;
+        rec.note(`restart ${e.message}; relaunching once (host GPU/teardown flake)`);
+        ctx.main = await relaunchMain('restart');
+        continue;
+      }
+      if (e.crashed) throw e;
+      // alive but slow: one more budget round, then give up
+    }
+  }
+  if (!roomsOk) {
+    const href = await ctx.main.cdp.eval('location.href').catch(() => '(unreadable)');
+    throw new Error(`room list did not load after restart within 150s (app ${ctx.main.handle.exited ? 'CRASHED' : 'alive'}, at ${href})`);
+  }
+  const href = await ctx.main.cdp.eval('location.href');
   if (/\/login/.test(href)) throw new Error('app returned to login after restart — session not persisted');
-  const shot = await main.cdp.screenshot(path.join(SHOTS, '07-after-restart.png'));
-  return { detail: `restarted at ${href}; rooms loaded without re-injecting the token`, evidence: [shot] };
+  const shot = await ctx.main.cdp.screenshot(path.join(SHOTS, '07-after-restart.png'));
+  return { detail: `origin-port ${ctx.appPort} held across restart; ${href}; rooms loaded without re-injecting the token`, evidence: [shot] };
 });
 
 // ---------------------------------------------------------- D-08 window state
-scenario({ id: 'D-08', name: 'window bounds persist across graceful quit + relaunch', matrix: ['D-08'], priority: 'P1' }, async () => {
-  const { main } = ctx;
-  const wt = await main.cdp.send('Browser.getWindowForTarget', { targetId: main.target.id });
-  await main.cdp.send('Browser.setWindowBounds', { windowId: wt.windowId, bounds: { left: 170, top: 120, width: 1000, height: 680 } });
-  await sleep(1500); // main.js debounces saves by 500 ms
+scenario({ id: 'D-08', name: 'window bounds persist across graceful quit + relaunch (X11)', matrix: ['D-08'], priority: 'P1' }, async () => {
+  // Electron's devtools endpoint does NOT expose Browser.getWindowForTarget/
+  // setWindowBounds (probed: -32601), so move/resize via XTEST through xdotool
+  // and verify against the app's own window-state.json + live geometry.
+  if (!spawnSync('xdotool', ['--version'], { encoding: 'utf8' }).stdout) {
+    return { status: 'skip', reason: 'xdotool not installed' };
+  }
+  const win = await xdotool(['search', '--name', 'Plotina Lite Desktop']);
+  if (!win) throw new Error('no window to move');
+  const id = win.split('\n')[0].trim();
+  await xdotool(['windowmove', id, '170', '120']);
+  await xdotool(['windowsize', id, '1000', '680']);
+  await sleep(1600); // main.js debounces saves by 500 ms
   await killMain(true);
   const stateFile = path.join(ctx.mainProfile, 'window-state.json');
   if (!fs.existsSync(stateFile)) throw new Error('window-state.json not written on quit');
   const saved = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-  if (Math.abs((saved.width || 0) - 1000) > 120) throw new Error(`saved width off: ${JSON.stringify(saved)}`);
-  ctx.main = await startMain('restore', { keepProfile: ctx.mainProfile });
-  const wt2 = await ctx.main.cdp.send('Browser.getWindowForTarget', { targetId: ctx.main.target.id });
-  const b = (await ctx.main.cdp.send('Browser.getWindowBounds', { windowId: wt2.windowId })).bounds;
-  const off = Math.max(Math.abs(b.width - saved.width), Math.abs(b.height - saved.height));
+  const stateCopy = path.join(OUT, 'window-state.json');
+  fs.copyFileSync(stateFile, stateCopy); // evidence lives outside the wiped profile dir
+  if (Math.abs((saved.width || 0) - 1000) > 120 || Math.abs((saved.height || 0) - 680) > 120) {
+    throw new Error(`saved bounds wrong after xdotool move/resize: ${JSON.stringify(saved)}`);
+  }
+  ctx.main = await relaunchMain('restore');
+  await sleep(1500);
+  const win2 = await xdotool(['search', '--name', 'Plotina Lite Desktop']);
+  if (!win2) throw new Error('relaunched window not found');
+  const geom = await xdotool(['getwindowgeometry', win2.split('\n')[0].trim()]);
+  const pos = /Position:\s*(\d+),(\d+)/.exec(geom || '');
+  const size = /Geometry:\s*(\d+)x(\d+)/.exec(geom || '');
   const shot = await ctx.main.cdp.screenshot(path.join(SHOTS, '08-window-restored.png'));
-  if (off > 80) throw new Error(`restored bounds ${JSON.stringify(b)} drifted from saved ${JSON.stringify(saved)}`);
-  return { detail: `saved ${saved.width}x${saved.height}@${saved.x},${saved.y} → restored ${b.width}x${b.height} (Δ${off}px)`, evidence: [stateFile, shot] };
+  if (!pos || !size) throw new Error(`cannot parse geometry: ${geom}`);
+  const off = Math.max(Math.abs(Number(size[1]) - saved.width), Math.abs(Number(size[2]) - saved.height));
+  if (off > 80) throw new Error(`restored ${size[1]}x${size[2]}@${pos[1]},${pos[2]} drifted from saved ${saved.width}x${saved.height}@${saved.x},${saved.y} (Δ${off})`);
+  return { detail: `saved ${saved.width}x${saved.height}@${saved.x},${saved.y} → restored ${size[1]}x${size[2]}@${pos[1]},${pos[2]} (Δ${off}px)`, evidence: [stateCopy, shot] };
 });
 
 // ---------------------------------------------------------- D-11 single instance
@@ -532,7 +620,7 @@ scenario({ id: 'D-11', name: 'second launch exits 0, no second window, holder fo
   const { main } = ctx;
   const before = (await pageTargets(CDP_PORT)).length;
   const env = baseEnv(main.profile);
-  const second = launchApp(resolved, { label: 'dup', logFile: path.join(LOGS, 'dup.log'), env, args: [] });
+  const second = launchApp(resolved, { label: 'dup', logFile: path.join(LOGS, 'dup.log'), redact, env, args: [] });
   const exit = await second.waitForExit(20000);
   if (exit.code !== 0) throw new Error(`second instance exit code ${exit.code} (expected 0)`);
   await sleep(1500);
@@ -625,7 +713,7 @@ async function updaterRun(caseName, { withQaEnv = true } = {}) {
   }
   delete env.LITE_ECHO_CONSOLE;
   const label = `upd-${caseName}${withQaEnv ? '' : '-gated'}`;
-  const handle = launchApp(resolved, { label, logFile: path.join(LOGS, `${label}-${Date.now()}.log`), env, args: [] });
+  const handle = launchApp(resolved, { label, logFile: path.join(LOGS, `${label}-${Date.now()}.log`), redact, env, args: [] });
   await sleep(OBSERVE_MS);
   const stillAlive = !handle.exited;
   const queries = ctx.feed.accessLog.slice(beforeAccess).filter((r) => r.url.includes(`/${caseName.replace('-gated', '')}/`));
@@ -721,6 +809,10 @@ try {
 
 await killMain(false);
 if (ctx.feed) { try { ctx.feed.server.close(); } catch { /* ignore */ } }
+// token hygiene: profiles (Chromium localStorage) are wiped with the run,
+// never shipped inside the evidence dir.
+try { fs.rmSync(PROFILES, { recursive: true, force: true }); } catch { /* ignore */ }
+try { fs.rmSync(path.join(OUT, 'profiles'), { recursive: true, force: true }); } catch { /* ignore */ }
 
 const md = rec.writeMarkdown();
 clearTimeout(watchdog);
