@@ -1,8 +1,8 @@
 diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
-index 5371db1..9c52b64 100644
+index 5371db1..d2004e6 100644
 --- a/src-tauri/src/lib.rs
 +++ b/src-tauri/src/lib.rs
-@@ -5,9 +5,153 @@
+@@ -5,9 +5,214 @@
  
  // mod menu;
  
@@ -58,6 +58,30 @@ index 5371db1..9c52b64 100644
 +  requested.scheme() != "about" && current != Some(requested)
 +}
 +
++/// Whether `url` is our own sign-in callback: the app origin (served by
++/// tauri-plugin-localhost on http://localhost) carrying a non-empty
++/// `loginToken`, in the query or in the fragment.
++///
++/// Reaching it means the identity provider is done: the page's effect posts
++/// the token to the opener, after which the sign-in window has served its
++/// purpose (see the `on_page_load` handler in `open_sso_window`).
++fn is_login_callback_url(url: &tauri::Url) -> bool {
++  if !matches!(url.scheme(), "http" | "https")
++    || !matches!(url.host_str(), Some("localhost") | Some("127.0.0.1"))
++  {
++    return false;
++  }
++  let in_query = url
++    .query_pairs()
++    .any(|(k, v)| k.as_ref() == "loginToken" && !v.is_empty());
++  let in_fragment = url
++    .fragment()
++    .unwrap_or_default()
++    .split('&')
++    .any(|part| part.strip_prefix("loginToken=").is_some_and(|token| !token.is_empty()));
++  in_query || in_fragment
++}
++
 +/// The one live sign-in window, if any.
 +///
 +/// WM-destroyed windows drop out of `webview_windows()` by themselves, so a
@@ -93,6 +117,26 @@ index 5371db1..9c52b64 100644
 +    .inner_size(520.0, 720.0)
 +    .min_inner_size(320.0, 480.0)
 +    .resizable(true)
++    .on_page_load(|window, payload| {
++      // Self-close once the identity provider has returned the token to us:
++      // the callback page posts the loginToken to the opener on load, and
++      // JS `window.close()` cannot destroy a Tauri webview, so the shell
++      // closes this window itself shortly after the page's effect ran.
++      if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished)
++        && is_login_callback_url(payload.url())
++      {
++        let closer = window.clone();
++        std::thread::spawn(move || {
++          std::thread::sleep(std::time::Duration::from_millis(1300));
++          // WebviewWindow::close is dispatched through the event-loop proxy,
++          // so calling it from this timer thread is safe; the user may also
++          // have closed the window first, which simply errors here.
++          if let Err(e) = closer.close() {
++            eprintln!("could not close the sign-in window after the token callback: {e}");
++          }
++        });
++      }
++    })
 +    .window_features(features);
 +  match builder.build() {
 +    Ok(window) => Some(window),
@@ -151,12 +195,29 @@ index 5371db1..9c52b64 100644
 +    assert!(!is_matrix_auth_url(&url("about:blank")));
 +    assert!(!is_matrix_auth_url(&url("https://example.com/login/sso/")));
 +  }
++
++  #[test]
++  fn login_callback_is_recognised_on_our_own_origin_only() {
++    assert!(is_login_callback_url(&url("http://localhost:44548/?loginToken=abc")));
++    assert!(is_login_callback_url(&url(
++      "http://localhost:44548/login/plotina.cc?action=login&loginToken=abc"
++    )));
++    assert!(is_login_callback_url(&url("http://127.0.0.1:44548/#loginToken=abc")));
++    // an identity provider page that happens to carry the parameter must not
++    // close the window: the round trip is not ours yet
++    assert!(!is_login_callback_url(&url("https://idp.example.com/?loginToken=abc")));
++    // the plain app page and an empty token must not close it either
++    assert!(!is_login_callback_url(&url("http://localhost:44548/")));
++    assert!(!is_login_callback_url(&url("http://localhost:44548/?loginToken=")));
++    assert!(!is_login_callback_url(&url("http://localhost:44548/#loginToken=")));
++    assert!(!is_login_callback_url(&url("about:blank")));
++  }
 +}
 +
  #[cfg(feature = "updater")]
  use tauri_plugin_updater::UpdaterExt;
  #[cfg(feature = "updater")]
-@@ -101,7 +245,30 @@ pub fn run() {
+@@ -101,7 +306,30 @@ pub fn run() {
                  .inner_size(1200.0, 800.0)
                  .min_inner_size(800.0, 600.0)
                  .disable_drag_drop_handler()
