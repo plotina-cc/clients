@@ -1,8 +1,24 @@
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index 50847073..aa323681 100644
+index 50847073..698218f1 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
-@@ -55,6 +55,25 @@ android {
+@@ -40,6 +40,15 @@ plugins {
+ }
+ 
+ android {
++    // Plotina: the updater screen's Robolectric Compose tests launch an androidx.activity
++    // ComponentActivity; unit tests only see the merged manifest (with the activity that
++    // androidx.compose.ui:ui-test-manifest declares) when android resources are included.
++    // Same opt-in libraries/roomselect and libraries/emoji already use for their view tests.
++    testOptions {
++        unitTests {
++            isIncludeAndroidResources = true
++        }
++    }
+     namespace = "io.element.android.x"
+ 
+     defaultConfig {
+@@ -55,6 +64,25 @@ android {
          versionCode = Versions.VERSION_CODE
          versionName = Versions.VERSION_NAME
  
@@ -28,8 +44,19 @@ index 50847073..aa323681 100644
          // Plotina: no ndk.abiFilters here. AGP refuses to configure the project when
          // abiFilters is set at all while ABI splits are enabled; the filter only exists
          // upstream to serve the universal APK, which we build without.
+@@ -334,7 +362,9 @@ dependencies {
+     implementation(platform(libs.network.okhttp.bom))
+     implementation(libs.network.okhttp.logging)
+ 
+-    testCommonDependencies(libs)
++    // Plotina: the updater screen's Compose state tests (app/src/test/.../PlotinaUpdaterScreenTest)
++    // run on Robolectric, like the two upstream modules that already ask for the view layer.
++    testCommonDependencies(libs, includeTestComposeView = true)
+     testImplementation(projects.libraries.matrix.test)
+     testImplementation(projects.services.toolbox.test)
+ }
 diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
-index e5872e54..27db23d7 100644
+index e5872e54..1ed2e11b 100644
 --- a/app/src/main/AndroidManifest.xml
 +++ b/app/src/main/AndroidManifest.xml
 @@ -8,6 +8,9 @@
@@ -47,22 +74,22 @@ index e5872e54..27db23d7 100644
          the application from a mobile.element.io link.
          -->
 +        <!--
-+        Plotina: the self-updater dialog (io.element.android.x.updater). Translucent so the app
-+        stays visible behind it; singleTop because the installer posts its result back into this
-+        Activity. Never exported: the only entry points are the About screen and the daily check.
++        Plotina: the self-updater page (io.element.android.x.updater). Opaque full screen like the
++        rest of the app; singleTop because the installer posts its result back into this Activity.
++        Never exported: the only entry points are the Settings row and the daily check.
 +        -->
 +        <activity
 +            android:name=".updater.PlotinaUpdateActivity"
 +            android:excludeFromRecents="true"
 +            android:exported="false"
 +            android:launchMode="singleTop"
-+            android:theme="@style/Theme.ElementX.Updater" />
++            android:theme="@style/Theme.ElementX" />
 +
          <activity
              android:name=".MainActivity"
              android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode"
 diff --git a/app/src/main/kotlin/io/element/android/x/MainActivity.kt b/app/src/main/kotlin/io/element/android/x/MainActivity.kt
-index cc058d0f..9588b8f1 100644
+index cc058d0f..eab5ab90 100644
 --- a/app/src/main/kotlin/io/element/android/x/MainActivity.kt
 +++ b/app/src/main/kotlin/io/element/android/x/MainActivity.kt
 @@ -42,6 +42,7 @@ import io.element.android.libraries.designsystem.utils.snackbar.LocalSnackbarDis
@@ -78,7 +105,7 @@ index cc058d0f..9588b8f1 100644
              }
          }
 +
-+        // Plotina: silent update check, at most once a day; only opens the updater dialog when the
++        // Plotina: silent update check, at most once a day; only opens the updater page when the
 +        // manifest really describes a newer build. See io.element.android.x.updater.PlotinaUpdate.
 +        PlotinaUpdate.onAppStart(this)
      }
@@ -86,7 +113,7 @@ index cc058d0f..9588b8f1 100644
      /**
 diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt
 new file mode 100644
-index 00000000..bc17b81e
+index 00000000..503e2983
 --- /dev/null
 +++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt
 @@ -0,0 +1,189 @@
@@ -239,7 +266,7 @@ index 00000000..bc17b81e
 +
 +    /**
 +     * Silent once-a-day check started from MainActivity.onCreate. Only when the manifest really
-+     * describes a newer build does anything open: the updater dialog, carrying the manifest we
++     * describes a newer build does anything open: the updater page, carrying the manifest we
 +     * already fetched, so the user never waits on a second request.
 +     */
 +    fun onAppStart(activity: Activity) {
@@ -256,7 +283,7 @@ index 00000000..bc17b81e
 +                .putExtra(EXTRA_MANIFEST, info.toJson())
 +                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 +            runCatching { appContext.startActivity(intent) }
-+                .onFailure { Timber.tag(loggerTag).w(it, "the update dialog could not be opened") }
++                .onFailure { Timber.tag(loggerTag).w(it, "the updater page could not be opened") }
 +        }.apply { name = "plotina-update-check"; isDaemon = true; start() }
 +    }
 +
@@ -281,15 +308,19 @@ index 00000000..bc17b81e
 +}
 diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt
 new file mode 100644
-index 00000000..baee7182
+index 00000000..35bd46b6
 --- /dev/null
 +++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt
-@@ -0,0 +1,476 @@
+@@ -0,0 +1,414 @@
 +/*
-+ * Plotina: the in-app updater's screen. A small dialog over the app: check the manifest, ask,
-+ * download, verify sha256 + size, and hand the file to the system installer. No third-party
-+ * update SDK: HttpURLConnection/DownloadManager to fetch, PackageInstaller to install, and the
-+ * "install unknown apps" permission when Android asks for it.
++ * Plotina: the in-app updater's screen host.
++ *
++ * The engine is deliberately untouched from the first release of the updater: HttpURLConnection
++ * for the manifest, DownloadManager for the APK, PackageInstaller for the install, sha256 + size
++ * verification before the installer ever sees a byte, and the "install unknown apps" permission
++ * when Android asks for it. Only the presentation changed with .30: the AlertDialogs became the
++ * full-screen PlotinaUpdaterPage-like page (PlotinaUpdaterScreen.kt) so the updater looks like the
++ * one in Plotina Mobile instead of a stack of dialogs over the app.
 + *
 + * Copyright (C) 2026 Plotina
 + *
@@ -310,23 +341,13 @@ index 00000000..baee7182
 +import android.provider.Settings
 +import androidx.activity.ComponentActivity
 +import androidx.activity.compose.setContent
-+import androidx.compose.foundation.layout.Arrangement
-+import androidx.compose.foundation.layout.Column
-+import androidx.compose.foundation.layout.fillMaxWidth
-+import androidx.compose.material3.AlertDialog
-+import androidx.compose.material3.Button
-+import androidx.compose.material3.LinearProgressIndicator
-+import androidx.compose.material3.Text
-+import androidx.compose.material3.TextButton
++import androidx.activity.enableEdgeToEdge
 +import androidx.compose.runtime.Composable
 +import androidx.compose.runtime.collectAsState
 +import androidx.compose.runtime.getValue
 +import androidx.compose.runtime.mutableStateOf
 +import androidx.compose.runtime.remember
 +import androidx.compose.runtime.setValue
-+import androidx.compose.ui.Modifier
-+import androidx.compose.ui.res.stringResource
-+import androidx.compose.ui.unit.dp
 +import androidx.core.content.ContextCompat
 +import androidx.lifecycle.lifecycleScope
 +import io.element.android.compound.colors.SemanticColorsLightDark
@@ -348,26 +369,18 @@ index 00000000..baee7182
 +private data class DownloadRow(val status: Int, val done: Long, val total: Long)
 +
 +/**
-+ * Reached two ways: the About screen's "Check for updates" row (always shows a result), and the
-+ * silent once-a-day check in [PlotinaUpdate.onAppStart], which only starts this Activity when the
-+ * manifest really is newer and hands over its own copy through [PlotinaUpdate.EXTRA_MANIFEST].
-+ * A debug build can point it at a local manifest with
++ * Reached two ways: the «Проверить обновления» row at the root of Settings (always shows a result),
++ * and the silent once-a-day check in [PlotinaUpdate.onAppStart], which only starts this Activity
++ * when the manifest really is newer and hands over its own copy through
++ * [PlotinaUpdate.EXTRA_MANIFEST]. A debug build can point it at a local manifest with
 + * [PlotinaUpdate.EXTRA_MANIFEST_URL] (see PlotinaUpdate.kt).
++ *
++ * The page lives on its own: opening the updater navigates the user away from Settings, the same
++ * way Plotina Mobile pushes its updater route.
 + */
 +class PlotinaUpdateActivity : ComponentActivity() {
-+    private sealed interface UiState {
-+        data object Checking : UiState
-+        data class UpToDate(val current: String) : UiState
-+        data class Message(val text: String) : UiState
-+        data class Available(val info: UpdateInfo) : UiState
-+        data class Downloading(val info: UpdateInfo, val percent: Int) : UiState
-+        data object Verifying : UiState
-+        data object NeedPermission : UiState
-+        data object Installing : UiState
-+    }
-+
 +    private lateinit var appBindings: AppBindings
-+    private var uiState by mutableStateOf<UiState>(UiState.Checking)
++    private var uiState by mutableStateOf<UpdaterUiState>(UpdaterUiState.Checking)
 +    private var pendingInfo: UpdateInfo? = null
 +    private var downloadId: Long = -1L
 +    private var apkFile: File? = null
@@ -375,11 +388,27 @@ index 00000000..baee7182
 +
 +    override fun onCreate(savedInstanceState: Bundle?) {
 +        super.onCreate(savedInstanceState)
++        // The app module's MainActivity does the same: edge-to-edge, with the Scaffold's TopAppBar
++        // consuming the status-bar inset. Without it the opaque theme bars would fight the page.
++        enableEdgeToEdge()
 +        // The app graph lives on the Application, so the updater can use the very same theme and
 +        // preferences the rest of the app renders with. See MainActivity.MainContent.
 +        appBindings = bindings()
 +        handleIntent(intent)
-+        setContent { UpdaterTheme { UpdaterDialog() } }
++        setContent {
++            UpdaterTheme {
++                PlotinaUpdaterScreen(
++                    state = uiState,
++                    onBackClick = ::finish,
++                    onDownloadClick = { (uiState as? UpdaterUiState.Available)?.info?.let(::confirmAndDownload) },
++                    onLaterClick = ::finish,
++                    onCancelDownloadClick = ::cancelDownload,
++                    onOpenSettingsClick = ::openInstallPermissionSettings,
++                    onRetryClick = ::retry,
++                    onCloseClick = ::finish,
++                )
++            }
++        }
 +    }
 +
 +    override fun onNewIntent(intent: Intent) {
@@ -391,7 +420,7 @@ index 00000000..baee7182
 +    override fun onResume() {
 +        super.onResume()
 +        // The user may have just allowed "install unknown apps" in the system settings we opened.
-+        if (uiState == UiState.NeedPermission && mayInstallPackages()) {
++        if (uiState == UpdaterUiState.NeedPermission && mayInstallPackages()) {
 +            pendingInfo?.let { startDownload(it) }
 +        }
 +    }
@@ -403,9 +432,9 @@ index 00000000..baee7182
 +        }
 +        // While one flow is visibly running, a repeat start just brings it forward. Checking is
 +        // deliberately absent: it is the state a fresh Activity opens in, and returning early on it
-+        // here would leave the dialog "Checking" forever without ever looking at this intent.
-+        if (uiState is UiState.Downloading || uiState is UiState.Verifying ||
-+            uiState is UiState.Installing || uiState is UiState.NeedPermission
++        // here would leave the page "Checking" forever without ever looking at this intent.
++        if (uiState is UpdaterUiState.Downloading || uiState == UpdaterUiState.Verifying ||
++            uiState == UpdaterUiState.Installing || uiState == UpdaterUiState.NeedPermission
 +        ) {
 +            return
 +        }
@@ -419,12 +448,15 @@ index 00000000..baee7182
 +    }
 +
 +    private fun check() {
-+        uiState = UiState.Checking
++        uiState = UpdaterUiState.Checking
 +        lifecycleScope.launch {
 +            val url = intent.getStringExtra(PlotinaUpdate.EXTRA_MANIFEST_URL) ?: PlotinaUpdate.MANIFEST_URL
 +            val info = withContext(Dispatchers.IO) { PlotinaUpdate.fetch(this@PlotinaUpdateActivity, url) }
 +            if (info == null) {
-+                uiState = UiState.Message(getString(R.string.plotina_update_error_check))
++                uiState = UpdaterUiState.Message(
++                    text = getString(R.string.plotina_update_error_check),
++                    retry = UpdaterUiState.Retry.Check,
++                )
 +            } else {
 +                showResult(info)
 +            }
@@ -434,22 +466,28 @@ index 00000000..baee7182
 +    private fun showResult(info: UpdateInfo) {
 +        pendingInfo = info
 +        uiState = if (PlotinaUpdate.isUpdateAvailable(this, info)) {
-+            UiState.Available(info)
++            UpdaterUiState.Available(info)
 +        } else {
-+            UiState.UpToDate(
-+                getString(
-+                    R.string.plotina_update_up_to_date,
-+                    PlotinaUpdate.installedVersionName(this),
-+                    PlotinaUpdate.installedBaseCode(this).toString(),
-+                ),
-+            )
++            UpdaterUiState.UpToDate(PlotinaUpdate.installedVersionName(this))
++        }
++    }
++
++    /** Which action the «Повторить» button repeats: re-read the manifest, or re-run the download. */
++    private fun retry() {
++        when (val state = uiState) {
++            is UpdaterUiState.Message -> when (state.retry) {
++                UpdaterUiState.Retry.Check -> check()
++                UpdaterUiState.Retry.Download -> pendingInfo?.let(::confirmAndDownload)
++                UpdaterUiState.Retry.None -> Unit
++            }
++            else -> Unit
 +        }
 +    }
 +
 +    private fun confirmAndDownload(info: UpdateInfo) {
 +        if (!mayInstallPackages()) {
 +            // Ask before the bytes move: the installer is the only dead end a user should hit.
-+            uiState = UiState.NeedPermission
++            uiState = UpdaterUiState.NeedPermission
 +            return
 +        }
 +        startDownload(info)
@@ -467,19 +505,22 @@ index 00000000..baee7182
 +            .setAllowedOverRoaming(true)
 +        val manager = ContextCompat.getSystemService(this, DownloadManager::class.java)
 +        if (manager == null) {
-+            uiState = UiState.Message(getString(R.string.plotina_update_error_download))
++            uiState = UpdaterUiState.Message(
++                text = getString(R.string.plotina_update_error_download),
++                retry = UpdaterUiState.Retry.Download,
++            )
 +            return
 +        }
 +        downloadId = manager.enqueue(request)
 +        apkFile = file
-+        uiState = UiState.Downloading(info, 0)
++        uiState = UpdaterUiState.Downloading(0)
 +        pollDownload(info)
 +    }
 +
 +    /**
 +     * DownloadManager's completion broadcast would need an exported receiver on recent Android, so
-+     * the state is polled instead while this dialog is open. The download itself belongs to
-+     * DownloadManager and keeps running, with its own notification, if the dialog goes away.
++     * the state is polled instead while this page is open. The download itself belongs to
++     * DownloadManager and keeps running, with its own notification, if the page goes away.
 +     */
 +    private fun pollDownload(info: UpdateInfo) {
 +        pollJob?.cancel()
@@ -507,12 +548,15 @@ index 00000000..baee7182
 +                        return@launch
 +                    }
 +                    DownloadManager.STATUS_FAILED, null -> {
-+                        uiState = UiState.Message(getString(R.string.plotina_update_error_download))
++                        uiState = UpdaterUiState.Message(
++                            text = getString(R.string.plotina_update_error_download),
++                            retry = UpdaterUiState.Retry.Download,
++                        )
 +                        return@launch
 +                    }
 +                    else -> {
 +                        val percent = if (row.total > 0) ((row.done * 100) / row.total).toInt().coerceIn(0, 100) else 0
-+                        uiState = UiState.Downloading(info, percent)
++                        uiState = UpdaterUiState.Downloading(percent)
 +                    }
 +                }
 +                delay(400)
@@ -525,24 +569,27 @@ index 00000000..baee7182
 +        // "vanished" row and show an error over the state we are restoring.
 +        pollJob?.cancel()
 +        ContextCompat.getSystemService(this, DownloadManager::class.java)?.remove(downloadId)
-+        pendingInfo?.let { uiState = UiState.Available(it) }
++        pendingInfo?.let { uiState = UpdaterUiState.Available(it) }
 +    }
 +
 +    private fun verifyAndInstall(info: UpdateInfo) {
 +        val file = apkFile ?: return
 +        lifecycleScope.launch {
-+            uiState = UiState.Verifying
++            uiState = UpdaterUiState.Verifying
 +            val matches = withContext(Dispatchers.IO) {
 +                runCatching { file.length() == info.size && sha256Of(file) == info.sha256 }.getOrDefault(false)
 +            }
 +            if (!matches) {
 +                Timber.tag("PlotinaUpdate").w("checksum or size mismatch for %s", file.name)
 +                file.delete()
-+                uiState = UiState.Message(getString(R.string.plotina_update_error_mismatch))
++                uiState = UpdaterUiState.Message(
++                    text = getString(R.string.plotina_update_error_mismatch),
++                    retry = UpdaterUiState.Retry.Download,
++                )
 +                return@launch
 +            }
 +            if (!mayInstallPackages()) {
-+                uiState = UiState.NeedPermission
++                uiState = UpdaterUiState.NeedPermission
 +                return@launch
 +            }
 +            launchInstaller(info, file)
@@ -581,10 +628,13 @@ index 00000000..baee7182
 +            }
 +            withContext(Dispatchers.Main) {
 +                if (outcome.isSuccess) {
-+                    uiState = UiState.Installing
++                    uiState = UpdaterUiState.Installing
 +                } else {
 +                    Timber.tag("PlotinaUpdate").e(outcome.exceptionOrNull(), "install session failed")
-+                    uiState = UiState.Message(getString(R.string.plotina_update_error_install, ""))
++                    uiState = UpdaterUiState.Message(
++                        text = getString(R.string.plotina_update_error_install, ""),
++                        retry = UpdaterUiState.Retry.Download,
++                    )
 +                }
 +            }
 +        }
@@ -601,15 +651,19 @@ index 00000000..baee7182
 +            if (confirm != null) {
 +                runCatching { startActivity(confirm) }
 +                    .onFailure { Timber.tag("PlotinaUpdate").w(it, "installer confirmation did not open") }
-+                uiState = UiState.Installing
++                uiState = UpdaterUiState.Installing
 +                return
 +            }
 +        }
 +        apkFile?.delete()
 +        uiState = when (status) {
-+            PackageInstaller.STATUS_SUCCESS -> UiState.Message(getString(R.string.plotina_update_installed))
-+            else -> UiState.Message(
-+                getString(R.string.plotina_update_error_install, result.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE).orEmpty()),
++            PackageInstaller.STATUS_SUCCESS -> UpdaterUiState.Message(getString(R.string.plotina_update_installed))
++            else -> UpdaterUiState.Message(
++                text = getString(
++                    R.string.plotina_update_error_install,
++                    result.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE).orEmpty(),
++                ),
++                retry = UpdaterUiState.Retry.Download,
 +            )
 +        }
 +    }
@@ -637,7 +691,7 @@ index 00000000..baee7182
 +    /**
 +     * The app's own theme wrapper, exactly as `MainActivity` uses it: Compound's colours and the
 +     * user's light/dark preference from the preferences store. A bare `MaterialTheme` here was the
-+     * bug - a light dialog with the default purple palette over a dark app.
++     * bug - a light page with the default purple palette over a dark app.
 +     */
 +    @Composable
 +    private fun UpdaterTheme(content: @Composable () -> Unit) {
@@ -652,95 +706,6 @@ index 00000000..baee7182
 +            buildMeta = appBindings.buildMeta(),
 +            content = content,
 +        )
-+    }
-+
-+    @Composable
-+    private fun ResultDialog(text: String) {
-+        AlertDialog(
-+            onDismissRequest = ::finish,
-+            text = { Text(text) },
-+            confirmButton = { TextButton(onClick = ::finish) { Text(stringResource(R.string.plotina_update_close)) } },
-+        )
-+    }
-+
-+    @Composable
-+    private fun UpdaterDialog() {
-+        when (val state = uiState) {
-+            UiState.Checking -> AlertDialog(
-+                onDismissRequest = ::finish,
-+                text = { Text(stringResource(R.string.plotina_update_checking)) },
-+                confirmButton = { TextButton(onClick = ::finish) { Text(stringResource(R.string.plotina_update_cancel)) } },
-+            )
-+
-+            UiState.Verifying -> AlertDialog(
-+                onDismissRequest = {},
-+                text = { Text(stringResource(R.string.plotina_update_verifying)) },
-+                confirmButton = {}, // the hash of a 200 MB file is not a moment for buttons
-+            )
-+
-+            UiState.Installing -> AlertDialog(
-+                onDismissRequest = ::finish,
-+                text = { Text(stringResource(R.string.plotina_update_installing)) },
-+                confirmButton = { TextButton(onClick = ::finish) { Text(stringResource(R.string.plotina_update_close)) } },
-+            )
-+
-+            is UiState.UpToDate -> ResultDialog(state.current)
-+
-+            is UiState.Message -> ResultDialog(state.text)
-+
-+            is UiState.Available -> AlertDialog(
-+                onDismissRequest = ::finish,
-+                title = { Text(stringResource(R.string.plotina_update_title)) },
-+                text = {
-+                    Text(
-+                        stringResource(
-+                            R.string.plotina_update_available,
-+                            state.info.versionName,
-+                            "%.0f MB".format(state.info.size / 1_048_576.0),
-+                            state.info.notes,
-+                        ),
-+                    )
-+                },
-+                confirmButton = {
-+                    Button(onClick = { confirmAndDownload(state.info) }) {
-+                        Text(stringResource(R.string.plotina_update_download))
-+                    }
-+                },
-+                dismissButton = {
-+                    TextButton(onClick = ::finish) { Text(stringResource(R.string.plotina_update_cancel)) }
-+                },
-+            )
-+
-+            is UiState.Downloading -> AlertDialog(
-+                onDismissRequest = {},
-+                text = {
-+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-+                        Text(stringResource(R.string.plotina_update_downloading, state.percent))
-+                        LinearProgressIndicator(
-+                            progress = { state.percent / 100f },
-+                            modifier = Modifier.fillMaxWidth(),
-+                        )
-+                    }
-+                },
-+                confirmButton = {
-+                    TextButton(onClick = ::cancelDownload) { Text(stringResource(R.string.plotina_update_cancel)) }
-+                },
-+            )
-+
-+            UiState.NeedPermission -> AlertDialog(
-+                onDismissRequest = ::finish,
-+                title = { Text(stringResource(R.string.plotina_update_permission_title)) },
-+                text = { Text(stringResource(R.string.plotina_update_permission_text)) },
-+                confirmButton = {
-+                    Button(onClick = ::openInstallPermissionSettings) {
-+                        Text(stringResource(R.string.plotina_update_open_settings))
-+                    }
-+                },
-+                dismissButton = {
-+                    TextButton(onClick = ::finish) { Text(stringResource(R.string.plotina_update_cancel)) }
-+                },
-+            )
-+        }
 +    }
 +
 +    companion object {
@@ -761,86 +726,549 @@ index 00000000..baee7182
 +        }
 +    }
 +}
+diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdaterScreen.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdaterScreen.kt
+new file mode 100644
+index 00000000..99369c0c
+--- /dev/null
++++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdaterScreen.kt
+@@ -0,0 +1,441 @@
++/*
++ * Plotina: the full-screen updater page.
++ *
++ * The same stages as Plotina Mobile's updater route (lib/pages/updater/plotina_updater_page.dart):
++ * a Scaffold with a TopAppBar, one centred column no wider than 480 dp, 24 dp of body padding, a
++ * 56 dp stage icon, a headline, optional body text, a card for the version / notes / size, and
++ * stretch buttons. Every colour comes from the MaterialTheme that ElementThemeApp installs, so the
++ * page follows the user's light/dark choice and the Compound palette like the rest of the app.
++ *
++ * Copyright (C) 2026 Plotina
++ *
++ * This program is free software: you can redistribute it and/or modify it under the terms of the
++ * GNU Affero General Public License as published by the Free Software Foundation, version 3.
++ */
++
++package io.element.android.x.updater
++
++import androidx.compose.foundation.BorderStroke
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.layout.widthIn
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.foundation.verticalScroll
++import androidx.compose.material3.Card
++import androidx.compose.material3.CardDefaults
++import androidx.compose.material3.CircularProgressIndicator
++import androidx.compose.material3.Button
++import androidx.compose.material3.Icon
++import androidx.compose.material3.IconButton
++import androidx.compose.material3.LinearProgressIndicator
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Scaffold
++import androidx.compose.material3.Text
++import androidx.compose.material3.TextButton
++import androidx.compose.material3.TopAppBar
++import androidx.compose.material3.TopAppBarDefaults
++import androidx.compose.runtime.Composable
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.graphics.vector.ImageVector
++import androidx.compose.ui.res.stringResource
++import androidx.compose.ui.text.style.TextAlign
++import androidx.compose.ui.unit.dp
++import io.element.android.compound.tokens.generated.CompoundIcons
++import io.element.android.libraries.designsystem.preview.ElementPreview
++import io.element.android.libraries.designsystem.preview.PreviewsDayNight
++import io.element.android.x.R
++
++/**
++ * What the screen shows. The Activity owns the transitions; the screen itself is stateless so it
++ * can be previewed and tested with any stage. [Message.retry] picks which action repeats the work:
++ * a manifest re-check after a failed fetch, or a fresh download after a failed transfer.
++ */
++sealed interface UpdaterUiState {
++    data object Checking : UpdaterUiState
++    data object Verifying : UpdaterUiState
++    data object Installing : UpdaterUiState
++    data object NeedPermission : UpdaterUiState
++    data class UpToDate(val version: String) : UpdaterUiState
++    data class Available(val info: UpdateInfo) : UpdaterUiState
++    data class Downloading(val percent: Int) : UpdaterUiState
++    data class Message(val text: String, val retry: Retry = Retry.None) : UpdaterUiState
++
++    enum class Retry { None, Check, Download }
++}
++
++/** Byte count the way the card shows it: MB above a megabyte, kB above a kilobyte. */
++internal fun prettySize(bytes: Long): String = when {
++    bytes >= 1_000_000 -> "%.1f MB".format(bytes / 1_000_000.0)
++    bytes >= 1_000 -> "%.0f kB".format(bytes / 1_000.0)
++    else -> "$bytes B"
++}
++
++/**
++ * The whole updater page: AppBar + the current stage, centred in a 480 dp column over 24 dp of
++ * padding, exactly the layout of the Mobile route the users already see on their phones.
++ */
++@Composable
++internal fun PlotinaUpdaterScreen(
++    state: UpdaterUiState,
++    onBackClick: () -> Unit,
++    onDownloadClick: () -> Unit,
++    onLaterClick: () -> Unit,
++    onCancelDownloadClick: () -> Unit,
++    onOpenSettingsClick: () -> Unit,
++    onRetryClick: () -> Unit,
++    onCloseClick: () -> Unit,
++    modifier: Modifier = Modifier,
++) {
++    Scaffold(
++        modifier = modifier,
++        topBar = {
++            TopAppBar(
++                title = { Text(stringResource(R.string.plotina_update_screen_title)) },
++                navigationIcon = {
++                    IconButton(onClick = onBackClick) {
++                        Icon(
++                            imageVector = CompoundIcons.Close(),
++                            contentDescription = stringResource(R.string.plotina_update_back),
++                        )
++                    }
++                },
++                colors = TopAppBarDefaults.topAppBarColors(
++                    containerColor = MaterialTheme.colorScheme.surface,
++                    titleContentColor = MaterialTheme.colorScheme.onSurface,
++                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
++                ),
++            )
++        },
++        containerColor = MaterialTheme.colorScheme.surface,
++    ) { contentPadding ->
++        Column(
++            modifier = Modifier
++                .fillMaxSize()
++                .padding(contentPadding)
++                .verticalScroll(rememberScrollState())
++                .padding(24.dp),
++            horizontalAlignment = Alignment.CenterHorizontally,
++        ) {
++            Column(
++                modifier = Modifier
++                    .widthIn(max = 480.dp)
++                    .fillMaxWidth(),
++                horizontalAlignment = Alignment.CenterHorizontally,
++                verticalArrangement = Arrangement.spacedBy(0.dp),
++            ) {
++                when (val s = state) {
++                    UpdaterUiState.Checking -> Stage(
++                        spinner = true,
++                        headline = stringResource(R.string.plotina_update_checking),
++                    )
++
++                    UpdaterUiState.Verifying -> Stage(
++                        spinner = true,
++                        headline = stringResource(R.string.plotina_update_verifying),
++                    )
++
++                    UpdaterUiState.Installing -> Stage(
++                        icon = CompoundIcons.Download(),
++                        headline = stringResource(R.string.plotina_update_installing),
++                        actions = {
++                            TextButton(onClick = onCloseClick, modifier = Modifier.fillMaxWidth()) {
++                                Text(stringResource(R.string.plotina_update_close))
++                            }
++                        },
++                    )
++
++                    is UpdaterUiState.UpToDate -> Stage(
++                        icon = CompoundIcons.CheckCircle(),
++                        headline = stringResource(R.string.plotina_update_no_updates),
++                        body = stringResource(R.string.plotina_update_is_latest, s.version),
++                    )
++
++                    is UpdaterUiState.Available -> Column(
++                        modifier = Modifier.fillMaxWidth(),
++                        horizontalAlignment = Alignment.CenterHorizontally,
++                    ) {
++                        UpdateCard(
++                            info = s.info,
++                            onDownloadClick = onDownloadClick,
++                            onLaterClick = onLaterClick,
++                        )
++                    }
++
++                    is UpdaterUiState.Downloading -> Stage(
++                        headline = stringResource(R.string.plotina_update_downloading),
++                        body = stringResource(R.string.plotina_update_progress_percent, s.percent),
++                        progress = s.percent,
++                        actions = {
++                            TextButton(onClick = onCancelDownloadClick, modifier = Modifier.fillMaxWidth()) {
++                                Text(stringResource(R.string.plotina_update_cancel))
++                            }
++                        },
++                    )
++
++                    UpdaterUiState.NeedPermission -> Stage(
++                        icon = CompoundIcons.Shield(),
++                        headline = stringResource(R.string.plotina_update_permission_title),
++                        body = stringResource(R.string.plotina_update_permission_text),
++                        actions = {
++                            PrimaryAction(
++                                onClick = onOpenSettingsClick,
++                                text = stringResource(R.string.plotina_update_open_settings),
++                            )
++                            TextButton(onClick = onLaterClick, modifier = Modifier.fillMaxWidth()) {
++                                Text(stringResource(R.string.plotina_update_later))
++                            }
++                        },
++                    )
++
++                    is UpdaterUiState.Message -> Stage(
++                        icon = CompoundIcons.ErrorSolid(),
++                        iconColor = MaterialTheme.colorScheme.error,
++                        headline = s.text,
++                        actions = {
++                            if (s.retry != UpdaterUiState.Retry.None) {
++                                PrimaryAction(
++                                    onClick = onRetryClick,
++                                    text = stringResource(R.string.plotina_update_retry),
++                                    icon = CompoundIcons.Restart(),
++                                )
++                            }
++                            TextButton(onClick = onCloseClick, modifier = Modifier.fillMaxWidth()) {
++                                Text(stringResource(R.string.plotina_update_close))
++                            }
++                        },
++                    )
++                }
++            }
++        }
++    }
++}
++
++/** One stage: icon or spinner, headline, optional body / progress / card, then the actions. */
++@Composable
++private fun Stage(
++    headline: String,
++    icon: ImageVector? = null,
++    iconColor: Color = MaterialTheme.colorScheme.primary,
++    spinner: Boolean = false,
++    body: String? = null,
++    progress: Int? = null,
++    actions: @Composable () -> Unit = {},
++) {
++    Column(
++        modifier = Modifier.fillMaxWidth(),
++        horizontalAlignment = Alignment.CenterHorizontally,
++    ) {
++        when {
++            spinner -> Box(
++                modifier = Modifier.size(56.dp),
++                contentAlignment = Alignment.Center,
++            ) {
++                CircularProgressIndicator(modifier = Modifier.size(40.dp))
++            }
++
++            icon != null -> Icon(
++                imageVector = icon,
++                contentDescription = null,
++                modifier = Modifier.size(56.dp),
++                tint = iconColor,
++            )
++        }
++        Spacer(modifier = Modifier.height(16.dp))
++        Text(
++            text = headline,
++            modifier = Modifier.fillMaxWidth(),
++            textAlign = TextAlign.Center,
++            style = MaterialTheme.typography.titleMedium,
++            color = MaterialTheme.colorScheme.onSurface,
++        )
++        if (body != null) {
++            Spacer(modifier = Modifier.height(12.dp))
++            Text(
++                text = body,
++                modifier = Modifier.fillMaxWidth(),
++                textAlign = TextAlign.Center,
++                style = MaterialTheme.typography.bodyMedium,
++                color = MaterialTheme.colorScheme.onSurfaceVariant,
++            )
++        }
++        if (progress != null) {
++            Spacer(modifier = Modifier.height(16.dp))
++            LinearProgressIndicator(
++                progress = { progress / 100f },
++                modifier = Modifier
++                    .fillMaxWidth()
++                    .height(8.dp),
++            )
++        }
++        Spacer(modifier = Modifier.height(24.dp))
++        Column(
++            modifier = Modifier.fillMaxWidth(),
++            verticalArrangement = Arrangement.spacedBy(8.dp),
++        ) {
++            actions()
++        }
++    }
++}
++
++/** Version, notes and size, in the bordered card the Mobile page shows. */
++@Composable
++private fun UpdateCard(
++    info: UpdateInfo,
++    onDownloadClick: () -> Unit,
++    onLaterClick: () -> Unit,
++) {
++    Column(
++        modifier = Modifier.fillMaxWidth(),
++        verticalArrangement = Arrangement.spacedBy(24.dp),
++    ) {
++        Card(
++            modifier = Modifier.fillMaxWidth(),
++            shape = RoundedCornerShape(16.dp),
++            colors = CardDefaults.cardColors(
++                containerColor = MaterialTheme.colorScheme.surfaceVariant,
++                contentColor = MaterialTheme.colorScheme.onSurface,
++            ),
++            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
++        ) {
++            Column(modifier = Modifier.padding(16.dp)) {
++                Row(verticalAlignment = Alignment.CenterVertically) {
++                    Icon(
++                        imageVector = CompoundIcons.Download(),
++                        contentDescription = null,
++                        tint = MaterialTheme.colorScheme.primary,
++                    )
++                    Spacer(modifier = Modifier.width(12.dp))
++                    Text(
++                        text = stringResource(R.string.plotina_update_available, info.versionName),
++                        style = MaterialTheme.typography.titleMedium,
++                        color = MaterialTheme.colorScheme.onSurface,
++                    )
++                }
++                if (info.notes.isNotBlank()) {
++                    Spacer(modifier = Modifier.height(12.dp))
++                    Text(
++                        text = info.notes,
++                        style = MaterialTheme.typography.bodyMedium,
++                        color = MaterialTheme.colorScheme.onSurfaceVariant,
++                    )
++                }
++                Spacer(modifier = Modifier.height(8.dp))
++                Text(
++                    text = prettySize(info.size),
++                    style = MaterialTheme.typography.bodySmall,
++                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                )
++            }
++        }
++        PrimaryAction(
++            onClick = onDownloadClick,
++            text = stringResource(R.string.plotina_update_download),
++            icon = CompoundIcons.Download(),
++        )
++        TextButton(onClick = onLaterClick, modifier = Modifier.fillMaxWidth()) {
++            Text(stringResource(R.string.plotina_update_later))
++        }
++    }
++}
++
++@Composable
++private fun PrimaryAction(
++    onClick: () -> Unit,
++    text: String,
++    icon: ImageVector? = null,
++) {
++    Button(
++        onClick = onClick,
++        modifier = Modifier.fillMaxWidth(),
++    ) {
++        if (icon != null) {
++            Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(18.dp))
++            Spacer(modifier = Modifier.width(8.dp))
++        }
++        Text(text)
++    }
++}
++
++// Previews of every stage, light and dark, over the real Element theme. Showkase-style tooling
++// renders them; they cost nothing at runtime.
++@PreviewsDayNight
++@Composable
++internal fun PlotinaUpdaterCheckingPreview() = ElementPreview {
++    PlotinaUpdaterScreen(
++        state = UpdaterUiState.Checking,
++        onBackClick = {}, onDownloadClick = {}, onLaterClick = {}, onCancelDownloadClick = {},
++        onOpenSettingsClick = {}, onRetryClick = {}, onCloseClick = {},
++    )
++}
++
++@PreviewsDayNight
++@Composable
++internal fun PlotinaUpdaterAvailablePreview() = ElementPreview {
++    PlotinaUpdaterScreen(
++        state = UpdaterUiState.Available(aPreviewUpdateInfo()),
++        onBackClick = {}, onDownloadClick = {}, onLaterClick = {}, onCancelDownloadClick = {},
++        onOpenSettingsClick = {}, onRetryClick = {}, onCloseClick = {},
++    )
++}
++
++@PreviewsDayNight
++@Composable
++internal fun PlotinaUpdaterUpToDatePreview() = ElementPreview {
++    PlotinaUpdaterScreen(
++        state = UpdaterUiState.UpToDate(version = "26.10.1"),
++        onBackClick = {}, onDownloadClick = {}, onLaterClick = {}, onCancelDownloadClick = {},
++        onOpenSettingsClick = {}, onRetryClick = {}, onCloseClick = {},
++    )
++}
++
++@PreviewsDayNight
++@Composable
++internal fun PlotinaUpdaterDownloadingPreview() = ElementPreview {
++    PlotinaUpdaterScreen(
++        state = UpdaterUiState.Downloading(percent = 42),
++        onBackClick = {}, onDownloadClick = {}, onLaterClick = {}, onCancelDownloadClick = {},
++        onOpenSettingsClick = {}, onRetryClick = {}, onCloseClick = {},
++    )
++}
++
++@PreviewsDayNight
++@Composable
++internal fun PlotinaUpdaterPermissionPreview() = ElementPreview {
++    PlotinaUpdaterScreen(
++        state = UpdaterUiState.NeedPermission,
++        onBackClick = {}, onDownloadClick = {}, onLaterClick = {}, onCancelDownloadClick = {},
++        onOpenSettingsClick = {}, onRetryClick = {}, onCloseClick = {},
++    )
++}
++
++@PreviewsDayNight
++@Composable
++internal fun PlotinaUpdaterErrorPreview() = ElementPreview {
++    PlotinaUpdaterScreen(
++        state = UpdaterUiState.Message("Не удалось проверить обновления.", UpdaterUiState.Retry.Check),
++        onBackClick = {}, onDownloadClick = {}, onLaterClick = {}, onCancelDownloadClick = {},
++        onOpenSettingsClick = {}, onRetryClick = {}, onCloseClick = {},
++    )
++}
++
++private fun aPreviewUpdateInfo() = UpdateInfo(
++    packageName = "cc.plotina.x",
++    versionName = "26.10.1",
++    versionCode = 2026100302L,
++    apkUrl = "https://plotina.cc/dl/Plotina-X.apk",
++    sha256 = "0".repeat(64),
++    size = 137_608_493L,
++    notes = "Исправления и улучшения.",
++)
 diff --git a/app/src/main/res/values-ru/plotina_updater.xml b/app/src/main/res/values-ru/plotina_updater.xml
 new file mode 100644
-index 00000000..44a894c1
+index 00000000..0f4ccd23
 --- /dev/null
 +++ b/app/src/main/res/values-ru/plotina_updater.xml
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,29 @@
 +<?xml version="1.0" encoding="utf-8"?>
 +<!--
 +  ~ Plotina: строки встроенного обновителя (io.element.android.x.updater).
 +  -->
 +<resources>
-+    <string name="plotina_update_title">Доступно обновление</string>
-+    <string name="plotina_update_available">Доступна Plotina X %1$s (%2$s).\n\n%3$s</string>
-+    <string name="plotina_update_download">Скачать и установить</string>
-+    <string name="plotina_update_checking">Проверяем обновления…</string>
-+    <string name="plotina_update_downloading">Загрузка… %1$d%%</string>
-+    <string name="plotina_update_verifying">Проверяем скачанный файл…</string>
-+    <string name="plotina_update_installing">Подтвердите установку в системном окне…</string>
-+    <string name="plotina_update_up_to_date">Установлена последняя версия (%1$s, сборка %2$s).</string>
-+    <string name="plotina_update_installed">Обновление установлено. Перезапустите Plotina X.</string>
-+    <string name="plotina_update_error_check">Не удалось связаться с plotina.cc. Попробуйте позже.</string>
-+    <string name="plotina_update_error_download">Загрузка не удалась. Попробуйте позже.</string>
-+    <string name="plotina_update_error_mismatch">Контрольная сумма скачанного файла не совпала, файл удалён.</string>
-+    <string name="plotina_update_error_install">Установка не удалась: %1$s</string>
-+    <string name="plotina_update_permission_title">Разрешите установку приложений</string>
-+    <string name="plotina_update_permission_text">Android требует явно разрешить Plotina X установку приложений. Откройте системные настройки, разрешите установку для Plotina X и вернитесь сюда.</string>
-+    <string name="plotina_update_open_settings">Открыть настройки</string>
-+    <string name="plotina_update_cancel">Отмена</string>
-+    <string name="plotina_update_close">Закрыть</string>
++    <string name="plotina_update_screen_title">"Проверка обновлений"</string>
++    <string name="plotina_update_back">"Назад"</string>
++    <string name="plotina_update_checking">"Проверка обновлений…"</string>
++    <string name="plotina_update_available">"Доступно обновление %1$s"</string>
++    <string name="plotina_update_no_updates">"Обновлений нет"</string>
++    <string name="plotina_update_is_latest">"Установлена последняя версия (%1$s)"</string>
++    <string name="plotina_update_download">"Скачать и установить"</string>
++    <string name="plotina_update_later">"Позже"</string>
++    <string name="plotina_update_downloading">"Загрузка…"</string>
++    <string name="plotina_update_progress_percent">"%1$d%%"</string>
++    <string name="plotina_update_verifying">"Проверяем скачанный файл…"</string>
++    <string name="plotina_update_installing">"Подтвердите установку в системном окне…"</string>
++    <string name="plotina_update_installed">"Обновление установлено. Перезапустите Plotina X."</string>
++    <string name="plotina_update_error_check">"Не удалось проверить обновления: plotina.cc недоступен. Попробуйте позже."</string>
++    <string name="plotina_update_error_download">"Загрузка не удалась. Попробуйте позже."</string>
++    <string name="plotina_update_error_mismatch">"Контрольная сумма скачанного файла не совпала, файл удалён."</string>
++    <string name="plotina_update_error_install">"Установка не удалась: %1$s"</string>
++    <string name="plotina_update_permission_title">"Разрешите установку приложений"</string>
++    <string name="plotina_update_permission_text">"Android требует явно разрешить Plotina X установку приложений. Откройте системные настройки, разрешите установку для Plotina X и вернитесь сюда."</string>
++    <string name="plotina_update_open_settings">"Открыть настройки"</string>
++    <string name="plotina_update_retry">"Повторить"</string>
++    <string name="plotina_update_cancel">"Отмена"</string>
++    <string name="plotina_update_close">"Закрыть"</string>
 +</resources>
 diff --git a/app/src/main/res/values/plotina_updater.xml b/app/src/main/res/values/plotina_updater.xml
 new file mode 100644
-index 00000000..1d30685c
+index 00000000..e68a9ab7
 --- /dev/null
 +++ b/app/src/main/res/values/plotina_updater.xml
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,29 @@
 +<?xml version="1.0" encoding="utf-8"?>
 +<!--
 +  ~ Plotina: strings for the in-app updater (io.element.android.x.updater).
 +  -->
 +<resources>
-+    <string name="plotina_update_title">Update available</string>
-+    <string name="plotina_update_available">Plotina X %1$s (%2$s) is ready.\n\n%3$s</string>
-+    <string name="plotina_update_download">Download and install</string>
-+    <string name="plotina_update_checking">Checking for updates…</string>
-+    <string name="plotina_update_downloading">Downloading… %1$d%%</string>
-+    <string name="plotina_update_verifying">Verifying the download…</string>
-+    <string name="plotina_update_installing">Confirm the installation in the system dialog…</string>
-+    <string name="plotina_update_up_to_date">You have the latest version (%1$s, build %2$s).</string>
-+    <string name="plotina_update_installed">Update installed. Restart Plotina X to finish.</string>
-+    <string name="plotina_update_error_check">Could not reach plotina.cc. Try again later.</string>
-+    <string name="plotina_update_error_download">The download failed. Try again later.</string>
-+    <string name="plotina_update_error_mismatch">The downloaded file did not match its checksum, so it was discarded.</string>
-+    <string name="plotina_update_error_install">Installation failed: %1$s</string>
-+    <string name="plotina_update_permission_title">Allow installing apps</string>
-+    <string name="plotina_update_permission_text">Android asks you to allow Plotina X to install apps it downloads. Open the system settings, enable that for Plotina X, and return here.</string>
-+    <string name="plotina_update_open_settings">Open settings</string>
-+    <string name="plotina_update_cancel">Cancel</string>
-+    <string name="plotina_update_close">Close</string>
++    <string name="plotina_update_screen_title">"Check for updates"</string>
++    <string name="plotina_update_back">"Back"</string>
++    <string name="plotina_update_checking">"Checking for updates…"</string>
++    <string name="plotina_update_available">"Update %1$s available"</string>
++    <string name="plotina_update_no_updates">"No updates"</string>
++    <string name="plotina_update_is_latest">"The latest version is installed (%1$s)"</string>
++    <string name="plotina_update_download">"Download and install"</string>
++    <string name="plotina_update_later">"Later"</string>
++    <string name="plotina_update_downloading">"Downloading…"</string>
++    <string name="plotina_update_progress_percent">"%1$d%%"</string>
++    <string name="plotina_update_verifying">"Verifying the download…"</string>
++    <string name="plotina_update_installing">"Confirm the installation in the system dialog…"</string>
++    <string name="plotina_update_installed">"Update installed. Restart Plotina X to finish."</string>
++    <string name="plotina_update_error_check">"Could not check for updates: plotina.cc was unreachable. Try again later."</string>
++    <string name="plotina_update_error_download">"The download failed. Try again later."</string>
++    <string name="plotina_update_error_mismatch">"The downloaded file did not match its checksum, so it was discarded."</string>
++    <string name="plotina_update_error_install">"Installation failed: %1$s"</string>
++    <string name="plotina_update_permission_title">"Allow installing apps"</string>
++    <string name="plotina_update_permission_text">"Android asks you to allow Plotina X to install apps it downloads. Open the system settings, enable that for Plotina X, and return here."</string>
++    <string name="plotina_update_open_settings">"Open settings"</string>
++    <string name="plotina_update_retry">"Retry"</string>
++    <string name="plotina_update_cancel">"Cancel"</string>
++    <string name="plotina_update_close">"Close"</string>
 +</resources>
-diff --git a/app/src/main/res/values/themes.xml b/app/src/main/res/values/themes.xml
-index 26cb0a56..2dfcabd5 100644
---- a/app/src/main/res/values/themes.xml
-+++ b/app/src/main/res/values/themes.xml
-@@ -20,4 +20,15 @@
-         <item name="android:statusBarColor">@color/splashscreen_bg_light</item>
-         <item name="android:navigationBarColor">@color/splashscreen_bg_light</item>
-     </style>
-+    <!-- Plotina: the updater dialog over the running app; the dialog itself dims. Translucent
-+         with transparent system bars: Theme.ElementX paints the bars and the background with the
-+         splash colour, hardcoded per system night mode - a light strip over a dark app the moment
-+         this window is on top. The dialog's own colours come from ElementThemeApp in Compose. -->
-+    <style name="Theme.ElementX.Updater" parent="Theme.ElementX">
-+        <item name="android:windowIsTranslucent">true</item>
-+        <item name="android:windowBackground">@android:color/transparent</item>
-+        <item name="android:backgroundDimEnabled">false</item>
-+        <item name="android:statusBarColor">@android:color/transparent</item>
-+        <item name="android:navigationBarColor">@android:color/transparent</item>
-+    </style>
- </resources>
+diff --git a/app/src/test/kotlin/io/element/android/x/intent/DefaultIntentProviderTest.kt b/app/src/test/kotlin/io/element/android/x/intent/DefaultIntentProviderTest.kt
+index be059ed2..214369d6 100644
+--- a/app/src/test/kotlin/io/element/android/x/intent/DefaultIntentProviderTest.kt
++++ b/app/src/test/kotlin/io/element/android/x/intent/DefaultIntentProviderTest.kt
+@@ -10,6 +10,7 @@
+ 
+ package io.element.android.x.intent
+ 
++import android.app.Application
+ import android.content.Context
+ import android.content.Intent
+ import com.google.common.truth.Truth.assertThat
+@@ -28,7 +29,13 @@ import io.element.android.tests.testutils.robolectric.RobolectricTest
+ import io.element.android.x.MainActivity
+ import org.junit.Test
+ import org.robolectric.RuntimeEnvironment
++import org.robolectric.annotation.Config
+ 
++// Plotina: the app module's unit tests see the merged manifest (the updater's Compose tests need
++// the ComponentActivity androidx.compose.ui:ui-test-manifest declares). Without this override
++// Robolectric would build the real ElementXApplication here, and its onCreate loads the Rust SDK
++// native library, which JVM tests have none of.
++@Config(application = Application::class)
+ class DefaultIntentProviderTest : RobolectricTest() {
+     @Test
+     fun `test getViewRoomIntent with data`() {
 diff --git a/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdateTest.kt b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdateTest.kt
 new file mode 100644
 index 00000000..ead7e918
@@ -904,25 +1332,212 @@ index 00000000..ead7e918
 +        assertThat(PlotinaUpdate.isUpdateAvailable((base - 1) * 10 + 2, base)).isFalse()
 +    }
 +}
-diff --git a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutNode.kt b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutNode.kt
-index 4ece133b..d273b667 100644
---- a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutNode.kt
-+++ b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutNode.kt
+diff --git a/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdaterScreenTest.kt b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdaterScreenTest.kt
+new file mode 100644
+index 00000000..33eec197
+--- /dev/null
++++ b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdaterScreenTest.kt
+@@ -0,0 +1,181 @@
++/*
++ * Plotina: the updater page renders each stage like Plotina Mobile's route, and the buttons wire
++ * to the right engine callbacks. Stateless screen, so the test feeds states instead of driving
++ * downloads. Assertions use the English string values: Robolectric runs in the default locale and
++ * the screen renders app/src/main/res/values/plotina_updater.xml.
++ *
++ * Copyright (C) 2026 Plotina
++ *
++ * This program is free software: you can redistribute it and/or modify it under the terms of the
++ * GNU Affero General Public License as published by the Free Software Foundation, version 3.
++ */
++
++@file:OptIn(ExperimentalTestApi::class)
++
++package io.element.android.x.updater
++
++import android.app.Application
++import androidx.activity.ComponentActivity
++import androidx.compose.ui.test.AndroidComposeUiTest
++import androidx.compose.ui.test.ExperimentalTestApi
++import androidx.compose.ui.test.assertIsDisplayed
++import androidx.compose.ui.test.assertIsNotDisplayed
++import androidx.compose.ui.test.onNodeWithText
++import androidx.compose.ui.test.performClick
++import androidx.compose.ui.test.v2.runAndroidComposeUiTest
++import com.google.common.truth.Truth.assertThat
++import io.element.android.tests.testutils.EnsureNeverCalled
++import io.element.android.tests.testutils.robolectric.RobolectricTest
++import org.junit.Test
++import org.robolectric.annotation.Config
++
++// application = plain Application: with the merged app manifest in scope Robolectric would
++// otherwise build the real ElementXApplication (full DI graph) for a test that only needs a
++// blank Compose host.
++@Config(application = Application::class)
++class PlotinaUpdaterScreenTest : RobolectricTest() {
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `checking shows the spinner headline and nothing actionable`() = runAndroidComposeUiTest {
++        setScreen(UpdaterUiState.Checking)
++        // The AppBar title is the screen identity on every stage.
++        onNodeWithText("Check for updates").assertIsDisplayed()
++        onNodeWithText("Checking for updates…").assertIsDisplayed()
++        onNodeWithText("Download and install").assertDoesNotExist()
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `available shows the version in a card, the notes, the size and the download button`() = runAndroidComposeUiTest {
++        val info = anUpdateInfo()
++        var downloaded = false
++        setScreen(UpdaterUiState.Available(info), onDownloadClick = { downloaded = true })
++        onNodeWithText("Update 26.10.1 available").assertIsDisplayed()
++        onNodeWithText(info.notes).assertIsDisplayed()
++        onNodeWithText("137.6 MB").assertIsDisplayed()
++        onNodeWithText("Download and install").performClick()
++        assertThat(downloaded).isTrue()
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `available offers Later and calls back with it`() = runAndroidComposeUiTest {
++        var later = false
++        setScreen(UpdaterUiState.Available(anUpdateInfo()), onLaterClick = { later = true })
++        onNodeWithText("Later").performClick()
++        assertThat(later).isTrue()
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `up to date names the installed version and offers no download`() = runAndroidComposeUiTest {
++        setScreen(UpdaterUiState.UpToDate(version = "26.10.1"))
++        onNodeWithText("No updates").assertIsDisplayed()
++        onNodeWithText("The latest version is installed (26.10.1)").assertIsDisplayed()
++        onNodeWithText("Download and install").assertDoesNotExist()
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `downloading shows the percentage and a cancel`() = runAndroidComposeUiTest {
++        var canceled = false
++        setScreen(UpdaterUiState.Downloading(42), onCancelDownloadClick = { canceled = true })
++        onNodeWithText("Downloading…").assertIsDisplayed()
++        onNodeWithText("42%").assertIsDisplayed()
++        onNodeWithText("Cancel").performClick()
++        assertThat(canceled).isTrue()
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `a failed check offers Retry and repeats the check`() = runAndroidComposeUiTest {
++        var retried = false
++        setScreen(
++            UpdaterUiState.Message(
++                text = "Could not check for updates: plotina.cc was unreachable. Try again later.",
++                retry = UpdaterUiState.Retry.Check,
++            ),
++            onRetryClick = { retried = true },
++        )
++        onNodeWithText("Retry").performClick()
++        assertThat(retried).isTrue()
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `a message without a retry shows only Close`() = runAndroidComposeUiTest {
++        setScreen(UpdaterUiState.Message("Update installed. Restart Plotina X to finish."))
++        onNodeWithText("Retry").assertDoesNotExist()
++        onNodeWithText("Close").assertIsDisplayed()
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `the permission stage opens the system settings`() = runAndroidComposeUiTest {
++        var opened = false
++        setScreen(UpdaterUiState.NeedPermission, onOpenSettingsClick = { opened = true })
++        onNodeWithText("Allow installing apps").assertIsDisplayed()
++        onNodeWithText("Open settings").performClick()
++        assertThat(opened).isTrue()
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `verifying shows its headline without any buttons`() = runAndroidComposeUiTest {
++        setScreen(UpdaterUiState.Verifying)
++        onNodeWithText("Verifying the download…").assertIsDisplayed()
++        onNodeWithText("Cancel").assertDoesNotExist()
++        onNodeWithText("Close").assertDoesNotExist()
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `installing confirms and offers Close`() = runAndroidComposeUiTest {
++        var closed = false
++        setScreen(UpdaterUiState.Installing, onCloseClick = { closed = true })
++        onNodeWithText("Confirm the installation in the system dialog…").assertIsDisplayed()
++        onNodeWithText("Close").performClick()
++        assertThat(closed).isTrue()
++    }
++
++    @Test
++    fun `prettySize formats bytes for the card`() {
++        assertThat(prettySize(137_608_493L)).isEqualTo("137.6 MB")
++        assertThat(prettySize(64 * 1024)).isEqualTo("66 kB")
++        assertThat(prettySize(512)).isEqualTo("512 B")
++    }
++}
++
++private fun AndroidComposeUiTest<ComponentActivity>.setScreen(
++    state: UpdaterUiState,
++    onBackClick: () -> Unit = EnsureNeverCalled(),
++    onDownloadClick: () -> Unit = EnsureNeverCalled(),
++    onLaterClick: () -> Unit = EnsureNeverCalled(),
++    onCancelDownloadClick: () -> Unit = EnsureNeverCalled(),
++    onOpenSettingsClick: () -> Unit = EnsureNeverCalled(),
++    onRetryClick: () -> Unit = EnsureNeverCalled(),
++    onCloseClick: () -> Unit = EnsureNeverCalled(),
++) {
++    setContent {
++        PlotinaUpdaterScreen(
++            state = state,
++            onBackClick = onBackClick,
++            onDownloadClick = onDownloadClick,
++            onLaterClick = onLaterClick,
++            onCancelDownloadClick = onCancelDownloadClick,
++            onOpenSettingsClick = onOpenSettingsClick,
++            onRetryClick = onRetryClick,
++            onCloseClick = onCloseClick,
++        )
++    }
++}
++
++private fun anUpdateInfo() = UpdateInfo(
++    packageName = "cc.plotina.x",
++    versionName = "26.10.1",
++    versionCode = 2026100302L,
++    apkUrl = "https://plotina.cc/dl/Plotina-X.apk",
++    sha256 = "0".repeat(64),
++    size = 137_608_493L,
++    notes = "Fixes and improvements.",
++)
+diff --git a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootNode.kt b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootNode.kt
+index 93d6d25c..73360801 100644
+--- a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootNode.kt
++++ b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootNode.kt
 @@ -9,6 +9,7 @@
- package io.element.android.features.preferences.impl.about
+ package io.element.android.features.preferences.impl.root
  
  import android.app.Activity
 +import android.content.Intent
  import androidx.activity.compose.LocalActivity
  import androidx.compose.runtime.Composable
  import androidx.compose.ui.Modifier
-@@ -56,6 +57,17 @@ class AboutNode(
-                 onElementLegalClick(activity, isDark, elementLegal)
-             },
-             onOpenSourceLicensesClick = callback::navigateToOssLicenses,
-+            // Plotina: opens the app module's updater Activity. It cannot be referenced by class
-+            // from here (the feature module does not depend on the app module), so the component
-+            // is named; see io.element.android.x.updater.PlotinaUpdateActivity.
+@@ -77,6 +78,17 @@ class PreferencesRootNode(
+             onSwitchToSession = callback::navigateToSession,
+             onOpenAnalytics = callback::navigateToAnalyticsSettings,
+             onOpenAbout = callback::navigateToAbout,
++            // Plotina: opens the app module's updater page. It cannot be referenced by class from
++            // here (the feature module does not depend on the app module), so the component is
++            // named; see io.element.android.x.updater.PlotinaUpdateActivity.
 +            onCheckUpdatesClick = {
 +                activity.startActivity(
 +                    Intent().setClassName(
@@ -931,53 +1546,53 @@ index 4ece133b..d273b667 100644
 +                    ),
 +                )
 +            },
-             modifier = modifier
+             onOpenDeveloperSettings = callback::navigateToDeveloperSettings,
+             onOpenMediaSettings = callback::navigateToMediaSettings,
+             onOpenLocationSettings = callback::navigateToLocationSettings,
+diff --git a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootView.kt b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootView.kt
+index 79aabeea..356b36d4 100644
+--- a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootView.kt
++++ b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootView.kt
+@@ -85,6 +85,9 @@ fun PreferencesRootView(
+     onOpenAnalytics: () -> Unit,
+     onOpenLockScreenSettings: () -> Unit,
+     onOpenAbout: () -> Unit,
++    // Plotina: opens the app module's updater page. Defaulted so upstream's PreferencesRootViewTest
++    // keeps compiling untouched; the node always passes a real handler.
++    onCheckUpdatesClick: () -> Unit = {},
+     onOpenDeveloperSettings: () -> Unit,
+     onOpenMediaSettings: () -> Unit,
+     onOpenLocationSettings: () -> Unit,
+@@ -157,6 +160,7 @@ fun PreferencesRootView(
+             GeneralSection(
+                 state = state,
+                 onOpenAbout = onOpenAbout,
++                onCheckUpdatesClick = onCheckUpdatesClick,
+                 onOpenAnalytics = onOpenAnalytics,
+                 onOpenDeveloperSettings = onOpenDeveloperSettings,
+                 onOpenLabs = onOpenLabs,
+@@ -354,6 +358,7 @@ private fun AppSettingsSection(
+ private fun ColumnScope.GeneralSection(
+     state: PreferencesRootState,
+     onOpenAbout: () -> Unit,
++    onCheckUpdatesClick: () -> Unit,
+     onOpenAnalytics: () -> Unit,
+     onOpenLabs: () -> Unit,
+     onOpenDeveloperSettings: () -> Unit,
+@@ -376,6 +381,13 @@ private fun ColumnScope.GeneralSection(
+             onClick = onOpenLabs,
          )
      }
-diff --git a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutView.kt b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutView.kt
-index 79a17b3e..02ebf783 100644
---- a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutView.kt
-+++ b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/AboutView.kt
-@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
- import androidx.compose.ui.Modifier
- import androidx.compose.ui.res.stringResource
- import androidx.compose.ui.tooling.preview.PreviewParameter
-+import io.element.android.features.preferences.impl.R
- import io.element.android.libraries.designsystem.components.preferences.PreferencePage
- import io.element.android.libraries.designsystem.preview.ElementPreview
- import io.element.android.libraries.designsystem.preview.PreviewsDayNight
-@@ -24,6 +25,8 @@ fun AboutView(
-     state: AboutState,
-     onElementLegalClick: (ElementLegal) -> Unit,
-     onOpenSourceLicensesClick: () -> Unit,
-+    // Plotina: defaulted so upstream's AboutViewTest keeps compiling untouched.
-+    onCheckUpdatesClick: () -> Unit = {},
-     onBackClick: () -> Unit,
-     modifier: Modifier = Modifier,
- ) {
-@@ -32,6 +35,14 @@ fun AboutView(
-         onBackClick = onBackClick,
-         title = stringResource(id = CommonStrings.common_about)
-     ) {
-+        // Plotina: the updater lives in the app module, which this module cannot depend on, so
-+        // About only asks to open it; the click handler names the component as a string.
-+        ListItem(
-+            content = {
-+                Text(stringResource(id = R.string.plotina_check_updates))
-+            },
-+            onClick = onCheckUpdatesClick,
-+        )
-         state.elementLegals.forEach { elementLegal ->
-             ListItem(
-                 content = {
-@@ -56,6 +67,7 @@ internal fun AboutViewPreview(@PreviewParameter(AboutStatePreviewParam::class) s
-         state = state,
-         onElementLegalClick = {},
-         onOpenSourceLicensesClick = {},
-+        onCheckUpdatesClick = {},
-         onBackClick = {},
-     )
- }
++    // Plotina: self-update entry right above 'About' - there is no Play channel here, so the
++    // updater lives one tap from the settings root instead of inside About.
++    ListItem(
++        content = { Text(stringResource(id = R.string.plotina_check_updates)) },
++        leadingContent = ListItemContent.Icon(IconSource.Vector(CompoundIcons.Download())),
++        onClick = onCheckUpdatesClick,
++    )
+     ListItem(
+         content = { Text(stringResource(id = CommonStrings.common_about)) },
+         leadingContent = ListItemContent.Icon(IconSource.Vector(CompoundIcons.Info())),
 diff --git a/features/preferences/impl/src/main/res/values-ru/translations.xml b/features/preferences/impl/src/main/res/values-ru/translations.xml
 index 96430521..5d87b91f 100644
 --- a/features/preferences/impl/src/main/res/values-ru/translations.xml
