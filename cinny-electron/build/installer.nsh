@@ -16,4 +16,21 @@
   FileOpen $9 "$INSTDIR\install-kind" w
   FileWrite $9 "nsis"
   FileClose $9
+
+  ; URL handlers (electron-builder's `protocols` only covers macOS). Register
+  ; both schemes in HKCU because the installer is per-user by default.
+  WriteRegStr HKCU "Software\Classes\cc.plotina.chat" "" "URL:Plotina Lite Desktop link"
+  WriteRegStr HKCU "Software\Classes\cc.plotina.chat" "URL Protocol" ""
+  WriteRegStr HKCU "Software\Classes\cc.plotina.chat\DefaultIcon" "" "$INSTDIR\plotina-lite-desktop.exe,0"
+  WriteRegStr HKCU "Software\Classes\cc.plotina.chat\shell\open\command" "" '"$INSTDIR\plotina-lite-desktop.exe" "%1"'
+
+  WriteRegStr HKCU "Software\Classes\matrix" "" "URL:Matrix room link"
+  WriteRegStr HKCU "Software\Classes\matrix" "URL Protocol" ""
+  WriteRegStr HKCU "Software\Classes\matrix\DefaultIcon" "" "$INSTDIR\plotina-lite-desktop.exe,0"
+  WriteRegStr HKCU "Software\Classes\matrix\shell\open\command" "" '"$INSTDIR\plotina-lite-desktop.exe" "%1"'
+!macroend
+
+!macro customUnInstall
+  DeleteRegKey HKCU "Software\Classes\cc.plotina.chat"
+  DeleteRegKey HKCU "Software\Classes\matrix"
 !macroend
