@@ -133,6 +133,12 @@ MODAL_STYLE_ID = "plotina-modal-a11y"
 MODAL_CSS = (
     ".mx_AuthPage_modalContent>.mx_Dialog_border{max-height:calc(100vh - 150px)}"
     ".mx_CompleteSecurityBody{overflow-y:auto}"
+    # Upstream's home-page quick actions hard-code white text/icons on the
+    # accent background. Our dark accent is a light mint, so white-on-mint is
+    # ~1.6:1 and unreadable; the on-solid token resolves to the canvas colour
+    # (dark on mint in the dark theme, white on the darker light-theme accent).
+    ".mx_HomePage_default_buttons .mx_AccessibleButton{color:var(--cpd-color-text-on-solid-primary)}"
+    ".mx_HomePage_default_buttons .mx_AccessibleButton svg{color:var(--cpd-color-text-on-solid-primary)}"
 )
 MODAL_BLOCK = f'<style id="{MODAL_STYLE_ID}">{MODAL_CSS}</style>'
 MODAL_BLOCK_RE = re.compile(r'<style id="' + re.escape(MODAL_STYLE_ID)
