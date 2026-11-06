@@ -1,8 +1,8 @@
 diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
-index 5371db1..88e3751 100644
+index 5371db1..9c52b64 100644
 --- a/src-tauri/src/lib.rs
 +++ b/src-tauri/src/lib.rs
-@@ -5,9 +5,61 @@
+@@ -5,9 +5,153 @@
  
  // mod menu;
  
@@ -10,8 +10,10 @@ index 5371db1..88e3751 100644
  use tauri::{webview::{NewWindowResponse, WebviewWindowBuilder}, WebviewUrl, TitleBarStyle};
  use tauri_plugin_opener::OpenerExt;
  
-+/// One window per SSO round trip, so a second click never reuses a webview that
-+/// already finished a redirect.
++/// Label prefix of the in-app sign-in windows. Exactly one of them may be
++/// open at a time (see `find_sso_window`); the counter keeps the label of a
++/// freshly created window unique even right after an old one was closed.
++const SSO_LABEL_PREFIX: &str = "plotina-sso";
 +static SSO_WINDOWS: AtomicUsize = AtomicUsize::new(0);
 +
 +/// Matrix sign-in URLs that have to stay inside the app.
@@ -34,7 +36,47 @@ index 5371db1..88e3751 100644
 +  path.contains("/_matrix/client/") && (path.contains("/login/sso") || path.contains("/auth/"))
 +}
 +
-+/// Opens the sign-in round trip in a child webview of this app.
++/// The window number encoded in a sign-in label: `plotina-sso-7` -> `Some(7)`.
++/// Anything that is not a sign-in window label returns `None`.
++fn sso_window_index(label: &str) -> Option<usize> {
++  label
++    .strip_prefix(SSO_LABEL_PREFIX)?
++    .strip_prefix('-')?
++    .parse::<usize>()
++    .ok()
++}
++
++/// Whether a reused sign-in window must be taken to `requested`.
++///
++/// A single `window.open` in the renderer can produce two new-window
++/// requests, so the second request normally carries the very URL the first
++/// one already started to load: navigating again would only reload the
++/// ongoing round trip. `about:blank` likewise never replaces a page that is
++/// already loading. Only a genuinely different sign-in URL reuses the window
++/// for a new attempt.
++fn should_reuse_navigate(current: Option<&tauri::Url>, requested: &tauri::Url) -> bool {
++  requested.scheme() != "about" && current != Some(requested)
++}
++
++/// The one live sign-in window, if any.
++///
++/// WM-destroyed windows drop out of `webview_windows()` by themselves, so a
++/// window found here is still on screen and is the window to reuse: WebKit
++/// fires the new-window handler twice for a single popup and creating per
++/// request would open two identical sign-in windows.
++#[cfg(target_os = "linux")]
++fn find_sso_window(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
++  use tauri::Manager;
++  app
++    .webview_windows()
++    .into_iter()
++    .filter_map(|(label, window)| sso_window_index(&label).map(|index| (index, window)))
++    .min_by_key(|(index, _)| *index)
++    .map(|(_, window)| window)
++}
++
++/// Creates the sign-in round-trip window. Callers must check
++/// `find_sso_window` first: at most one sign-in window may exist.
 +///
 +/// `window_features` carries the caller webview and, on GTK, makes the new
 +/// webview a *related view* of it: WebKit then keeps the real opener link, so
@@ -45,7 +87,7 @@ index 5371db1..88e3751 100644
 +#[cfg(target_os = "linux")]
 +fn open_sso_window(app: &tauri::AppHandle, url: &tauri::Url, features: tauri::webview::NewWindowFeatures) -> Option<tauri::WebviewWindow> {
 +  let n = SSO_WINDOWS.fetch_add(1, Ordering::Relaxed) + 1;
-+  let label = format!("plotina-sso-{n}");
++  let label = format!("{SSO_LABEL_PREFIX}-{n}");
 +  let builder = WebviewWindowBuilder::new(app, label.clone(), WebviewUrl::External(url.clone()))
 +    .title("Plotina Lite - sign in")
 +    .inner_size(520.0, 720.0)
@@ -61,19 +103,82 @@ index 5371db1..88e3751 100644
 +  }
 +}
 +
++#[cfg(test)]
++mod sso_tests {
++  use super::*;
++
++  fn url(s: &str) -> tauri::Url {
++    s.parse().unwrap()
++  }
++
++  #[test]
++  fn label_index_parses_only_sign_in_labels() {
++    assert_eq!(sso_window_index("plotina-sso-1"), Some(1));
++    assert_eq!(sso_window_index("plotina-sso-42"), Some(42));
++    assert_eq!(sso_window_index("plotina-sso"), None);
++    assert_eq!(sso_window_index("plotina-sso-x"), None);
++    assert_eq!(sso_window_index("plotina-sso-1x"), None);
++    assert_eq!(sso_window_index("main"), None);
++  }
++
++  #[test]
++  fn duplicate_request_does_not_reload_the_same_url() {
++    let auth = url("https://auth.plotina.cc/_matrix/client/v3/login/sso/redirect?redirectUrl=http%3A%2F%2Flocalhost%3A44548%2F");
++    assert!(!should_reuse_navigate(Some(&auth), &auth));
++  }
++
++  #[test]
++  fn about_blank_never_replaces_a_loading_page() {
++    let current = url("http://localhost:44548/");
++    assert!(!should_reuse_navigate(Some(&current), &url("about:blank")));
++    assert!(!should_reuse_navigate(None, &url("about:blank")));
++  }
++
++  #[test]
++  fn a_new_sign_in_attempt_navigates_the_existing_window() {
++    let old = url("https://idp.example.com/sso/one");
++    let fresh = url("https://auth.plotina.cc/_matrix/client/v3/login/sso/redirect");
++    assert!(should_reuse_navigate(Some(&old), &fresh));
++    // unknown current URL: still move to a real sign-in URL
++    assert!(should_reuse_navigate(None, &fresh));
++  }
++
++  #[test]
++  fn auth_url_matching_stays_scoped_to_matrix_paths() {
++    assert!(is_matrix_auth_url(&url("https://plotina.cc/_matrix/client/v3/login/sso/redirect")));
++    assert!(is_matrix_auth_url(&url("https://plotina.cc/_matrix/client/v3/auth/m.login.sso/fallback/web")));
++    assert!(!is_matrix_auth_url(&url("https://plotina.cc/_matrix/client/v3/rooms")));
++    assert!(!is_matrix_auth_url(&url("about:blank")));
++    assert!(!is_matrix_auth_url(&url("https://example.com/login/sso/")));
++  }
++}
++
  #[cfg(feature = "updater")]
  use tauri_plugin_updater::UpdaterExt;
  #[cfg(feature = "updater")]
-@@ -101,7 +153,17 @@ pub fn run() {
+@@ -101,7 +245,30 @@ pub fn run() {
                  .inner_size(1200.0, 800.0)
                  .min_inner_size(800.0, 600.0)
                  .disable_drag_drop_handler()
 -                .on_new_window(move |url, _features| {
 +                .on_new_window(move |url, features| {
-+                    // Sign-in round trips stay in the app (see is_matrix_auth_url);
-+                    // everything else keeps opening in the system browser.
++                    // Sign-in round trips stay in the app (see is_matrix_auth_url)
++                    // and there is only ever one sign-in window: WebKit can fire
++                    // this handler twice for a single window.open, so before
++                    // creating anything, hand the newest URL to the window that
++                    // already exists and refuse the extra window. Everything
++                    // else keeps opening in the system browser.
 +                    #[cfg(target_os = "linux")]
 +                    if is_matrix_auth_url(&url) {
++                        if let Some(window) = find_sso_window(&app_handle) {
++                            if should_reuse_navigate(window.url().ok().as_ref(), &url) {
++                                if let Err(e) = window.navigate(url.clone()) {
++                                    eprintln!("could not move the sign-in window to {url}: {e}");
++                                }
++                            }
++                            let _ = window.set_focus();
++                            return NewWindowResponse::Deny;
++                        }
 +                        if let Some(window) = open_sso_window(&app_handle, &url, features) {
 +                            return NewWindowResponse::Create { window };
 +                        }
