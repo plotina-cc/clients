@@ -1,0 +1,81 @@
+diff --git a/src/app/pages/auth/login/Login.tsx b/src/app/pages/auth/login/Login.tsx
+index 2f04a73..a0bac31 100644
+--- a/src/app/pages/auth/login/Login.tsx
++++ b/src/app/pages/auth/login/Login.tsx
+@@ -1,4 +1,4 @@
+-import React, { useMemo } from 'react';
++import React, { useEffect, useMemo, useState } from 'react';
+ import { Box, Text, color } from 'folds';
+ import { Link, useSearchParams } from 'react-router-dom';
+ import { SSOAction } from 'matrix-js-sdk';
+@@ -14,6 +14,19 @@ import { usePathWithOrigin } from '../../../hooks/usePathWithOrigin';
+ import { LoginPathSearchParams } from '../../paths';
+ import { useClientConfig } from '../../../hooks/useClientConfig';
+ 
++// Plotina desktop: the sign-in round trip runs in a child webview that the Tauri
++// shell opens for Matrix login URLs (cinny/desktop-patches/0002). WebKit keeps
++// the real opener link between the two, so the identity provider's callback -
++// `<app origin>/login?loginToken=...` - arrives in that popup window, not here.
++// A login token can be spent only once, so the popup passes the token to the
++// window that opened it and this window does the login itself.
++//
++// The web app is untouched by this: its login page is never opened as a popup,
++// `window.opener` stays null, and neither branch below runs.
++const SSO_LOGIN_TOKEN_MESSAGE = 'plotina:sso:login-token';
++
++const isSSOSignInWindow = () => !!window.opener && window.opener !== window;
++
+ const getLoginTokenSearchParam = () => {
+   // when using hasRouter query params in existing route
+   // gets ignored by react-router, so we need to read it ourself
+@@ -54,13 +67,48 @@ export function Login() {
+ 
+   const parsedFlows = useParsedLoginFlows(loginFlows.flows);
+ 
++  const signInWindow = isSSOSignInWindow();
++  const callbackLoginToken = loginSearchParams.loginToken ?? loginTokenForHashRouter;
++  const [handedOverLoginToken, setHandedOverLoginToken] = useState<string>();
++
++  useEffect(() => {
++    if (signInWindow) {
++      // This is the sign-in popup: it hands the token over and stops there, so
++      // the login request is made by the window that opened it.
++      if (callbackLoginToken && window.opener) {
++        window.opener.postMessage(
++          { type: SSO_LOGIN_TOKEN_MESSAGE, loginToken: callbackLoginToken },
++          window.location.origin,
++        );
++      }
++      return;
++    }
++    const handleMessage = (evt: MessageEvent) => {
++      if (evt.origin !== window.location.origin) return;
++      const data = evt.data as { type?: unknown; loginToken?: unknown } | undefined;
++      if (data?.type !== SSO_LOGIN_TOKEN_MESSAGE) return;
++      if (typeof data.loginToken === 'string' && data.loginToken.length > 0) {
++        setHandedOverLoginToken(data.loginToken);
++      }
++    };
++    window.addEventListener('message', handleMessage);
++    return () => window.removeEventListener('message', handleMessage);
++  }, [signInWindow, callbackLoginToken]);
++
++  // Inside the popup the token is never spent; here it either came from the
++  // callback directly (web) or from the popup (desktop).
++  const loginToken = signInWindow ? undefined : callbackLoginToken ?? handedOverLoginToken;
++
+   return (
+     <Box direction="Column" gap="500">
+       <Text size="H2" priority="400">
+         Login
+       </Text>
+-      {parsedFlows.token && loginSearchParams.loginToken && (
+-        <TokenLogin token={loginSearchParams.loginToken} />
++      {parsedFlows.token && loginToken && <TokenLogin token={loginToken} />}
++      {signInWindow && callbackLoginToken && (
++        <Text size="T300">
++          Sign-in complete. Return to Plotina Lite Desktop - this window can be closed.
++        </Text>
+       )}
+       {parsedFlows.password && (
+         <>
