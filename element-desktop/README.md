@@ -65,7 +65,22 @@ build.plotina.json        electron-builder variant: appId cc.plotina.desktop,
                           (the publish block here is ignored by upstream's
                           electron-builder.ts; CI forces it with --config.*)
 desktop/updater.ts        replaces apps/desktop/src/updater.ts: our Windows
-                          auto-updater (GitHub releases + latest.yml + sha512)
+                          auto-updater (GitHub releases + latest.yml + sha512);
+                          also exports getUpdateFeedUrl(), which patched ipc.ts
+                          answers with so the webapp shows its Settings ->
+                          "Check for updates" button on Linux/AppImage (upstream's
+                          Squirrel-only autoUpdater.getFeedURL() throws there)
+desktop/icon.ts           replaces apps/desktop/src/icon.ts: getMainWindowIcon()
+                          caps the Linux window icon at 128px, because Chromium
+                          cannot serialize a 256px icon into one _NET_WM_ICON
+                          XChangeProperty request (262,152 B > 262,140 B limit)
+                          and leaves the property empty
+desktop/patch-shell.py    wires both files into upstream electron-main.ts/ipc.ts;
+                          CI greps the compiled lib/*.js for the patched symbols
+build/icons/              16..512 hicolor PNGs (RGBA, brand green); the Linux
+                          build passes --config.linux.icon=icons and
+                          --config.linux.desktop.entry.Name="Plotina Desktop",
+                          so deb + AppImage ship every icon size
 apply-noise.py            webapp overlay + config.json
 branding.py               webapp shell branding: title, icons, meta, error view,
                           plus the shared web fixes (../element-web/webapp_fixes.py)
