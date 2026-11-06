@@ -274,10 +274,14 @@ index b165c17..417c011 100644
      "sharedLocation": "Общие геометки",
      "sound": "Звук",
 diff --git a/lib/pages/settings/settings_view.dart b/lib/pages/settings/settings_view.dart
-index d1d8d9c..d2a81a5 100644
+index d1d8d9c..d9eb497 100644
 --- a/lib/pages/settings/settings_view.dart
 +++ b/lib/pages/settings/settings_view.dart
-@@ -8,6 +8,7 @@ import 'package:fluffychat/config/setting_keys.dart';
+@@ -4,17 +4,15 @@
+ // SPDX-License-Identifier: AGPL-3.0-or-later
+ 
+ import 'package:async/async.dart';
+-import 'package:fluffychat/config/setting_keys.dart';
  import 'package:fluffychat/l10n/l10n.dart';
  import 'package:fluffychat/utils/fluffy_share.dart';
  import 'package:fluffychat/utils/platform_infos.dart';
@@ -285,10 +289,22 @@ index d1d8d9c..d2a81a5 100644
  import 'package:fluffychat/widgets/avatar.dart';
  import 'package:fluffychat/widgets/matrix.dart';
  import 'package:go_router/go_router.dart';
-@@ -200,6 +201,15 @@ class SettingsView extends StatelessWidget {
-               title: Text(L10n.of(context).privacy),
-               onTap: () => launchUrlString(AppSettings.privacyPolicy.value),
+ import 'package:material_ui/material_ui.dart';
+ import 'package:matrix/matrix.dart' hide Result;
+-import 'package:url_launcher/url_launcher.dart';
+-import 'package:url_launcher/url_launcher_string.dart';
+ 
+ import '../../widgets/mxc_image_viewer.dart';
+ import 'settings.dart';
+@@ -195,11 +193,15 @@ class SettingsView extends StatelessWidget {
+                   ? theme.colorScheme.surfaceContainerHigh
+                   : null,
              ),
+-            ListTile(
+-              leading: const Icon(Icons.privacy_tip_outlined),
+-              title: Text(L10n.of(context).privacy),
+-              onTap: () => launchUrlString(AppSettings.privacyPolicy.value),
+-            ),
 +            // plotina.cc: the APK is published on plotina.cc/dl, not in an
 +            // app store, so the user can check for a newer version here.
 +            if (PlotinaUpdater.isSupported)
@@ -303,7 +319,7 @@ index d1d8d9c..d2a81a5 100644
                title: Text(L10n.of(context).about),
 diff --git a/lib/pages/updater/plotina_updater_page.dart b/lib/pages/updater/plotina_updater_page.dart
 new file mode 100644
-index 0000000..bbeb041
+index 0000000..941a62a
 --- /dev/null
 +++ b/lib/pages/updater/plotina_updater_page.dart
 @@ -0,0 +1,563 @@
@@ -334,7 +350,7 @@ index 0000000..bbeb041
 +import 'package:fluffychat/l10n/l10n.dart';
 +import 'package:fluffychat/utils/updater/plotina_updater.dart';
 +import 'package:fluffychat/utils/updater/update_manifest.dart';
-+import 'package:flutter/material.dart';
++import 'package:material_ui/material_ui.dart';
 +import 'package:matrix/matrix.dart';
 +
 +class PlotinaUpdaterPage extends StatefulWidget {
@@ -941,7 +957,7 @@ index dee8b07..58bd0d9 100644
      try {
 diff --git a/lib/utils/updater/plotina_updater.dart b/lib/utils/updater/plotina_updater.dart
 new file mode 100644
-index 0000000..8af3150
+index 0000000..eff6643
 --- /dev/null
 +++ b/lib/utils/updater/plotina_updater.dart
 @@ -0,0 +1,591 @@
@@ -1002,7 +1018,7 @@ index 0000000..8af3150
 +import 'package:fluffychat/pages/updater/plotina_updater_page.dart';
 +import 'package:fluffychat/utils/platform_infos.dart';
 +import 'package:fluffychat/utils/updater/update_manifest.dart';
-+import 'package:flutter/material.dart';
++import 'package:material_ui/material_ui.dart';
 +import 'package:flutter/services.dart';
 +import 'package:http/http.dart' as http;
 +import 'package:matrix/matrix.dart';
@@ -1637,7 +1653,7 @@ index 0000000..5f150ad
 +      (kDebugMode || apkUrl.startsWith('https://'));
 +}
 diff --git a/pubspec.lock b/pubspec.lock
-index 79b57c7..d767ded 100644
+index 596a36b..dc261a7 100644
 --- a/pubspec.lock
 +++ b/pubspec.lock
 @@ -282,7 +282,7 @@ packages:
@@ -1911,7 +1927,7 @@ index 0000000..45056df
 +}
 diff --git a/test/utils/updater/plotina_updater_page_test.dart b/test/utils/updater/plotina_updater_page_test.dart
 new file mode 100644
-index 0000000..c3f531b
+index 0000000..2241428
 --- /dev/null
 +++ b/test/utils/updater/plotina_updater_page_test.dart
 @@ -0,0 +1,321 @@
@@ -1932,7 +1948,7 @@ index 0000000..c3f531b
 +import 'package:fluffychat/l10n/l10n.dart';
 +import 'package:fluffychat/pages/updater/plotina_updater_page.dart';
 +import 'package:fluffychat/utils/updater/plotina_updater.dart';
-+import 'package:flutter/material.dart';
++import 'package:material_ui/material_ui.dart';
 +import 'package:flutter_test/flutter_test.dart';
 +
 +import 'updater_fakes.dart';
