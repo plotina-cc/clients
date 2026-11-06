@@ -1,0 +1,85 @@
+diff --git a/src-tauri/src/lib.rs b/src-tauri/src/lib.rs
+index 5371db1..88e3751 100644
+--- a/src-tauri/src/lib.rs
++++ b/src-tauri/src/lib.rs
+@@ -5,9 +5,61 @@
+ 
+ // mod menu;
+ 
++use std::sync::atomic::{AtomicUsize, Ordering};
+ use tauri::{webview::{NewWindowResponse, WebviewWindowBuilder}, WebviewUrl, TitleBarStyle};
+ use tauri_plugin_opener::OpenerExt;
+ 
++/// One window per SSO round trip, so a second click never reuses a webview that
++/// already finished a redirect.
++static SSO_WINDOWS: AtomicUsize = AtomicUsize::new(0);
++
++/// Matrix sign-in URLs that have to stay inside the app.
++///
++/// Both paths hand a webview a URL and expect the answer to come back to the
++/// window that opened it:
++///
++/// - `/login/sso/redirect` -> identity provider -> `?loginToken=` back to us
++/// - `/auth/<stage>/fallback/web` -> identity provider -> `postMessage('authDone')`
++///   on `window.opener`
++///
++/// Sending either one to the system browser strands the answer there: the app
++/// never sees the loginToken and has no `window.opener` to receive `authDone`,
++/// so the dialog keeps sitting on "Continue with SSO".
++fn is_matrix_auth_url(url: &tauri::Url) -> bool {
++  if !matches!(url.scheme(), "http" | "https") {
++    return false;
++  }
++  let path = url.path();
++  path.contains("/_matrix/client/") && (path.contains("/login/sso") || path.contains("/auth/"))
++}
++
++/// Opens the sign-in round trip in a child webview of this app.
++///
++/// `window_features` carries the caller webview and, on GTK, makes the new
++/// webview a *related view* of it: WebKit then keeps the real opener link, so
++/// `window.open` returns a live window object, `window.opener.postMessage`
++/// reaches the app, and the `loginToken` callback lands on our own origin.
++/// The child is deliberately left out of `capabilities/*.json` (only `main` is
++/// listed), so a remote sign-in page gets no IPC access.
++#[cfg(target_os = "linux")]
++fn open_sso_window(app: &tauri::AppHandle, url: &tauri::Url, features: tauri::webview::NewWindowFeatures) -> Option<tauri::WebviewWindow> {
++  let n = SSO_WINDOWS.fetch_add(1, Ordering::Relaxed) + 1;
++  let label = format!("plotina-sso-{n}");
++  let builder = WebviewWindowBuilder::new(app, label.clone(), WebviewUrl::External(url.clone()))
++    .title("Plotina Lite - sign in")
++    .inner_size(520.0, 720.0)
++    .min_inner_size(320.0, 480.0)
++    .resizable(true)
++    .window_features(features);
++  match builder.build() {
++    Ok(window) => Some(window),
++    Err(e) => {
++      eprintln!("could not open the sign-in window {label}: {e}; using the system browser");
++      None
++    }
++  }
++}
++
+ #[cfg(feature = "updater")]
+ use tauri_plugin_updater::UpdaterExt;
+ #[cfg(feature = "updater")]
+@@ -101,7 +153,17 @@ pub fn run() {
+                 .inner_size(1200.0, 800.0)
+                 .min_inner_size(800.0, 600.0)
+                 .disable_drag_drop_handler()
+-                .on_new_window(move |url, _features| {
++                .on_new_window(move |url, features| {
++                    // Sign-in round trips stay in the app (see is_matrix_auth_url);
++                    // everything else keeps opening in the system browser.
++                    #[cfg(target_os = "linux")]
++                    if is_matrix_auth_url(&url) {
++                        if let Some(window) = open_sso_window(&app_handle, &url, features) {
++                            return NewWindowResponse::Create { window };
++                        }
++                    }
++                    #[cfg(not(target_os = "linux"))]
++                    let _ = &features;
+                     let _ = app_handle.opener().open_url(url.as_str(), None::<&str>);
+                     NewWindowResponse::Deny
+                 });

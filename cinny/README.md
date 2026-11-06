@@ -154,6 +154,39 @@ Windows is cross-built (`cargo-xwin`, `--no-bundle`) and wrapped by
 `windows/installer.nsi` through `makensis`; the comments inside those files list
 the details. CI does the same natively on windows-latest.
 
+### Sign-in (SSO) stays inside the app
+
+Both Matrix sign-in paths open a *new window* and expect the answer to come back
+to the window that opened it:
+
+- the login page's **Continue with SSO** hands `/login/sso/redirect?...redirectUrl=<app origin>/login/...`
+  to the browser and waits to be called back with `?loginToken=`;
+- the UIA stage (`SSOStage.tsx`) calls `window.open(getFallbackAuthUrl(...))` and waits
+  for `postMessage('authDone')` from the homeserver's completion page — Synapse's
+  `auth_success.html` really does `window.opener.postMessage("authDone", "*")`.
+
+With the upstream shell (`on_new_window` → `open_url` + `NewWindowResponse::Deny`)
+both paths break the same way: `window.open` returns `null`, the dialog never
+leaves "Continue with SSO", and the identity provider answers a *system browser*
+that has no `window.opener` and no session in the app.
+
+`desktop-patches/0002` keeps Matrix sign-in URLs in the app: `on_new_window` opens
+them in a child webview built with `.window_features(features)`, which on GTK makes
+the child a *related view* of the caller. WebKit then preserves the real opener
+link, so `window.open` returns a live window object, `postMessage` from the
+sign-in page reaches the app, and the `loginToken` callback lands on the app's own
+origin (`http://localhost:<port>`, served by tauri-plugin-localhost). Every other
+URL still goes to the system browser through `tauri-plugin-opener`. The child
+window is deliberately absent from `capabilities/*.json` — only `main` is listed —
+so a remote sign-in page gets no IPC access (the CVE-2024-35222 class).
+
+`patches/0007` closes the loop for the login page. The callback arrives in the
+child window, and a login token can be spent only once, so that window posts
+`{type: 'plotina:sso:login-token', loginToken}` to its opener — restricted to its
+own origin — and the main window runs `m.login.token` itself. In the browser build
+the login page is never opened as a popup, `window.opener` is null there, neither
+branch runs, and the web flow is unchanged.
+
 **Why not point the app at our website.** Tauri can open an external URL, but
 then the remote page needs IPC access — that is the CVE-2024-35222 class of
 vulnerability. The web part is compiled into the app instead, and updates only
