@@ -491,7 +491,9 @@ provided.
 ### 6.7 CI workflow
 
 New file `.github/workflows/build-cinny-electron.yml`, name
-`Build Plotina Lite Desktop (Electron)`.
+`Build Plotina Lite Desktop (Electron)`. Trigger:
+`on.push.tags: ["v*-plotina-lite-desktop.*"]` plus `workflow_dispatch`; no
+branch builds (a branch build must not publish or overwrite release assets).
 
 | Job | Runner | Output |
 |---|---|---|
