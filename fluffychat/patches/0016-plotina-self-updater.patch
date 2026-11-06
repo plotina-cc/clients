@@ -274,10 +274,10 @@ index b165c17..417c011 100644
      "sharedLocation": "Общие геометки",
      "sound": "Звук",
 diff --git a/lib/pages/settings/settings_view.dart b/lib/pages/settings/settings_view.dart
-index d1d8d9c..d9eb497 100644
+index d1d8d9c..e452cf7 100644
 --- a/lib/pages/settings/settings_view.dart
 +++ b/lib/pages/settings/settings_view.dart
-@@ -4,17 +4,15 @@
+@@ -4,17 +4,16 @@
  // SPDX-License-Identifier: AGPL-3.0-or-later
  
  import 'package:async/async.dart';
@@ -291,12 +291,12 @@ index d1d8d9c..d9eb497 100644
  import 'package:go_router/go_router.dart';
  import 'package:material_ui/material_ui.dart';
  import 'package:matrix/matrix.dart' hide Result;
--import 'package:url_launcher/url_launcher.dart';
+ import 'package:url_launcher/url_launcher.dart';
 -import 'package:url_launcher/url_launcher_string.dart';
  
  import '../../widgets/mxc_image_viewer.dart';
  import 'settings.dart';
-@@ -195,11 +193,15 @@ class SettingsView extends StatelessWidget {
+@@ -195,11 +194,15 @@ class SettingsView extends StatelessWidget {
                    ? theme.colorScheme.surfaceContainerHigh
                    : null,
              ),
@@ -1924,6 +1924,116 @@ index 0000000..45056df
 +      );
 +    });
 +  });
++}
+diff --git a/test/utils/updater/plotina_updater_golden_test.dart b/test/utils/updater/plotina_updater_golden_test.dart
+new file mode 100644
+index 0000000..e3bec44
+--- /dev/null
++++ b/test/utils/updater/plotina_updater_golden_test.dart
+@@ -0,0 +1,104 @@
++// SPDX-FileCopyrightText: 2026 Plotina
++// SPDX-License-Identifier: AGPL-3.0-or-later
++//
++// QA-only golden capture: renders the updater page exactly as the app would,
++// in both themes, so the colours can be inspected as pixels instead of
++// asserted from code. Real fonts are loaded because the test harness otherwise
++// draws Ahem boxes and the screenshot says nothing about the actual UI.
++
++import 'dart:io';
++import 'dart:typed_data';
++
++import 'package:fluffychat/l10n/l10n.dart';
++import 'package:fluffychat/pages/updater/plotina_updater_page.dart';
++import 'package:flutter/services.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:material_ui/material_ui.dart';
++
++import 'updater_fakes.dart';
++
++ThemeData appTheme(Brightness brightness) => ThemeData(
++  useMaterial3: true,
++  fontFamily: 'Roboto',
++  brightness: brightness,
++  colorScheme: ColorScheme.fromSeed(
++    seedColor: const Color(0xFF00B294),
++    brightness: brightness,
++    dynamicSchemeVariant: DynamicSchemeVariant.rainbow,
++  ),
++);
++
++Widget harness(ThemeData theme, Widget home) => MaterialApp(
++  theme: theme,
++  localizationsDelegates: L10n.localizationsDelegates,
++  supportedLocales: L10n.supportedLocales,
++  locale: const Locale('ru'),
++  home: home,
++);
++
++Future<void> loadFont(String family, String path) async {
++  final bytes = File(path).readAsBytesSync();
++  final loader = FontLoader(family)
++    ..addFont(Future.value(ByteData.view(Uint8List.fromList(bytes).buffer)));
++  await loader.load();
++}
++
++Future<void> settleTo(WidgetTester tester, Finder finder) async {
++  for (var i = 0; i < 200; i++) {
++    if (finder.evaluate().isNotEmpty) return;
++    await tester.runAsync(
++      () => Future<void>.delayed(const Duration(milliseconds: 5)),
++    );
++    await tester.pump(const Duration(milliseconds: 16));
++  }
++  fail('updater UI never reached the expected state');
++}
++
++void main() {
++  late Directory tmp;
++  late File target;
++
++  setUpAll(() async {
++    await loadFont('Roboto', '/usr/share/fonts/TTF/DejaVuSans.ttf');
++    await loadFont(
++      'MaterialIcons',
++      '/home/hermes/fluffy-build/flutter/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
++    );
++  });
++
++  setUp(() {
++    tmp = Directory.systemTemp.createTempSync('plotina_updater_golden');
++    target = File('${tmp.path}/updates/Plotina-Mobile.apk');
++    target.parent.createSync();
++  });
++
++  tearDown(() => tmp.deleteSync(recursive: true));
++
++  for (final brightness in [Brightness.dark, Brightness.light]) {
++    testWidgets('updater page golden ${brightness.name}', (tester) async {
++      tester.view.physicalSize = const Size(1080, 1920);
++      tester.view.devicePixelRatio = 3.0;
++      addTearDown(tester.view.reset);
++
++      final manifest = makeManifest(versionCode: 2112326);
++      final platform = FakeUpdaterPlatform(versionCode: 2112325);
++      useUpdaterFakes(
++        platform: platform,
++        manifestBody: manifestJsonOf(manifest),
++      );
++
++      await tester.pumpWidget(
++        harness(
++          appTheme(brightness),
++          PlotinaUpdaterPage(fileProvider: () async => target),
++        ),
++      );
++      await settleTo(tester, find.text('Скачать и установить'));
++
++      await expectLater(
++        find.byType(PlotinaUpdaterPage),
++        matchesGoldenFile('goldens/updater_${brightness.name}.png'),
++      );
++    });
++  }
 +}
 diff --git a/test/utils/updater/plotina_updater_page_test.dart b/test/utils/updater/plotina_updater_page_test.dart
 new file mode 100644
