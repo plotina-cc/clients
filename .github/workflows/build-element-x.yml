@@ -301,9 +301,11 @@ jobs:
         # app/build.gradle.kts: the release tag `vYY.MM.p-plotina-x.N` maps to the base versionCode
         # (2000 + YY) * 100_000 + MM * 1_000 + N. Gradle receives N as -PplotinaBuildNumber; the
         # packaged APK additionally carries upstream's ABI digit (base * 10 + abiCode, arm64-v8a 2,
-        # armeabi-v7a 1), and update-x.json holds the base - the in-app updater compares base codes,
-        # because each phone installs a different split. Every base here is greater than the base
-        # of the pre-updater releases (upstream's 20261001), so the installer takes them upgrades.
+        # armeabi-v7a 1). update-x.json holds the arm64 APK's full number, read back from the built
+        # file below; the in-app updater (patch 0014, PlotinaUpdate.baseCodeOf) drops the digit from
+        # both sides before comparing, because each phone installs a different split. Every base
+        # here is greater than the base of the pre-updater releases (upstream's 20261001), so the
+        # installer takes them as upgrades.
         # A run without a tag (workflow_dispatch) gets build number 0; its APK is a `.debug`
         # application id installed beside the releases, never over them, so the collision that
         # would otherwise cause does not exist.
