@@ -1,10 +1,12 @@
-// Plotina Lite Desktop - Electron main process (Phase 1 prototype).
+// Plotina Lite Desktop - Electron main process (Phase 2: packaged shell:
+// web dist bundled in the asar, installer identity, updater).
 'use strict';
 
-const { app, BrowserWindow, session, shell, screen, Tray, Menu, desktopCapturer } = require('electron');
+const { app, BrowserWindow, session, shell, screen, Tray, Menu, desktopCapturer, nativeImage } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { createAppServer } = require('./app-server');
+const updater = require('./updater');
 
 const APP_TITLE = 'Plotina Lite Desktop';
 if (process.env.LITE_USER_DATA) {
@@ -17,8 +19,14 @@ const SSO_LOGIN_TOKEN_MESSAGE = 'plotina:sso:login-token'; // matches cinny patc
 // tauri-plugin-localhost origin http://localhost:44548. If the port is taken
 // (e.g. a second instance running for QA) we fall back to an ephemeral one -
 // everything downstream reads the live `appOrigin` instead of this constant.
+// The fixed port is a preference, not a hard requirement, because every
+// consumer reads `appOrigin` from the server's real address.
 const PORT = Number(process.env.LITE_PORT || 44548);
-const DIST = process.env.LITE_DIST || '/home/hermes/build/cinny-desktop/cinny/dist';
+// Packaged builds serve the Cinny web dist bundled inside the app's asar
+// (web/, staged by scripts/stage-web.sh before electron-builder runs). The
+// env override keeps dev/QA able to point at a live dist directory.
+const DIST = process.env.LITE_DIST ||
+  (app.isPackaged ? path.join(__dirname, '..', 'web') : '/home/hermes/build/cinny-desktop/cinny/dist');
 let appOrigin = null; // set after the server listens
 // Origins allowed to reach camera/microphone: our bundled app origin and the
 // embedded Element Call iframe. Exact-origin matching, same policy as the
@@ -213,6 +221,30 @@ function echoConsole(wc) {
 }
 
 // ------------------------------------------------------------------ window
+// X11 window-icon cap: Chromium serialises _NET_WM_ICON through ONE
+// XChangeProperty request (w*h*4 + 8 CARDINALs). A 256 px icon needs
+// 262,152 B and exceeds the 262,140 B X protocol limit — the server answers
+// BadLength and KDE falls back to a generic icon. 128 px fits (65,544 B).
+// Same rule as element-desktop/desktop/icon.ts. The launcher/taskbar icon
+// still comes from the hicolor theme via StartupWMClass, not from here.
+const MAX_X11_WINDOW_ICON_PX = 128;
+function getMainWindowIcon() {
+  const iconPath = path.join(__dirname, '..', 'assets', 'icon.png');
+  if (process.platform !== 'linux') return iconPath; // Windows: .ico lives in the installer
+  const image = nativeImage.createFromPath(iconPath);
+  if (image.isEmpty()) return iconPath;
+  const { width, height } = image.getSize();
+  if (width <= MAX_X11_WINDOW_ICON_PX && height <= MAX_X11_WINDOW_ICON_PX) return image;
+  return image.resize({ width: MAX_X11_WINDOW_ICON_PX, height: MAX_X11_WINDOW_ICON_PX });
+}
+
+// Tray: the same black mark; Electron/GTK scales it to the panel. The
+// light/dark variant selection from the migration plan (§5.2) stays with the
+// tray's LITE_TRAY opt-in path, unproven in Phase 2.
+function getTrayIconPath() {
+  return path.join(__dirname, '..', 'assets', 'icon.png');
+}
+
 function createMainWindow() {
   const state = loadWindowState();
   const win = new BrowserWindow({
@@ -222,7 +254,7 @@ function createMainWindow() {
     minWidth: 800,
     minHeight: 560,
     title: APP_TITLE,
-    icon: path.join(__dirname, '..', 'assets', 'icon.png'), // black/graphite Cinny icon
+    icon: getMainWindowIcon(), // black/graphite Cinny icon (<=128 px on Linux)
     backgroundColor: '#101016',
     show: false,
     webPreferences: {
@@ -368,8 +400,14 @@ if (!gotLock) {
   process.on('uncaughtException', (e) => console.error('[main] uncaught:', e));
 
   app.whenReady().then(async () => {
-    app.setName('Plotina Lite');
+    app.setName(APP_TITLE); // userData dir becomes 'Plotina Lite Desktop' (plan §5.2)
     app.setAppUserModelId('cc.plotina.chat');
+    if (app.isPackaged && process.platform === 'linux') {
+      // Notification identity on Linux: without this, toasts show "Electron".
+      // Name must match the installed .desktop file (electron-builder derives
+      // it from executableName: plotina-lite-desktop.desktop).
+      try { app.setDesktopName('plotina-lite-desktop.desktop'); } catch { /* older Electron ignores */ }
+    }
 
     configurePermissions(session.defaultSession);
 
@@ -389,12 +427,20 @@ if (!gotLock) {
     appOrigin = `http://${ORIGIN_HOST}:${server.address().port}`;
     console.log(`[lite] serving ${DIST} at ${appOrigin}`);
 
-    // Deep link protocol: registered with the running binary when unpackaged.
-    const registered = app.setAsDefaultProtocolClient(
-      PROTOCOL,
-      process.execPath,
-      app.isPackaged ? undefined : [path.resolve(__dirname, '..')],
-    );
+    // Deep link protocol. electron-builder's `protocols` config registers
+    // cc.plotina.chat + matrix through the packaged .desktop MimeType
+    // (deb/rpm) and the Windows registry (NSIS/MSI). Calling
+    // setAsDefaultProtocolClient from a PACKAGED Linux build is wrong:
+    // from an AppImage it would register the temporary mount path. Only
+    // Windows (registry, harmless) and the unpackaged dev build need this.
+    let registered = 'desktop-entry(packaged)';
+    if (!app.isPackaged || process.platform === 'win32') {
+      registered = String(app.setAsDefaultProtocolClient(
+        PROTOCOL,
+        process.execPath,
+        app.isPackaged ? undefined : [path.resolve(__dirname, '..')],
+      ));
+    }
     console.log(`[lite] protocol ${PROTOCOL}:// registered=${registered}`);
 
     // Cold-start deep link (Linux passes it as an argv entry).
@@ -403,11 +449,12 @@ if (!gotLock) {
 
     if (process.env.LITE_TRAY === '1') {
       try {
-        tray = new Tray(path.join(__dirname, '..', 'assets', 'icon.png'));
+        tray = new Tray(getTrayIconPath());
         tray.setToolTip(APP_TITLE);
         tray.setContextMenu(Menu.buildFromTemplate([
           { label: 'Show', click: () => mainWindow?.show() },
           { type: 'separator' },
+          { label: 'Check for updates…', click: () => { void updater.runCheck(true); } },
           { label: 'Quit', click: () => app.quit() },
         ]));
         tray.on('click', () => mainWindow?.show());
@@ -415,6 +462,7 @@ if (!gotLock) {
     }
 
     createMainWindow();
+    updater.init(() => (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null));
 
     // Deep-link inbox written by second instances (see above).
     const inboxDir = path.join(app.getPath('userData'), 'deep-link-inbox');

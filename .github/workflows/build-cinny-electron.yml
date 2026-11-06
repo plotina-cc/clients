@@ -1,0 +1,303 @@
+# Build Plotina Lite Desktop (Electron) — Phase 2 packaging pipeline.
+#
+# NOT ACTIVATED BY TAG YET (Phase 2 decision): this file triggers on
+# workflow_dispatch only. To activate the release path, add under `on:`:
+#   push:
+#     tags: ["v*-plotina-lite-desktop.*"]
+#     paths: ["cinny/**", "noise/**", "cinny-electron/**", ".github/workflows/build-cinny-electron.yml"]
+# and attach the Phase-4 release job; nothing here uploads or publishes
+# (--publish never everywhere), so a branch or dispatch build can never
+# overwrite a release.
+#
+# Layout follows docs/LITE_ELECTRON_MIGRATION.md §6.7 minus the Tauri
+# cross-grade jobs (the old installed base is negligible; clean installs
+# only): web -> linux/windows packaging -> smoke.
+name: Build Plotina Lite Desktop (Electron)
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_version:
+        description: "Override APP_VERSION (default: derived from tag, else 4.12.8-plotina.0.local)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM_REPO: https://github.com/cinnyapp/cinny-desktop.git
+  VITE_SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+  SENTRY_SDK_VERSION: 10.27.0
+  SENTRY_CLI_VERSION: 2.42.2
+  SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+  # No Authenticode certificate yet (migration plan §6.6): never attempt
+  # auto-discovery, never claim signed builds.
+  CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+concurrency:
+  group: build-cinny-electron-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  web:
+    name: web dist
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin upstream
+        working-directory: cinny
+        shell: bash
+        run: |
+          TAG="$(cat UPSTREAM_TAG)"
+          git clone --depth 1 --branch "$TAG" --recurse-submodules --shallow-submodules \
+            "$UPSTREAM_REPO" upstream
+
+      - name: Name the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(tr -d 'v\r\n' < cinny/UPSTREAM_TAG)"
+          if [ "${GITHUB_REF_TYPE}" = tag ]; then
+            release="cinny-lite-electron@${GITHUB_REF_NAME}"
+          else
+            release="cinny-lite-electron@${version}+${GITHUB_REF_NAME}"
+          fi
+          echo "SENTRY_RELEASE=$release" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cinny/upstream/package-lock.json
+            cinny/upstream/cinny/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Assemble the noise bundle
+        working-directory: cinny
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p noise/vendor
+          cp ../noise/logic.js ../noise/boot.js ../noise/cinny-ui.js noise/
+          cp -a ../noise/vendor/. noise/vendor/
+          python scripts/fetch-noise.py
+          python ../noise/scripts/fetch-dpdfnet.py --dest noise
+
+      - name: Apply the Plotina patches (incl. SSO 0007)
+        working-directory: cinny
+        shell: bash
+        run: |
+          set -euo pipefail
+          for patch in "$PWD"/patches/*.patch; do
+            git -C upstream/cinny apply --check "$patch"
+            git -C upstream/cinny apply "$patch"
+          done
+
+      - name: Build web
+        working-directory: cinny/upstream/cinny
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm install --no-save --no-audit --no-fund "@sentry/browser@${SENTRY_SDK_VERSION}"
+          VITE_SENTRY_RELEASE="$SENTRY_RELEASE" npm run build
+
+      - name: Apply noise and branding
+        working-directory: cinny
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp config.json upstream/config.json
+          cp config.json upstream/cinny/config.json
+          cp config.json upstream/cinny/dist/config.json
+          python apply-noise.py --dist upstream/cinny/dist --noise noise
+          python branding.py --dist upstream/cinny/dist --brand "Plotina Lite Desktop"
+
+      - name: Verify the SSO handoff marker survived
+        working-directory: cinny
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The Electron shell's opener flow requires patch 0007 in the dist.
+          grep -Raqs 'plotina:sso:login-token' upstream/cinny/dist/assets
+          test -f upstream/cinny/dist/sw.js
+
+      - name: Package the web dist
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tar -C cinny/upstream/cinny/dist -cf dist/plotina-lite-web-dist.tar .
+          du -h dist/plotina-lite-web-dist.tar
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plotina-lite-web-dist
+          path: dist/plotina-lite-web-dist.tar
+          if-no-files-found: error
+          retention-days: 30
+
+  linux:
+    name: linux packages
+    needs: web
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            librsvg2-bin imagemagick desktop-file-utils binutils \
+            xvfb xdotool x11-utils libgtk-3-0t64 libnss3 libasound2t64 \
+            libgbm1 libxss1 libxtst6 libatspi2.0-0t64 libsecret-1-0 \
+            libnotify4 xdg-utils rpm fakeroot
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: plotina-lite-web-dist
+          path: web-in
+
+      - name: Install shell deps
+        working-directory: cinny-electron
+        run: npm ci --no-audit --no-fund
+
+      - name: Build AppImage + deb + rpm (never publish)
+        working-directory: cinny-electron
+        shell: bash
+        env:
+          APP_VERSION_OVERRIDE: ${{ inputs.app_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/dist-src"
+          tar -C "$RUNNER_TEMP/dist-src" -xf "$GITHUB_WORKSPACE/web-in/plotina-lite-web-dist.tar"
+          LITE_DIST="$RUNNER_TEMP/dist-src" bash scripts/build-packages.sh linux
+
+      - name: Upload linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: plotina-lite-desktop-electron-linux
+          # upload-artifact v4 stores entries relative to the deepest
+          # wildcard-free directory: dist contents land at the artifact root.
+          path: cinny-electron/dist/**
+          if-no-files-found: error
+          retention-days: 30
+
+  linux-smoke:
+    name: linux smoke (${{ matrix.kind }})
+    needs: linux
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [appimage, deb]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xdotool x11-utils binutils libgtk-3-0t64 libnss3 \
+            libasound2t64 libgbm1 libxss1 libxtst6 libatspi2.0-0t64 \
+            libsecret-1-0 libnotify4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: plotina-lite-desktop-electron-linux
+          path: cinny-electron/dist
+
+      - name: Identity asserts under Xvfb (WM_CLASS, title, _NET_WM_ICON, updater feed)
+        working-directory: cinny-electron
+        run: SKIP_QA_HARNESS=1 bash scripts/qa-linux-package.sh "${{ matrix.kind }}"
+
+  windows:
+    name: windows installers
+    needs: web
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: plotina-lite-web-dist
+          path: web-in
+
+      - name: Install shell deps
+        working-directory: cinny-electron
+        run: npm ci --no-audit --no-fund
+
+      - name: Build NSIS + MSI (never publish)
+        working-directory: cinny-electron
+        shell: bash
+        env:
+          APP_VERSION_OVERRIDE: ${{ inputs.app_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p web-dist
+          tar -xf "$GITHUB_WORKSPACE/web-in/plotina-lite-web-dist.tar" -C web-dist
+          LITE_DIST="$PWD/web-dist" bash scripts/build-packages.sh windows
+          # NSIS is the auto-updating installer: metadata + blockmap required.
+          test -f dist/latest.yml
+          ls dist/Plotina-Lite-Desktop-*-x64.exe.blockmap
+
+      - name: Upload windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: plotina-lite-desktop-electron-windows
+          path: cinny-electron/dist/**
+          if-no-files-found: error
+          retention-days: 30
+
+  windows-smoke:
+    name: windows installer smoke
+    needs: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: plotina-lite-desktop-electron-windows
+          path: pkg
+
+      - name: Silent NSIS install + protocol registry + launch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = (Get-ChildItem pkg/Plotina-Lite-Desktop-*-x64.exe | Where-Object Name -notlike '*.blockmap' | Select-Object -First 1).FullName
+          $p = Start-Process -FilePath $exe -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "silent NSIS install exit $($p.ExitCode)" }
+          $dir = "$env:LOCALAPPDATA\Programs\Plotina Lite Desktop"
+          $bin = "$dir\plotina-lite-desktop.exe"
+          if (-not (Test-Path $bin)) { throw "NSIS install dir missing $bin" }
+          # install-kind marker drives the in-app updater state
+          if ((Get-Content "$dir\install-kind").Trim() -ne 'nsis') { throw 'install-kind marker wrong' }
+          # packaged app-update.yml feed must name plotina-cc/clients
+          $feed = Get-Content "$dir\resources\app-update.yml" -Raw
+          if ($feed -notmatch 'owner:\s*plotina-cc' -or $feed -notmatch 'repo:\s*clients') { throw 'app-update.yml feed wrong' }
+          if ($feed -match 'vector-im|element-web|cinnyapp') { throw 'upstream feed reference survived' }
+          # protocols registered by the installer
+          if (-not (Test-Path 'HKCU:\Software\Classes\cc.plotina.chat')) { throw 'cc.plotina.chat protocol missing' }
+          if (-not (Test-Path 'HKCU:\Software\Classes\matrix')) { throw 'matrix protocol missing' }
+          # launch the packaged app, then kill
+          $proc = Start-Process $bin -PassThru
+          Start-Sleep -Seconds 20
+          if ($proc.HasExited) { throw "app exited early with $($proc.ExitCode)" }
+          Stop-Process -Id $proc.Id -Force
+          # MSI: silent install of the same payload into the machine/user DB
+          $msi = (Get-ChildItem pkg/Plotina-Lite-Desktop-*-x64.msi | Select-Object -First 1).FullName
+          $m = Start-Process msiexec -ArgumentList "/i `"$msi`" /qn /norestart" -Wait -PassThru
+          if ($m.ExitCode -ne 0) { throw "silent MSI install exit $($m.ExitCode)" }

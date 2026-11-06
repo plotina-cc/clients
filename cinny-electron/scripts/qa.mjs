@@ -131,8 +131,13 @@ const watchdog = setTimeout(() => {
 }, 300000);
 const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lite-qa-profile-'));
 const logLines = [];
-const proc = spawn(path.join(APP_DIR, 'node_modules/electron/dist/electron'), [
-  APP_DIR,
+// Packaged QA: QA_BIN points at the electron-builder output (extracted
+// AppRun or the deb binary). A packaged binary takes no app-dir argument and
+// serves its own bundled web dist, so LITE_DIST stays unset there.
+const QA_BIN = process.env.QA_BIN || null;
+const BIN = QA_BIN || path.join(APP_DIR, 'node_modules/electron/dist/electron');
+const proc = spawn(BIN, [
+  ...(QA_BIN ? [] : [APP_DIR]),
   `--remote-debugging-port=${CDP_PORT}`,
   '--use-fake-ui-for-media-stream',
   '--use-fake-device-for-media-stream',
@@ -141,8 +146,9 @@ const proc = spawn(path.join(APP_DIR, 'node_modules/electron/dist/electron'), [
     ...process.env,
     LITE_PORT: '0', // ephemeral port: never collides with parallel QA sessions
     // Pinned copy of the patched dist: /home/hermes/build/.../dist is shared
-    // with other agents and gets rebuilt mid-run.
-    LITE_DIST: process.env.QA_DIST || '/home/hermes/.hermes/cache/scratch/cinny-dist-backup',
+    // with other agents and gets rebuilt mid-run. Packaged runs use the dist
+    // baked into the app.
+    ...(QA_BIN ? {} : { LITE_DIST: process.env.QA_DIST || '/home/hermes/.hermes/cache/scratch/cinny-dist-backup' }),
     LITE_USER_DATA: profileDir,
     LITE_ECHO_CONSOLE: '1',
     LITE_TRAY: process.env.QA_TRAY || '0',
@@ -158,7 +164,9 @@ let mainCDP, childCDP = null, secondProc = null;
 try {
   ORIGIN = await pollFor(
     () => {
-      const m = /\[lite\] serving \S+ at (http:\/\/\S+?:\d+)/.exec(logLines.join(''));
+      // The dist path may contain spaces (".../opt/Plotina Lite Desktop/...")
+      // so match on the URL tail instead of \S+ over the whole path.
+      const m = /\[lite\] serving .* at (http:\/\/\S+?:\d+)/.exec(logLines.join(''));
       return m ? m[1] : false;
     },
     30000, 200, 'app origin line');
@@ -314,13 +322,13 @@ try {
   childCDP = null;
 
   // --------------------------------------------- B2. deep-link token handoff
-  secondProc = spawn(path.join(APP_DIR, 'node_modules/electron/dist/electron'), [
-    APP_DIR, `cc.plotina.chat://login?loginToken=${SYN_2}`,
+  secondProc = spawn(BIN, [
+    ...(QA_BIN ? [] : [APP_DIR]), `cc.plotina.chat://login?loginToken=${SYN_2}`,
   ], { env: {
     ...process.env,
     LITE_USER_DATA: profileDir,
     LITE_PORT: '0',
-    LITE_DIST: process.env.QA_DIST || '/home/hermes/.hermes/cache/scratch/cinny-dist-backup',
+    ...(QA_BIN ? {} : { LITE_DIST: process.env.QA_DIST || '/home/hermes/.hermes/cache/scratch/cinny-dist-backup' }),
     LITE_ECHO_CONSOLE: '0',
   } });
   secondProc.on('exit', () => {});
