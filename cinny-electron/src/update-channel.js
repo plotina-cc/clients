@@ -43,8 +43,12 @@ const RELEASE_REPO = 'clients';
 const DEV_RELEASE_TAG = 'dev-latest';
 const DEV_FEED_BASE = `https://github.com/${RELEASE_OWNER}/${RELEASE_REPO}/releases/download/${DEV_RELEASE_TAG}`;
 
-const WINDOWS_METADATA_FILE = 'latest.yml';
-const LINUX_METADATA_FILE = 'latest-linux.yml';
+// Product-scoped stable metadata. The repository hosts several clients;
+// generic latest.yml/latest-linux.yml belong to Plotina Desktop, which older
+// Desktop builds scan without a tag filter. Lite must never publish those
+// names or an old Desktop can install a Lite release over itself.
+const WINDOWS_METADATA_FILE = 'latest-lite.yml';
+const LINUX_METADATA_FILE = 'latest-lite-linux.yml';
 const DEV_WINDOWS_METADATA_FILE = 'latest-dev.yml';
 const DEV_LINUX_METADATA_FILE = 'latest-linux-dev.yml';
 

@@ -77,7 +77,7 @@ function serve(routes) {
     return new Response(JSON.stringify(hit), { status: 200, headers: { 'content-type': 'application/json' } });
   };
 }
-const ghRelease = (version, bytes, metaFile = 'latest-linux.yml') => {
+const ghRelease = (version, bytes, metaFile = 'latest-lite-linux.yml') => {
   const ymlUrl = `https://github.com/plotina-cc/clients/releases/download/v${version}/${metaFile}`;
   const artUrl = `https://github.com/plotina-cc/clients/releases/download/v${version}/${aiName(version)}`;
   return {
@@ -131,7 +131,7 @@ await t('F1 stable channel reads the release listing only, never a dev URL', asy
   state.dialogResponse = 1;
   await updater.runCheck(true);
   assert.ok(requested.includes(API_URL), 'listed GitHub releases');
-  assert.ok(requested.includes(rel.ymlUrl), 'read latest-linux.yml');
+  assert.ok(requested.includes(rel.ymlUrl), 'read latest-lite-linux.yml');
   assert.ok(requested.includes(rel.artUrl), 'downloaded the AppImage asset');
   assert.ok(!requested.some((u) => u.includes('dev-latest') || u.includes('latest-linux-dev')), `no dev URL: ${requested}`);
   assert.strictEqual(statusFor('available').channel, 'stable');
@@ -242,7 +242,7 @@ await t('F6 preload IPC contract: get / set(needs confirmation) / return-to-stab
   assert.strictEqual(st.installKind, 'appimage');
   assert.strictEqual(st.selfUpdate, true);
   assert.strictEqual(st.channel, 'stable');
-  assert.strictEqual(st.metadataFile, 'latest-linux.yml');
+  assert.strictEqual(st.metadataFile, 'latest-lite-linux.yml');
   assert.strictEqual(st.devFeedUrl, `${DEV_BASE}/latest-linux-dev.yml`);
   assert.strictEqual(st.currentVersion, '4.12.8-plotina.19-dev.4');
   assert.strictEqual(st.text.channelEntry('dev'), 'Канал обновлений: Dev');
