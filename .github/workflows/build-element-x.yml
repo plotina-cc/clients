@@ -221,7 +221,11 @@ jobs:
           # https://plotina.cc/dl/update-x.json, downloads the APK with DownloadManager, verifies
           # sha256 and size, and hands it to the system PackageInstaller. The same patch derives the
           # versionCode from the release tag: with -PplotinaBuildNumber=N, tag vYY.MM.p-plotina-x.N
-          # gets base (2000+YY)*100000 + MM*1000 + N (26.10.1 .25 -> 202610025).
+          # gets base (2000+YY)*100000 + MM*1000 + N (26.10.1 .25 -> 202610025). The same patch
+          # carries the dev channel: -PplotinaDevBuild=M only grows the versionName `-dev.M` part
+          # (the base code stays that of the stable M is based on), Settings grows the «Канал
+          # обновлений» row opening PlotinaUpdateChannelActivity, and a dev install reads
+          # update-x-dev.json from the GitHub `dev-latest` release instead of the edge host.
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0014-plotina-self-updater.patch"
 
       - name: Install Pillow for the icon script
@@ -298,6 +302,7 @@ jobs:
           echo "Sentry release: $release"
 
       - name: Work out the versionCode
+        id: version
         # Plotina's formula, also documented in element-x/README.md and in patch 0014's
         # app/build.gradle.kts: the release tag `vYY.MM.p-plotina-x.N` maps to the base versionCode
         # (2000 + YY) * 100_000 + MM * 1_000 + N. Gradle receives N as -PplotinaBuildNumber; the
@@ -307,28 +312,61 @@ jobs:
         # both sides before comparing, because each phone installs a different split. Every base
         # here is greater than the base of the pre-updater releases (upstream's 20261001), so the
         # installer takes them as upgrades.
-        # A run without a tag (workflow_dispatch) gets build number 0; its APK is a `.debug`
-        # application id installed beside the releases, never over them, so the collision that
-        # would otherwise cause does not exist.
+        # The dev channel adds a suffix to the tag: `vYY.MM.p-plotina-x.N-dev.M` compiles the
+        # *same* base code as stable N - the stable it is based on - and only versionName grows the
+        # `-dev.M` part (Gradle -PplotinaDevBuild). Equal versionCode replacement is what AOSP
+        # allows: PackageManager.checkDowngrade rejects lower codes, never equal ones (some OEM
+        # skins are stricter - switching back to a stable then means the normal greater-code
+        # upgrade, which is the designed path anyway). A dev tag is refused here unless the stable
+        # tag with the same N is published: dev builds test what users actually run, never a
+        # future or forgotten revision.
+        # A run without a tag (workflow_dispatch) gets build number 0 and no dev part; its APK is
+        # a `.debug` application id installed beside the releases, never over them, so the
+        # collision that would otherwise cause does not exist.
         run: |
           version_name="${ELEMENT_X_TAG#v}"
           IFS='.' read -r yy mm pp <<< "$version_name"
+          build_number=0
+          dev_build=0
           if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            build_number="${GITHUB_REF_NAME##*.}"
+            rest="${GITHUB_REF_NAME#*-plotina-x.}"
+            case "$rest" in
+              *-dev.*)
+                build_number="${rest%-dev.*}"
+                dev_build="${rest##*-dev.}"
+                ;;
+              *)
+                build_number="$rest"
+                ;;
+            esac
             case "$build_number" in
-              ''|*[!0-9]*) echo "::error::tag '$GITHUB_REF_NAME' has no numeric build number"; exit 1 ;;
+              ''|*[!0-9]*) echo "::error::tag '$GITHUB_REF_NAME' is not v<YY.MM.p>-plotina-x.<N>[-dev.<M>]"; exit 1 ;;
             esac
             [ "$build_number" -le 999 ] || { echo "::error::build number $build_number does not fit 0..999"; exit 1; }
-          else
-            build_number=0
+            case "$dev_build" in
+              ''|*[!0-9]*) echo "::error::dev build number '$dev_build' is not numeric"; exit 1 ;;
+            esac
+            if [ "$dev_build" -gt 0 ]; then
+              [ "$dev_build" -le 999 ] || { echo "::error::dev build number $dev_build does not fit 1..999"; exit 1; }
+              version_name="${version_name}-dev.${dev_build}"
+              # Refuse a dev build whose stable base is not published. Dots in the pattern are
+              # regex any-chars, but the only refs in this namespace are these release tags, and
+              # the digits are pinned exactly besides.
+              if ! git ls-remote --exit-code --tags origin "refs/tags/v${ELEMENT_X_TAG#v}-plotina-x.${build_number}" >/dev/null 2>&1; then
+                echo "::error::dev tag '$GITHUB_REF_NAME' is based on v${ELEMENT_X_TAG#v}-plotina-x.${build_number}, which is not published"
+                exit 1
+              fi
+            fi
           fi
           base=$(( (2000 + yy) * 100000 + mm * 1000 + build_number ))
-          echo "Plotina versionCode: base $base; arm64 APK $((base * 10 + 2)), armv7 APK $((base * 10 + 1))"
+          echo "Plotina versionCode: base $base; arm64 APK $((base * 10 + 2)), armv7 APK $((base * 10 + 1)); dev build $dev_build"
           {
             echo "PLOTINA_BUILD_NUMBER=$build_number"
+            echo "PLOTINA_DEV_BUILD=$dev_build"
             echo "PLOTINA_VERSION_NAME=$version_name"
             echo "PLOTINA_VERSION_CODE_BASE=$base"
           } >> "$GITHUB_ENV"
+          echo "dev_build=$dev_build" >> "$GITHUB_OUTPUT"
 
       - name: Assemble
         working-directory: upstream/element-x
@@ -375,11 +413,14 @@ jobs:
           # only `gplay` links the Firebase push provider (see the dependencies block of
           # app/build.gradle.kts: `gplayImplementation(projects.libraries.pushproviders.firebase)`).
           # Asking Gradle for `assemblePlayRelease` fails with "Task not found".
+          # -PplotinaDevBuild=0 leaves versionName untouched (patch 0014); a dev tag carries M > 0
+          # there and the APK's versionName becomes `26.10.1-dev.M` while the versionCode stays the
+          # base of the stable it is based on.
           if [ "${{ steps.keystore.outputs.signed }}" = "true" ]; then
-            ./gradlew -PplotinaBuildNumber="$PLOTINA_BUILD_NUMBER" assembleGplayRelease --stacktrace --no-configuration-cache
+            ./gradlew -PplotinaBuildNumber="$PLOTINA_BUILD_NUMBER" -PplotinaDevBuild="$PLOTINA_DEV_BUILD" assembleGplayRelease --stacktrace --no-configuration-cache
             apk_dir=app/build/outputs/apk/gplay/release
           else
-            ./gradlew -PplotinaBuildNumber="$PLOTINA_BUILD_NUMBER" assembleGplayDebug --stacktrace --no-configuration-cache
+            ./gradlew -PplotinaBuildNumber="$PLOTINA_BUILD_NUMBER" -PplotinaDevBuild="$PLOTINA_DEV_BUILD" assembleGplayDebug --stacktrace --no-configuration-cache
             apk_dir=app/build/outputs/apk/gplay/debug
           fi
           ls -lh "$apk_dir"
@@ -407,37 +448,66 @@ jobs:
             line=$("$AAPT" dump badging "$1" 2>/dev/null | head -1)
             PKG=$(printf '%s' "$line" | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
             VC=$(printf '%s' "$line" | sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p")
+            VN=$(printf '%s' "$line" | sed -n "s/.*versionName='\([^']*\)'.*/\1/p")
           }
           read_pkg_vc Plotina-X.apk
-          echo "Plotina-X.apk: package=$PKG versionCode=$VC"
+          echo "Plotina-X.apk: package=$PKG versionCode=$VC versionName=$VN"
           [ "$VC" = "$(( PLOTINA_VERSION_CODE_BASE * 10 + 2 ))" ] \
             || { echo "::error::Plotina-X.apk versionCode $VC is not base $PLOTINA_VERSION_CODE_BASE * 10 + 2 (arm64)"; exit 1; }
           # The manifest must carry what the installed arm64 APK reports, ABI digit included.
           ARM64_VERSION_CODE="$VC"
+          if [ "$PLOTINA_DEV_BUILD" != "0" ]; then
+            # Proof the -PplotinaDevBuild property reached Gradle: the packaged versionName grew
+            # the dev suffix. (The versionCode deliberately does NOT move - that is the design.)
+            [ "$VN" = "$PLOTINA_VERSION_NAME" ] \
+              || { echo "::error::Plotina-X.apk versionName $VN is not the dev name $PLOTINA_VERSION_NAME"; exit 1; }
+          fi
           if [ -f Plotina-X-armv7.apk ]; then
             read_pkg_vc Plotina-X-armv7.apk
-            echo "Plotina-X-armv7.apk: package=$PKG versionCode=$VC"
+            echo "Plotina-X-armv7.apk: package=$PKG versionCode=$VC versionName=$VN"
             [ "$VC" = "$(( PLOTINA_VERSION_CODE_BASE * 10 + 1 ))" ] \
               || { echo "::error::Plotina-X-armv7.apk versionCode $VC is not base * 10 + 1 (armv7)"; exit 1; }
           fi
           sha=$(sha256sum Plotina-X.apk | cut -d' ' -f1)
           size=$(stat -c%s Plotina-X.apk)
           # The contract in patch 0014: versionCode is the number the installed APK reports
-          # (arm64 split), not the base — the updater compares it with PackageManager. apkUrl is a
-          # stable name: publish-clients.sh copies release assets to the edge host under the names
-          # the app already knows, so the URL never moves with the tag.
-          jq -n \
-            --arg package "$PKG" \
-            --arg versionName "$PLOTINA_VERSION_NAME" \
-            --argjson versionCode "$ARM64_VERSION_CODE" \
-            --arg apkUrl "https://plotina.cc/dl/Plotina-X.apk" \
-            --arg sha256 "$sha" \
-            --argjson size "$size" \
-            --arg notes "Обновление Plotina X ${PLOTINA_VERSION_NAME} (сборка ${PLOTINA_BUILD_NUMBER})." \
-            '{client: "x", package: $package, versionName: $versionName, versionCode: $versionCode,
-              apkUrl: $apkUrl, sha256: $sha256, size: $size, notes: $notes}' > update-x.json
-          cat update-x.json
-          sha256sum update-x.json Plotina-X.apk
+          # (arm64 split), not the base — the updater compares it with PackageManager. For the
+          # stable channel apkUrl is a stable name: publish-clients.sh copies release assets to the
+          # edge host under the names the app already knows, so the URL never moves with the tag.
+          # The dev channel never touches the edge host: its manifest is update-x-dev.json, served
+          # from the GitHub `dev-latest` release, and it carries `devBuild: M` next to the *same*
+          # versionCode as the stable it is based on. The updater offers it to a stable install of
+          # that base (equal versionCode replacement) and to older dev builds when M is greater.
+          if [ "$PLOTINA_DEV_BUILD" != "0" ]; then
+            MANIFEST=update-x-dev.json
+            APK_URL="https://github.com/plotina-cc/clients/releases/download/dev-latest/Plotina-X.apk"
+            NOTES="Dev-сборка Plotina X ${PLOTINA_VERSION_NAME} (база ${PLOTINA_BUILD_NUMBER}, dev ${PLOTINA_DEV_BUILD})."
+            jq -n \
+              --arg package "$PKG" \
+              --arg versionName "$PLOTINA_VERSION_NAME" \
+              --argjson versionCode "$ARM64_VERSION_CODE" \
+              --argjson devBuild "$PLOTINA_DEV_BUILD" \
+              --arg apkUrl "$APK_URL" \
+              --arg sha256 "$sha" \
+              --argjson size "$size" \
+              --arg notes "$NOTES" \
+              '{client: "x", package: $package, versionName: $versionName, versionCode: $versionCode,
+                devBuild: $devBuild, apkUrl: $apkUrl, sha256: $sha256, size: $size, notes: $notes}' > "$MANIFEST"
+          else
+            MANIFEST=update-x.json
+            jq -n \
+              --arg package "$PKG" \
+              --arg versionName "$PLOTINA_VERSION_NAME" \
+              --argjson versionCode "$ARM64_VERSION_CODE" \
+              --arg apkUrl "https://plotina.cc/dl/Plotina-X.apk" \
+              --arg sha256 "$sha" \
+              --argjson size "$size" \
+              --arg notes "Обновление Plotina X ${PLOTINA_VERSION_NAME} (сборка ${PLOTINA_BUILD_NUMBER})." \
+              '{client: "x", package: $package, versionName: $versionName, versionCode: $versionCode,
+                apkUrl: $apkUrl, sha256: $sha256, size: $size, notes: $notes}' > "$MANIFEST"
+          fi
+          cat "$MANIFEST"
+          sha256sum "$MANIFEST" Plotina-X.apk
 
       - uses: actions/upload-artifact@v4
         if: always() && hashFiles('Plotina-X.apk') != ''
@@ -445,9 +515,23 @@ jobs:
           name: Plotina-X
           path: |-
             Plotina-X*.apk
-            update-x.json
+            update-x*.json
           if-no-files-found: error
           retention-days: 30
+
+      - name: Dev feed hand-off (manual)
+        # Nothing automatic touches the `dev-latest` release: the feed moves when a human says so.
+        # The dev-latest tag is created by hand once; after each dev build, update the feed from
+        # this run's artifacts with exactly:
+        #   gh release upload --clobber dev-latest Plotina-X.apk update-x-dev.json
+        # (the repo's gh auth, plotina-cc/clients). The app reads
+        # https://github.com/plotina-cc/clients/releases/download/dev-latest/update-x-dev.json.
+        if: steps.version.outputs.dev_build != '0'
+        run: |
+          echo "This run built dev build $PLOTINA_DEV_BUILD on stable base $PLOTINA_BUILD_NUMBER."
+          echo "To publish it to the dev channel (NOT automatic):"
+          echo "  gh release download "$GITHUB_RUN_ID" or grab the Plotina-X artifact, then"
+          echo "  gh release upload --clobber dev-latest Plotina-X.apk update-x-dev.json"
 
       - name: Check the APK carries our call URL, the bundled fallback and the plotina.cc app link
         run: |
@@ -601,7 +685,9 @@ jobs:
           exit "$failed"
 
       - name: Work out the release title
-        if: startsWith(github.ref, 'refs/tags/')
+        # Dev builds publish nothing automatically: the moving `dev-latest` feed is updated by hand
+        # (see "Dev feed hand-off"). A tagged dev release would fork the feed away from it.
+        if: startsWith(github.ref, 'refs/tags/') && steps.version.outputs.dev_build == '0'
         id: release_title
         env:
           TAG: ${{ github.ref_name }}

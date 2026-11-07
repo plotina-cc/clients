@@ -51,6 +51,9 @@ export PLOTINA_SENTRY_RELEASE="element-x@26.10.1-plotina-x.14"
 ./gradlew -PplotinaSingleApk assembleGplayDebug
 ```
 
+Add `-PplotinaBuildNumber=30 -PplotinaDevBuild=1` to reproduce a dev-channel build of the
+`v26.10.1-plotina-x.30-dev.1` shape (same versionCode as stable .30, versionName `26.10.1-dev.1`).
+
 ## Updating in-app (patch 0014)
 
 There is no Play channel here, so Plotina X ships its own updater: platform APIs only —
@@ -75,11 +78,50 @@ install, no third-party update SDK.
   `Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES` if the system has not been told Plotina X may
   install apps.
 
+### The dev update channel (opt-in)
+
+- **Settings grows a «Канал обновлений» row** just above «Проверить обновления». It opens a small
+  page (a second Activity in the same patch) with two choices: **Стабильный** (default, the edge
+  host feed above) and **Dev**. The choice persists in the app's `plotina-updater` SharedPreferences
+  and decides which feed both the manual check and the daily silent check read. Dev states in
+  warning text that dev builds ride ahead of the newest stable and may break, and that switching
+  back keeps the data.
+- **The dev feed lives on GitHub, not on the edge host:**
+  `https://github.com/plotina-cc/clients/releases/download/dev-latest/update-x-dev.json`. The
+  `dev-latest` release is a moving target: its two assets (`update-x-dev.json`, `Plotina-X.apk`)
+  are overwritten by hand — `gh release upload --clobber dev-latest Plotina-X.apk update-x-dev.json`
+  — when someone decides a dev build should go out. Nothing automatic publishes it, and the tag is
+  created once by hand.
+- The dev manifest carries the **same `versionCode` as the stable it is based on** plus
+  `"devBuild": M`. Comparison rules (unit-tested in `PlotinaUpdateTest`): a greater base code is
+  always offered; an equal base only moves forward when the manifest's `devBuild` is greater than
+  the installed one, and the installed dev number is read from the versionName suffix `-dev.M`.
+  A stable manifest (no `devBuild`) therefore never bumps a same-code dev install.
+- **Passive stable return**: switch back to Стабильный while a dev build runs, and as long as no
+  published stable outranks it, the updater page says *«Пока dev-сборка, ждём стабильный релиз
+  для перехода»* instead of "up to date". When the next stable (greater base) appears, it arrives
+  through the ordinary update flow — same package id, same signing key, data preserved.
+- AOSP permits replacing a package with an **equal versionCode**: `PackageManager.checkDowngrade`
+  rejects only *lower* codes. That is what the dev-over-stable install relies on; some OEM skins
+  are stricter, so real-device cross-grade testing remains manual.
+
+Dev builds must be based on the **latest published stable revision, never an unreleased future
+one**: CI refuses a `…-dev.M` tag whose stable tag with the same build number is not published
+(see "Work out the versionCode" in `build-element-x.yml`).
+
 ### versionCode
 
 A release tag `vYY.MM.p-plotina-x.N` maps to the base versionCode
 
     (2000 + YY) * 100_000 + MM * 1_000 + N      # v26.10.1-plotina-x.25 -> 202610025
+
+A dev-channel tag `vYY.MM.p-plotina-x.N-dev.M` compiles the **same base** — the stable it is
+based on — and only the versionName grows: `26.10.1-dev.M`. CI passes `N` as
+`-PplotinaBuildNumber` and `M` as `-PplotinaDevBuild`, refuses the dev build outright unless the
+stable tag with the same `N` is published, and writes `devBuild: M` into `update-x-dev.json`.
+Example: stable `v26.10.1-plotina-x.30` (arm64 `2026100302`) and dev `v26.10.1-plotina-x.30-dev.1`
+ship the same versionCode; the next stable `.31` (`2026100312`) is a normal upgrade that returns
+dev users to the stable channel.
 
 CI derives `N` from the tag and passes it as `-PplotinaBuildNumber` (see "Work out the
 versionCode" in `build-element-x.yml` and the `defaultConfig` block patch 0014 adds to
