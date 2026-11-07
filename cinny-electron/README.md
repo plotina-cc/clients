@@ -19,11 +19,17 @@ cinny-electron/
     icons/{16..512}x*.png   #   hicolor set (generated from branding/icons/plotina-black.svg)
     icon.png icon.ico       #   app icon + Windows multi-size ico
     installer.nsh           #   NSIS customInstall: writes the install-kind marker
-  src/main.js               # window, SSO, permissions, deep links, state
-  src/preload.js            # contextBridge: metadata + updater IPC
+  src/main.js               # window, SSO, permissions, deep links, state,
+                            #   app/tray menu carrying the update-channel entry
+  src/preload.js            # contextBridge: metadata + updater IPC + channel API
   src/app-server.js         # static localhost server for the Cinny dist
-  src/updater.js            # GitHub-releases feed updater (appimage/nsis self-update;
-                            #   deb/rpm package-manager guidance; MSI manual-download)
+  src/update-channel.js     # channel POLICY (pure, unit-tested): feed URLs per
+                            #   channel x install kind, dev version grammar and
+                            #   ordering, downgrade rules, persisted preference,
+                            #   the Russian UI strings
+  src/updater.js            # GitHub-releases feed updater GLUE (appimage/nsis
+                            #   self-update; deb/rpm package-manager guidance;
+                            #   MSI manual-download; stable + dev channels)
   web/                      # STAGED Cinny dist at build time (gitignored, goes into asar)
   scripts/qa.mjs            # full acceptance harness (CDP, no deps; QA_BIN for packaged runs)
   scripts/debug-*.mjs       # targeted probes used while building this
@@ -36,6 +42,12 @@ cinny-electron/
   scripts/install-lite-electron.sh  # silent curl|bash installer (deb/AppImage paths)
   scripts/qa-linux-package.sh       # packaged smoke: xprop identity + full qa.mjs
   scripts/test-updater.mjs  # updater unit tests (feed parsing, version ordering)
+  scripts/typecheck.mjs     # node --check over src/, scripts/, tests/
+  tests/                    # channel unit tests + updater flow tests (fake
+                            #   electron + fake fetch, no network):
+    dev-channel.test.mjs            # policy: URLs, grammar, downgrade, strings
+    updater-channel-flow.test.mjs   # runCheck/returnToStable against feeds
+    helpers/electron-stub.cjs       # the stub both flow tests install
   assets/                   # icons copied from cinny/icons (black/graphite Cinny)
 ```
 
@@ -45,7 +57,8 @@ cinny-electron/
 npm install                    # electron binary comes from ~/.cache/electron
 LITE_DIST=/path/to/cinny/dist bash scripts/build-packages.sh linux    # AppImage deb rpm*
 bash scripts/build-packages.sh windows                                 # NSIS + MSI (Windows host)
-node scripts/test-updater.mjs                                          # updater unit tests
+npm test                                      # updater + channel unit/flow tests
+npm run typecheck                             # node --check over src/scripts/tests
 bash scripts/qa-updater-feed.sh                                        # U2/U4 against a local QA feed
 SKIP_QA_HARNESS=1 bash scripts/qa-linux-package.sh appimage            # identity smoke
 xvfb-run -a -s "-screen 0 1440x900x24" bash scripts/qa-linux-package.sh deb  # + messaging
@@ -165,6 +178,47 @@ exe, a packaged Windows install without it is MSI and only ever offers
 Plotina Desktop). `PLOTINA_QA_UPDATES=1` + `PLOTINA_UPDATE_FEED_URL` point the
 feed at a local server for U1–U7; `LITE_NO_UPDATES=1` disables polling.
 
+**Update channels: Стабильный / Dev (opt-in).** `src/update-channel.js` is the
+policy (pure, unit-tested); `src/updater.js` is the glue that fetches, verifies
+and installs.
+
+| channel | metadata (AppImage / NSIS) | how it is found |
+|---|---|---|
+| stable (default) | `latest-linux.yml` / `latest.yml` | GitHub releases listing of `plotina-cc/clients` (as before) |
+| dev | `latest-linux-dev.yml` / `latest-dev.yml` | direct download from the fixed `dev-latest` release: `https://github.com/plotina-cc/clients/releases/download/dev-latest/<file>` — no API call, no rate limit, assets are refreshed on command |
+
+* Versions are ordinary semver-shaped builds: `4.12.8-plotina.<N>` (stable) and
+  `4.12.8-plotina.<N>-dev.<M>` (dev). Comparison is plain tuple ordering over
+  `[major,minor,patch,plotina,dev]` with dev-slot 0 for stable — no
+  same-versionCode workaround. A dev build of the same `-plotina.N` therefore
+  sorts **above** that stable release.
+* Two invariants, both tested: a `-dev.` build is **never** a candidate while
+  the channel is stable (even if the stable feed is misconfigured and
+  advertises one — the candidate is refused and reported as `plan=foreign`),
+  and a version **reduction is never applied automatically** (a lower candidate
+  just logs and reports `up-to-date`). Only the explicit
+  `Вернуться на стабильный` action passes `allowDowngrade`, which is why it
+  exists: after living on dev, the stable release is usually lower.
+* Preference: `<userData>/update-channel.json`
+  (`{"channel":"dev","devAcknowledgedAt":…}`), written atomically; anything
+  unreadable or invalid falls back to stable. `LITE_UPDATE_CHANNEL=dev|stable`
+  pins it for QA runs. Switching channels drops a pending download from the
+  other feed.
+* UI: menu **Обновления** → `Проверить обновления…`,
+  `Канал обновлений: Стабильный` (radio `Стабильный` / `Dev`; choosing Dev shows
+  the dev warning first and cancels silently), `Вернуться на стабильный`
+  (enabled only on dev, prompts with restart buttons and says plainly that this
+  is a version reduction). Same items in the tray menu when `LITE_TRAY=1`; the
+  renderer contract is `plotinaLite.updater.channel.{get,set,returnToStable}`,
+  statuses arrive on `onStatus` with `channel` + `downgrade` fields.
+* sha512/size verification, the atomic AppImage rename-swap and the silent NSIS
+  `/S --updated` install are shared by both channels and both directions:
+  dev never gets a separate, weaker install path.
+* `LITE_DEV_FEED_URL` overrides the dev base for a local feed directory (same
+  layout, `latest-linux-dev.yml` + artifacts) — use it together with
+  `PLOTINA_QA_UPDATES=1`/`PLOTINA_UPDATE_FEED_URL`, which resolves the file name
+  per channel.
+
 ## Status / open items
 
 - Phase 2 verified on this host (Arch): AppImage + deb built from the bundled
@@ -176,7 +230,15 @@ feed at a local server for U1–U7; `LITE_NO_UPDATES=1` disables polling.
   `bash scripts/build-packages.sh win-nsis` (proven here: exe + blockmap +
   latest.yml); MSI needs the Windows job (WiX via wine here needs Wine-Mono,
   absent).
+- The `dev-latest` GitHub release itself is **not** created by this change and
+  no dev artifact has been published: until the operator uploads
+  `latest-dev.yml` / `latest-linux-dev.yml` there, a dev-channel client gets
+  HTTP 404 and reports "nothing to install" (deliberately not an error). The
+  local-kit route (`LITE_DEV_FEED_URL` + `scripts/qa-dev-channel.sh`) is what
+  was actually exercised. NSIS/dev path is implemented and unit-tested but not
+  built or run on Windows this round.
 - Open for Phase 3/4: tray dark/light variants, real IdP SSO run, Element
   Call join test against `call.plotina.cc`, E2EE device-verify UX, CSP header
   for the app server, `/dl` promotion + draft-release job, U1–U7 on a real
-  feed, Settings → About update button (preload IPC already exists).
+  feed, Settings → About update button inside the web app (the shell menu entry
+  and the preload IPC already exist).

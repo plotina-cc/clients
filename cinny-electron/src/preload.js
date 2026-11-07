@@ -27,5 +27,18 @@ contextBridge.exposeInMainWorld('plotinaLite', {
       ipcRenderer.on('plotina:update-status', listener);
       return () => ipcRenderer.removeListener('plotina:update-status', listener);
     },
+    // Update channel. The menu entry ('Канал обновлений: Стабильный / Dev')
+    // and a future web Settings page use this same contract; the main process
+    // (src/updater.js + src/update-channel.js) owns the policy, so the
+    // renderer cannot bypass the dev warning or the downgrade rules.
+    channel: {
+      get: () => ipcRenderer.invoke('plotina:update-channel-get'),
+      set: (channel, options = {}) => ipcRenderer.invoke('plotina:update-channel-set', {
+        channel,
+        acknowledged: !!options.acknowledged,
+        manual: options.manual !== false,
+      }),
+      returnToStable: () => ipcRenderer.invoke('plotina:update-return-stable'),
+    },
   },
 });
