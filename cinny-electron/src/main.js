@@ -39,7 +39,17 @@ const allowsMediaOrigin = (origin) =>
 // shared QA hosts) can then serve the window different content. 127.0.0.1
 // only ever hits our own embedded server.
 const ORIGIN_HOST = '127.0.0.1';
-const HOMESERVER_LOGIN_URL = /^https?:\/\/plotina\.cc\/_matrix\/client\/[^/]+\/login(\?|$)/;
+// Matrix SSO is not a single /login URL: Synapse redirects to
+// /login/sso/redirect, and the web app may open either that URL or an
+// /auth/... URL in a popup. Match the whole auth surface, not just /login.
+function isHomeserverLoginUrl(raw) {
+  try {
+    const u = new URL(raw);
+    return u.hostname === 'plotina.cc' &&
+      u.pathname.startsWith('/_matrix/client/') &&
+      (/\/login(?:\/|$)/.test(u.pathname) || u.pathname.includes('/auth/'));
+  } catch { return false; }
+}
 
 let server = null;
 let mainWindow = null;
@@ -165,7 +175,7 @@ function wireSSOInterception(win) {
   const wc = win.webContents;
   wc.on('will-navigate', (event, url) => {
     if (isAppOrigin(url)) return; // internal routing
-    if (HOMESERVER_LOGIN_URL.test(url)) {
+    if (isHomeserverLoginUrl(url)) {
       event.preventDefault();
       // Open through the *renderer*'s window.open so Electron's native
       // window-open gives the child a genuine window.opener + postMessage
@@ -192,10 +202,23 @@ function wireSSOInterception(win) {
         },
       };
     }
+    if (isHomeserverLoginUrl(url)) {
+      // Keep the SSO popup inside Electron so it retains window.opener; a
+      // system browser has no opener and the patched login page cannot post
+      // the loginToken back into the app.
+      console.log('[window-open] allow (homeserver SSO)');
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          autoHideMenuBar: true,
+          title: `${APP_TITLE} - Sign in`,
+          webPreferences: { sandbox: true },
+        },
+      };
+    }
     if (/^https?:\/\//.test(url)) {
       // A top-level popup to an external site: hand it to the OS browser.
-      // (SSO children are allowed by the branch above and keep their own
-      // default window-open behaviour.)
+      // (SSO children are handled above and keep their own opener.)
       console.log('[window-open] external -> shell.openExternal');
       shell.openExternal(url).catch(() => {});
       return { action: 'deny' };
