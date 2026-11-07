@@ -77,7 +77,10 @@ jobs:
         # path argument differs between Node majors; the file form is stable.
         # update-feed.test.mjs guards the Settings "Check for updates" feed
         # (ipc.ts is patched to call getUpdateFeedUrl from our updater).
-        run: node --test tests/linux-updater.test.mjs tests/update-feed.test.mjs
+        # update-channel.test.mjs guards the opt-in Dev channel: feed selection,
+        # dev version comparison, metadata parsing, and the confirmed
+        # "return to stable" behaviour.
+        run: node --test tests/linux-updater.test.mjs tests/update-feed.test.mjs tests/update-channel.test.mjs
 
   # One webapp for both platforms: the desktop shell embeds a fixed asar, so the
   # overlay has to be applied once and handed to the packaging jobs.

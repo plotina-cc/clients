@@ -248,7 +248,9 @@ test(
         });
         assert.equal(relRes.status, 200, "GitHub API reachable");
         const releases = await relRes.json();
-        const rel = releases.find((r) => !r.draft && !r.prerelease && r.assets.some((a) => a.name === "latest-linux.yml"));
+        const rel = releases.find((r) => !r.draft && !r.prerelease
+            && updater.isDesktopReleaseTag(r.tag_name)
+            && r.assets.some((a) => a.name === "latest-linux.yml"));
         assert.ok(rel, "a release with latest-linux.yml exists");
         const ymlText = await (await fetch(rel.assets.find((a) => a.name === "latest-linux.yml").browser_download_url, { headers: { "User-Agent": "Plotina-Desktop-test" } })).text();
         const yml = updater.parseLatestYml(ymlText);
