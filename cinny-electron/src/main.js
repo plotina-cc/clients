@@ -2,7 +2,7 @@
 // web dist bundled in the asar, installer identity, updater).
 'use strict';
 
-const { app, BrowserWindow, session, shell, screen, Tray, Menu, desktopCapturer, nativeImage, dialog } = require('electron');
+const { app, BrowserWindow, session, shell, screen, Tray, Menu, ipcMain, desktopCapturer, nativeImage, dialog } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { createAppServer } = require('./app-server');
@@ -352,6 +352,18 @@ function refreshAppMenu() {
   catch (e) { console.warn('[menu] application menu failed:', e.message); }
   if (tray) { try { tray.setContextMenu(Menu.buildFromTemplate(trayTemplate())); } catch { /* tray gone */ } }
 }
+
+// The native menu bar is not reliably reachable on every Linux desktop
+// (KDE/Wayland can hide it and Alt may do nothing). The preload adds a small
+// in-window "Обновления" button, which opens this same native menu at the
+// cursor — available on the login screen, before any Matrix account exists.
+ipcMain.handle('plotina:show-updates-menu', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
+  if (!win || win.isDestroyed()) return false;
+  const menu = Menu.buildFromTemplate(updatesSubmenu());
+  menu.popup({ window: win });
+  return true;
+});
 
 // Tray: the same black mark; Electron/GTK scales it to the panel. The
 // light/dark variant selection from the migration plan (§5.2) stays with the
