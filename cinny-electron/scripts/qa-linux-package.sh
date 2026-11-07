@@ -89,7 +89,7 @@ sleep 2
 # appimage/nsis kinds log "feed <owner>/<repo> kind=..."; package/unknown/msi
 # log "install kind '<kind>': no self-update polling". Either proves the
 # packaged updater booted and classified the install.
-grep -qE '\[updater\] (feed .*kind=|install kind .[a-z]+.)' "$LOG" && UPD_OK=1
+grep -qE '\[updater\].*(feed .*kind=|install kind .[a-z]+.)' "$LOG" && UPD_OK=1
 kill $PID 2>/dev/null || true; wait $PID 2>/dev/null || true
 
 echo "WM_CLASS=$WM_OK title=$TITLE_OK _NET_WM_ICON(128)=$ICON_OK updater=$UPD_OK"
