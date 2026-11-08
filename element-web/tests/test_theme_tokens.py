@@ -35,8 +35,8 @@ HERE = Path(__file__).resolve().parent
 WEBAPP = HERE.parent                      # element-web/
 CONFIG = WEBAPP / "config.json"
 
-LIGHT = "Plotina Mint"
-DARK = "Plotina Mint Dark"
+LIGHT = "Mint Light"
+DARK = "Mint Dark"
 
 # Brand accents. Must match branding.py's theme-color and the product palette.
 ACCENT_LIGHT = "#17795a"
@@ -204,8 +204,9 @@ class ThemePresenceTest(unittest.TestCase):
 
     def test_default_theme_unchanged(self) -> None:
         cfg = load_config()
-        self.assertEqual(cfg["default_theme"], f"custom-{LIGHT}")
-        self.assertEqual(cfg["setting_defaults"]["theme"], f"custom-{LIGHT}")
+        # The internal theme id is stable for saved preferences; only its label is Mint Light.
+        self.assertEqual(cfg["default_theme"], "custom-Plotina Mint")
+        self.assertEqual(cfg["setting_defaults"]["theme"], "custom-Plotina Mint")
 
 
 class TokenCoverageTest(unittest.TestCase):
