@@ -48,6 +48,10 @@ const RELEASE_OWNER = 'plotina-cc';
 const RELEASE_REPO = 'clients';
 const DEV_RELEASE_TAG = 'dev-latest';
 const DEV_FEED_BASE = `https://github.com/${RELEASE_OWNER}/${RELEASE_REPO}/releases/download/${DEV_RELEASE_TAG}`;
+// 5xx fallback: GitHub sometimes returns 504 for the tiny dev YAML assets
+// while the installers themselves download. Edge hosts the same metadata with
+// absolute GitHub asset URLs, so the artifact still comes from the release.
+const DEV_FEED_FALLBACK_BASE = 'https://plotina.cc/dl/dev/lite';
 
 // Product-scoped stable metadata. The repository hosts several clients;
 // generic latest.yml/latest-linux.yml belong to Plotina Desktop, which older
@@ -133,6 +137,13 @@ function qaFeedUrl({ base, installKind, channel = DEFAULT_CHANNEL } = {}) {
  *  otherwise the GitHub `dev-latest` release. */
 function resolveDevFeedBase(env = process.env) {
   return (env && env.LITE_DEV_FEED_URL) || DEV_FEED_BASE;
+}
+
+function devFeedFallbackUrl({ installKind, channel = DEFAULT_CHANNEL } = {}) {
+  if (channel !== DEV) return null;
+  const file = metadataFileFor({ installKind, channel: DEV });
+  if (!file) return null;
+  return `${DEV_FEED_FALLBACK_BASE}/${file}`;
 }
 
 // ------------------------------------------------------------------ versions
@@ -302,7 +313,7 @@ module.exports = {
   DL_BASE, WINDOWS_ARTIFACT_ALIAS, LINUX_ARTIFACT_ALIAS,
   WINDOWS_METADATA_FILE, LINUX_METADATA_FILE, DEV_WINDOWS_METADATA_FILE, DEV_LINUX_METADATA_FILE,
   SELF_UPDATE_KINDS,
-  isSelfUpdateKind, metadataFileFor, devFeedUrl, stableFeedUrl, stableArtifactUrl, qaFeedUrl, resolveDevFeedBase,
+  isSelfUpdateKind, metadataFileFor, devFeedUrl, devFeedFallbackUrl, stableFeedUrl, stableArtifactUrl, qaFeedUrl, resolveDevFeedBase,
   versionTokens, compareVersions, isVersionNewer, isVersionLower,
   isDevVersion, isStableVersion, channelOfVersion, pickHighestVersion,
   isCandidateAllowed, planUpdate,

@@ -390,7 +390,17 @@ async function metadataUrlAndAssets(base, { channelName, allowDowngrade }) {
 async function findDevUpdate({ allowDowngrade, devFeedBase }) {
   const url = policy.devFeedUrl({ installKind: INSTALL_KIND, channel: policy.DEV, devFeedBase });
   if (!url) return null;
-  const yml = await fetchMetadata(url, { requireAppImage: INSTALL_KIND === 'appimage' });
+  let yml;
+  try {
+    yml = await fetchMetadata(url, { requireAppImage: INSTALL_KIND === 'appimage' });
+  } catch (e) {
+    if (!/HTTP 5\d\d/.test(String(e && e.message))) throw e;
+    const fallbackUrl = policy.devFeedFallbackUrl({ installKind: INSTALL_KIND, channel: policy.DEV });
+    if (!fallbackUrl) throw e;
+    console.warn(`[updater] GitHub dev feed failed (${e.message}); trying the edge mirror`);
+    yml = await fetchMetadata(fallbackUrl, { requireAppImage: INSTALL_KIND === 'appimage' });
+    if (!yml) { console.log('[updater] dev feed not published yet (HTTP 404)'); return null; }
+  }
   if (!yml) { console.log('[updater] dev feed not published yet (HTTP 404)'); return null; }
   if (!policy.isDevVersion(yml.version)) {
     // Installable for a dev-channel user (no rule against a stable-shaped
