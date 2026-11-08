@@ -286,7 +286,7 @@ function readUpdateFeed(): UpdateFeed | null {
     return { owner, repo };
 }
 
-/** Numeric tokens of a version: "1.12.32-plotina.30" -> [1,12,32,30]. */
+/** Numeric tokens of a non-Plotina version (legacy fallback). */
 function versionNumbers(version: string): number[] {
     return version
         .split(/[.\-+_]/)
@@ -294,13 +294,51 @@ function versionNumbers(version: string): number[] {
         .map(Number);
 }
 
+interface PlotinaVersion {
+    major: number;
+    minor: number;
+    patch: number;
+    build: number;
+    /** null = stable release; number = -dev.N prerelease. */
+    dev: number | null;
+}
+
+function parseVersion(version: string): PlotinaVersion | null {
+    // Plotina desktop versions are semver-like: 1.12.32-plotina.42 and
+    // 1.12.32-plotina.42-dev.1. Stable is the release, dev is its prerelease:
+    // the stable .42 must be NEWER than .42-dev.1. The old numeric-token
+    // comparator treated the dev suffix as an extra higher token (a mobile
+    // versionCode carry-over) and forced a downgrade confirmation.
+    const m = /^(\d+)\.(\d+)\.(\d+)-plotina\.(\d+)(?:-dev\.(\d+))?(?:\.local)?$/.exec(
+        version.trim(),
+    );
+    if (!m) return null;
+    return {
+        major: Number(m[1]),
+        minor: Number(m[2]),
+        patch: Number(m[3]),
+        build: Number(m[4]),
+        dev: m[5] === undefined ? null : Number(m[5]),
+    };
+}
+
 export function isVersionNewer(candidate: string, current: string): boolean {
-    const a = versionNumbers(candidate);
-    const b = versionNumbers(current);
-    for (let i = 0; i < Math.max(a.length, b.length); i++) {
-        const x = a[i] ?? 0;
-        const y = b[i] ?? 0;
-        if (x !== y) return x > y;
+    const a = parseVersion(candidate);
+    const b = parseVersion(current);
+    if (a && b) {
+        for (const key of ["major", "minor", "patch", "build"] as const) {
+            if (a[key] !== b[key]) return a[key] > b[key];
+        }
+        // Same Plotina build: a stable release outranks its dev prerelease.
+        if (a.dev === null && b.dev !== null) return true;
+        if (a.dev !== null && b.dev === null) return false;
+        if (a.dev !== null && b.dev !== null) return a.dev > b.dev;
+        return false;
+    }
+    const x = versionNumbers(candidate);
+    const y = versionNumbers(current);
+    for (let i = 0; i < Math.max(x.length, y.length); i++) {
+        if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) > (y[i] ?? 0);
     }
     return false;
 }

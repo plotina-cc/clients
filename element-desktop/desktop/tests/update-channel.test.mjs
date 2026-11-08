@@ -160,6 +160,11 @@ test("isVersionNewer compares dev builds normally", () => {
     assert.equal(updater.isVersionNewer("4.12.8-plotina.4-dev.9", "4.12.8-plotina.5"), false, "older build line is not newer");
     assert.equal(updater.isVersionNewer("4.12.8-plotina.6-dev.1", "4.12.8-plotina.6-dev.1"), false);
     assert.equal(updater.isVersionNewer("4.12.9-plotina.1-dev.1", "4.12.8-plotina.99"), true);
+    // A stable release of the same Plotina build is newer than its dev
+    // prerelease. This is desktop semver, not Android's versionCode ordering.
+    assert.equal(updater.isVersionNewer("4.12.8-plotina.6", "4.12.8-plotina.6-dev.1"), true);
+    assert.equal(updater.isVersionNewer("4.12.8-plotina.6-dev.2", "4.12.8-plotina.6"), false);
+    assert.equal(updater.isVersionNewer("4.12.8-plotina.6-dev.2", "4.12.8-plotina.6-dev.1"), true);
 });
 
 test("isDevVersion recognises the dev build suffix", () => {
@@ -175,6 +180,7 @@ test("acceptCandidate implements stable/return gating", () => {
     assert.equal(updater.acceptCandidate("4.12.8-plotina.5", "4.12.8-plotina.5", true), false, "even on return, same version installs nothing");
     assert.equal(updater.acceptCandidate("4.12.8-plotina.4", "4.12.8-plotina.5", false), false, "downgrades are refused normally");
     assert.equal(updater.acceptCandidate("4.12.8-plotina.4", "4.12.8-plotina.5", true), true, "the confirmed return accepts a reduction");
+    assert.equal(updater.acceptCandidate("4.12.8-plotina.6", "4.12.8-plotina.6-dev.1", false), true, "stable release outranks same-build dev without downgrade confirmation");
 });
 
 test("parseLatestYml parses a Windows dev metadata file", () => {
