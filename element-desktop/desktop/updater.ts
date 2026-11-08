@@ -131,6 +131,11 @@ export function isDesktopReleaseTag(tag: string): boolean {
 export const DEV_RELEASE_TAG = "dev-latest";
 const DEV_WINDOWS_METADATA_FILE = "latest-dev.yml";
 const DEV_LINUX_METADATA_FILE = "latest-linux-dev.yml";
+// GitHub's release-asset CDN intermittently answers 504 for the small YAML
+// assets while the AppImage still downloads. Keep a mirrored copy on our edge
+// as a 5xx-only fallback: the metadata is rewritten with absolute GitHub asset
+// URLs there, so the artifact still comes from the release.
+const DEV_FEED_FALLBACK_BASE = "https://plotina.cc/dl/dev/desktop";
 
 export type UpdateChannel = "stable" | "dev";
 
@@ -195,6 +200,10 @@ export function devMetadataDownloadUrl(feed: UpdateFeed, metadataFile: string): 
 
 export function devAssetDownloadUrl(feed: UpdateFeed, assetName: string): string {
     return `https://github.com/${feed.owner}/${feed.repo}/releases/download/${DEV_RELEASE_TAG}/${encodeURIComponent(assetName)}`;
+}
+
+export function devMetadataFallbackUrl(metadataFile: string): string {
+    return `${DEV_FEED_FALLBACK_BASE}/${encodeURIComponent(metadataFile)}`;
 }
 
 /**
@@ -532,9 +541,15 @@ async function checkDevFeed(feed: UpdateFeed, allowDowngrade: boolean, manual: b
         if (manual) sendUpdateStatus(false);
         return;
     }
-    const ymlRes = await fetch(devMetadataDownloadUrl(feed, devFile), {
+    let ymlRes = await fetch(devMetadataDownloadUrl(feed, devFile), {
         headers: { "User-Agent": `Plotina-Desktop/${app.getVersion()}` },
     });
+    if (ymlRes.status >= 500) {
+        console.warn(`Plotina updater: GitHub dev feed HTTP ${ymlRes.status}; trying the edge mirror`);
+        ymlRes = await fetch(devMetadataFallbackUrl(devFile), {
+            headers: { "User-Agent": `Plotina-Desktop/${app.getVersion()}` },
+        });
+    }
     if (!ymlRes.ok) throw new Error(`Dev feed ${devFile} responded HTTP ${ymlRes.status}`);
     const yml = parseLatestYml(await ymlRes.text());
     if (!yml) throw new Error(`Dev feed ${devFile} is not parseable`);
