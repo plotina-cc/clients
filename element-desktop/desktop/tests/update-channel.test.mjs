@@ -334,15 +334,20 @@ test("a size mismatch is refused before install; the running image stays untouch
     const fileName = "Plotina-Desktop-1.12.32-plotina.9.AppImage";
     const ymlWrongSize = builderYml({ version: "1.12.32-plotina.9", fileName, sha512: sha, size: payload.length + 1 });
     const stub = stubFetch([
+        { has: "plotina.cc/dl/latest-linux.yml", respond: () => ymlResponse(ymlWrongSize) },
+        { has: "plotina.cc/dl/Plotina-Desktop.AppImage", respond: () => new Response(Buffer.from(payload), { status: 200, headers: { "content-length": String(payload.length) } }) },
         {
             has: "api.github.com",
-            respond: () => json([{ tag_name: "v1.12.32-plotina-desktop.9", draft: false, prerelease: false, assets: [{ name: "latest-linux.yml", browser_download_url: "stub://yml/latest-linux.yml" }, { name: fileName, browser_download_url: "stub://asset/" + fileName }] }]),
+            respond: (u) => {
+                throw new Error(`stable path must never call the GitHub API (${u})`);
+            },
         },
-        { has: "stub://yml/latest-linux.yml", respond: () => ymlResponse(ymlWrongSize) },
-        { has: "stub://asset/", respond: () => new Response(Buffer.from(payload), { status: 200, headers: { "content-length": String(payload.length) } }) },
     ]);
     try {
         await updater.checkForUpdates(true); // AppImage mode rejects in stageAppImage
+        assert.ok(stub.calls.some((u) => u === "https://plotina.cc/dl/latest-linux.yml"), "direct metadata fetched");
+        assert.ok(stub.calls.some((u) => u === "https://plotina.cc/dl/Plotina-Desktop.AppImage"), "alias artifact fetched");
+        assert.ok(!stub.calls.some((u) => u.includes("github.com")), `no GitHub at all: ${stub.calls}`);
         assert.equal(await fs.readFile(layout.current, "utf8"), "OLD-IMAGE-CONTENT", "running image untouched on size mismatch");
         assert.deepEqual(await fs.readdir(layout.appDir), [path.basename(layout.current)], "no partial file left beside the image");
         const updDir = path.join(layout.userData, "plotina-updates");
@@ -432,6 +437,7 @@ test("channel switch forgets a pending downloaded update", async () => {
     const stub = stubFetch([
         { has: "dev-latest/latest-linux-dev.yml", respond: () => ymlResponse(ymlText) },
         { has: `dev-latest/${fileName}`, respond: () => new Response(Buffer.from(payload), { status: 200, headers: { "content-length": String(payload.length) } }) },
+        { has: "plotina.cc/dl/latest-linux.yml", respond: () => new Response("not yet", { status: 404 }) },
         { has: "api.github.com", respond: () => json([]) },
     ]);
     try {
@@ -439,45 +445,37 @@ test("channel switch forgets a pending downloaded update", async () => {
         await updater.checkForUpdates(true);
         assert.ok(state.sent.some((s) => s.channel === "update-downloaded"), "dev update staged/swapped first");
 
-        // Switch back to stable (no stable releases stubbed) -> the old pending
+        // Switch back to stable (the /dl feed 404s here) -> the old pending
         // dev image must not be re-presented: the new check re-queries the feed.
         stub.calls.length = 0;
         state.sent.length = 0;
         const applied = updater.setUpdateChannel("stable");
         assert.equal(applied, "stable");
         await new Promise((r) => setTimeout(r, 50));
-        assert.ok(stub.calls.some((u) => u.includes("api.github.com")), "stable check ran, not a cached-dev re-show");
+        assert.ok(stub.calls.some((u) => u === "https://plotina.cc/dl/latest-linux.yml"), "direct stable feed ran, not a cached-dev re-show");
+        assert.ok(!stub.calls.some((u) => u.includes("api.github.com")), "stable check uses no GitHub API");
         assert.equal(state.sent.filter((s) => s.channel === "update-downloaded").length, 0, "no stale dev update-downloaded after switch");
     } finally {
         stub.restore();
     }
 });
 
-// --- stable-feed fetch stub: one release with latest-linux.yml --------------
-function stableFeedStub(layout, version, payload) {
+// --- stable direct-feed stub: /dl metadata + /dl alias artifact ------------
+function stableFeedStub(layout, version, payload, { wrongSize = false } = {}) {
     const sha = sha512B64(payload);
     const fileName = `Plotina-Desktop-${version}.AppImage`;
-    const ymlText = builderYml({ version, fileName, sha512: sha, size: payload.length });
-    const real = globalThis.fetch;
-    const apiPayload = [
+    const ymlText = builderYml({ version, fileName, sha512: sha, size: wrongSize ? payload.length + 1 : payload.length });
+    return stubFetch([
+        { has: "plotina.cc/dl/latest-linux.yml", respond: () => ymlResponse(ymlText) },
         {
-            tag_name: `v1.12.32-plotina-desktop.${version.match(/-plotina\.(\d+)/)?.[1] ?? "0"}`,
-            draft: false,
-            prerelease: false,
-            assets: [
-                { name: "latest-linux.yml", browser_download_url: "stub://yml/latest-linux.yml" },
-                { name: fileName, browser_download_url: "stub://asset/" + fileName },
-            ],
+            has: "plotina.cc/dl/Plotina-Desktop.AppImage",
+            respond: () => new Response(Buffer.from(payload), { status: 200, headers: { "content-length": String(payload.length) } }),
         },
-    ];
-    globalThis.fetch = async (url) => {
-        const u = String(url);
-        if (u.includes("api.github.com")) return json(apiPayload);
-        if (u.includes("stub://yml/latest-linux.yml") || u.includes("latest-linux.yml")) return ymlResponse(ymlText);
-        if (u.includes("stub://asset/") || u.includes(fileName)) {
-            return new Response(Buffer.from(payload), { status: 200, headers: { "content-length": String(payload.length) } });
-        }
-        return new Response("unstubbed " + u, { status: 404 });
-    };
-    return { restore: () => (globalThis.fetch = real) };
+        {
+            has: "api.github.com",
+            respond: (u) => {
+                throw new Error(`stable path must never list releases through the API (${u})`);
+            },
+        },
+    ]);
 }

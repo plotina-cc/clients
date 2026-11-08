@@ -17,15 +17,20 @@ all, which means the resources/app-update.yml that electron-builder packs is
 inert here unless something reads it.
 
 What this does instead (Windows NSIS + Linux AppImage, packaged builds only):
-  1. Reads resources/app-update.yml — the same file CI asserts on — for the
-     GitHub publish target (provider/owner/repo). The config.json
-     update_base_url merely flips the code path on in electron-main.ts; this
-     updater ignores its value, app-update.yml is the single source of truth.
-  2. Lists GitHub releases for that owner/repo and checks the metadata asset
-     (electron-builder's standard) on the newest releases: `latest.yml` on
-     Windows, `latest-linux.yml` on Linux (AppImage).
-  3. Downloads the artifact named by that yml and verifies the SHA-512
-     digest it publishes.
+  1. Reads resources/app-update.yml — the same file CI asserts on — as the
+     go/no-go gate and for the GitHub publish target (provider/owner/repo)
+     the dev feed derives from. The config.json update_base_url merely flips
+     the code path on in electron-main.ts; this updater ignores its value.
+  2. Stable channel: fetches the electron-builder metadata DIRECTLY from our
+     edge — https://plotina.cc/dl/latest-linux.yml (Linux AppImage) or
+     https://plotina.cc/dl/latest.yml (Windows NSIS). Those names mirror the
+     metadata assets of the newest stable Desktop release verbatim (infra
+     scripts/pull-release.py); no api.github.com listing is involved.
+  3. Downloads the stable alias artifact next to that metadata —
+     https://plotina.cc/dl/Plotina-Desktop.AppImage (alias of the versioned
+     AppImage the yml names, byte-identical) or
+     https://plotina.cc/dl/Plotina-Desktop-setup.exe — and verifies the
+     SHA-512 digest and the byte size it publishes.
   4. Windows: runs the installer with `/S --updated` and quits, same as
      autoUpdater.quitAndInstall() would.
      Linux (AppImage runtime, process.env.APPIMAGE set): the verified image is
@@ -51,10 +56,12 @@ SECURITY TRADE-OFF — unsigned updates, verification skipped EXPLICITLY:
   refuses, so it cannot be baked in at build time here. Because that
   silent-skip / later-fail-closed behaviour is not something to rely on, this
   updater does no Authenticode verification at all and says so: the update's
-  authenticity rests on (a) TLS to api.github.com / objects.githubusercontent
-  and (b) the sha512 in latest.yml, which stops corruption and casual tampering
-  but NOT a repo write or a GitHub account compromise — whoever can publish a
-  release can push any binary this updater will run as the user. A signed
+  authenticity rests on (a) TLS to plotina.cc — our own edge, whose /dl files
+  are pulled from the GitHub release by infra scripts/pull-release.py — and
+  (b) the sha512+size in the direct metadata, which stops corruption and
+  casual tampering but NOT an edge-host compromise or a GitHub repo write /
+  account compromise — whoever controls /dl content or can publish a release
+  can push any binary this updater will run as the user. A signed
   build would fix that and then `publisherName` must appear in
   app-update.yml (electron-builder writes it automatically once signing is
   configured); users also keep seeing SmartScreen warnings on first run and
@@ -68,8 +75,12 @@ patched (patch-shell.py) to answer the webapp's `ipcCall`s
 `getUpdateChannel` / `setUpdateChannel` from here.
 
 UPDATE CHANNELS (opt-in, default stable):
-  - stable: the GitHub release listing of plotina-cc/clients, latest.yml
-    (Windows NSIS) / latest-linux.yml (Linux AppImage), strictly-newer only.
+  - stable: the direct electron-builder metadata on our edge —
+    https://plotina.cc/dl/latest-linux.yml (Linux AppImage) /
+    https://plotina.cc/dl/latest.yml (Windows NSIS) — one GET, artifact from
+    the stable alias on the same path (/dl/Plotina-Desktop.AppImage /
+    /dl/Plotina-Desktop-setup.exe), strictly-newer only. No api.github.com
+    listing, no anonymous rate limit.
   - dev:    the rolling release tag `dev-latest` — latest-dev.yml /
     latest-linux-dev.yml read as direct assets (no API listing). Dev builds
     carry a normal semver-prerelease version (4.12.8-plotina.<N>-dev.<M>) and
@@ -90,17 +101,24 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createWriteStream } from "node:fs";
 
-const UPDATE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000; // GitHub's API allows 60 req/h/IP; don't burn the budget
+const UPDATE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000; // our own edge: stay polite, a check is one small GET
 const INITIAL_UPDATE_DELAY_MS = 30 * 1000;
-// Number of most recent releases whose metadata we actually fetch.
-const MAX_METADATA_CHECKS = 5;
-// electron-builder's per-platform metadata asset.
+// electron-builder's per-platform metadata asset, mirrored verbatim to /dl.
 const WINDOWS_METADATA_FILE = "latest.yml";
 const LINUX_METADATA_FILE = "latest-linux.yml";
+// Direct feed on our edge (infra scripts/pull-release.py mirrors the newest
+// stable release's metadata + stable artifact aliases under exactly these
+// names). The stable path never touches api.github.com.
+export const PLOTINA_DL_BASE = "https://plotina.cc/dl";
+export const STABLE_APPIMAGE_ALIAS = "Plotina-Desktop.AppImage";
+export const STABLE_NSIS_ALIAS = "Plotina-Desktop-setup.exe";
 // This repository hosts every client; a release is only a Desktop release if
-// its tag carries the Desktop marker. Without this, the Lite release (semver
-// 4.12.8 > Desktop 1.12.32) was picked as an "update" and its AppImage
-// replaced Plotina Desktop — the Desktop -> Lite downgrade seen in the wild.
+// its tag carries the Desktop marker. The direct /dl feed is already
+// Desktop-scoped by file name; the tag grammar stays exported as the single
+// documented rule for Desktop tags (CI, tooling and tests assert on it).
+// Without a filter like this, the Lite release (semver 4.12.8 > Desktop
+// 1.12.32) was once picked as an "update" and its AppImage replaced Plotina
+// Desktop — the Desktop -> Lite downgrade seen in the wild.
 const DESKTOP_RELEASE_TAG = /^v\d+\.\d+\.\d+-plotina-(?:desktop|element)\.\d+(?:-dev\.\d+)?$/;
 
 export function isDesktopReleaseTag(tag: string): boolean {
@@ -177,6 +195,36 @@ export function devMetadataDownloadUrl(feed: UpdateFeed, metadataFile: string): 
 
 export function devAssetDownloadUrl(feed: UpdateFeed, assetName: string): string {
     return `https://github.com/${feed.owner}/${feed.repo}/releases/download/${DEV_RELEASE_TAG}/${encodeURIComponent(assetName)}`;
+}
+
+/**
+ * Stable channel: electron-builder metadata file for this install, mirrored on
+ * our edge. null when the platform has no self-update path (deb, macOS).
+ */
+export function stableMetadataFileName(platform: string, env: Record<string, string | undefined>): string | null {
+    const mode = detectUpdateMode(platform, env);
+    if (mode === "windows-installer") return WINDOWS_METADATA_FILE;
+    if (mode === "linux-appimage") return LINUX_METADATA_FILE;
+    return null;
+}
+
+/** Direct metadata URL on /dl: one GET replaces the whole GitHub listing. */
+export function stableMetadataUrl(platform: string, env: Record<string, string | undefined>): string | null {
+    const file = stableMetadataFileName(platform, env);
+    return file ? `${PLOTINA_DL_BASE}/${file}` : null;
+}
+
+/**
+ * Stable alias of the artifact on /dl. The yml's versioned fileName is NOT
+ * used to build the URL: pull-release.py mirrors the newest release under
+ * these fixed names, byte-identical to the versioned asset, so the yml's
+ * sha512+size verify against exactly what /dl serves.
+ */
+export function stableArtifactUrl(platform: string, env: Record<string, string | undefined>): string | null {
+    const mode = detectUpdateMode(platform, env);
+    if (mode === "windows-installer") return `${PLOTINA_DL_BASE}/${STABLE_NSIS_ALIAS}`;
+    if (mode === "linux-appimage") return `${PLOTINA_DL_BASE}/${STABLE_APPIMAGE_ALIAS}`;
+    return null;
 }
 
 /**
@@ -359,8 +407,16 @@ export function parseLatestYml(text: string): LatestYml | null {
     // top-level (column-0) size, when present: a cheap second gate next to
     // the digest so truncated or padded downloads are refused explicitly.
     const sizeRaw = grab(/^size:\s*(\d+)$/m);
+    let size = sizeRaw === null || sizeRaw === "" ? null : Number(sizeRaw);
+    if (size === null) {
+        // electron-builder writes the size ONLY per files entry in
+        // latest-linux.yml (the top level has sha512+path but no size). Take
+        // the size of the first entry — the same one `fileName` came from.
+        const firstBlock = text.split(/\n(?=\s*-\s*url:)/).find((b) => /^\s*-\s*url:/.test(b));
+        const entrySize = firstBlock ? /^ {2,}size:\s*(\d+)/m.exec(firstBlock) : null;
+        if (entrySize) size = Number(entrySize[1]);
+    }
     if (!version || !fileName || !sha512) return null;
-    const size = sizeRaw === null || sizeRaw === "" ? null : Number(sizeRaw);
     return { version, fileName, sha512, releaseDate: releaseDate ?? "", size: Number.isFinite(size) ? size : null };
 }
 
@@ -392,7 +448,6 @@ export async function checkForUpdates(
     }
     if (checking) return;
     checking = true;
-    const metadataFile = UPDATE_MODE === "linux-appimage" ? LINUX_METADATA_FILE : WINDOWS_METADATA_FILE;
     try {
         if (pendingUpdate) {
             // Upstream does the same: a downloaded update is re-shown rather than re-fetched.
@@ -414,51 +469,46 @@ export async function checkForUpdates(
             await checkDevFeed(feed, allowDowngrade, manual);
             return;
         }
-        const res = await fetch(`https://api.github.com/repos/${feed.owner}/${feed.repo}/releases?per_page=100`, {
-            headers: {
-                Accept: "application/vnd.github+json",
-                "User-Agent": `Plotina-Desktop/${app.getVersion()}`,
-            },
-        });
-        if (!res.ok) throw new Error(`GitHub releases responded HTTP ${res.status}`);
-        const releases = (await res.json()) as Release[];
-        const candidates = releases
-            .filter((r) => !r.draft && !r.prerelease
-                && isDesktopReleaseTag(r.tag_name)
-                && r.assets.some((a) => a.name === metadataFile))
-            .slice(0, MAX_METADATA_CHECKS);
-
-        let best: { release: Release; yml: LatestYml } | null = null;
-        for (const release of candidates) {
-            const ymlAsset = release.assets.find((a) => a.name === metadataFile)!;
-            const ymlRes = await fetch(ymlAsset.browser_download_url, {
-                headers: { "User-Agent": `Plotina-Desktop/${app.getVersion()}` },
-            });
-            if (!ymlRes.ok) continue;
-            const yml = parseLatestYml(await ymlRes.text());
-            if (!yml) continue;
-            // Belt and braces: even inside a Desktop-tagged release, never
-            // accept another product's artifact.
-            if (!yml.fileName.startsWith("Plotina-Desktop")) continue;
-            const candidateBuild = parseVersion(yml.version)?.build;
-            const sameBuildSwitch =
-                channelSwitch && currentBuild !== undefined && candidateBuild === currentBuild;
-            if (!acceptCandidate(yml.version, app.getVersion(), allowDowngrade || sameBuildSwitch)) continue;
-            if (!best || isVersionNewer(yml.version, best.yml.version)) {
-                best = { release, yml };
-            }
-        }
-
-        if (!best) {
+        // Stable: one direct GET of the electron-builder metadata on our edge.
+        // No api.github.com release listing — /dl/latest[-linux].yml always
+        // describes exactly the newest stable Desktop release (pull-release.py
+        // mirrors it from the tag picked by the Desktop marker).
+        const metaUrl = stableMetadataUrl(process.platform, process.env);
+        const artifactUrl = stableArtifactUrl(process.platform, process.env);
+        if (!metaUrl || !artifactUrl) {
+            // deb/macOS/unknown: no self-update path (guarded above; belt and braces).
             if (manual) sendUpdateStatus(false);
             return;
         }
-
+        const res = await fetch(metaUrl, {
+            headers: { "User-Agent": `Plotina-Desktop/${app.getVersion()}` },
+        });
+        if (!res.ok) throw new Error(`Stable feed ${metaUrl} responded HTTP ${res.status}`);
+        const yml = parseLatestYml(await res.text());
+        if (!yml) throw new Error(`Stable feed ${metaUrl} is not parseable`);
+        // Belt and braces: even inside a Desktop-scoped feed name, never
+        // accept another product's artifact.
+        if (!yml.fileName.startsWith("Plotina-Desktop")) {
+            throw new Error(`Stable feed ${metaUrl} names ${yml.fileName}, which is not a Plotina Desktop artifact`);
+        }
+        const candidateBuild = parseVersion(yml.version)?.build;
+        const sameBuildSwitch =
+            channelSwitch && currentBuild !== undefined && candidateBuild === currentBuild;
+        if (!acceptCandidate(yml.version, app.getVersion(), allowDowngrade || sameBuildSwitch)) {
+            if (manual) sendUpdateStatus(false);
+            return;
+        }
+        const release: Release = {
+            tag_name: "dl-stable",
+            draft: false,
+            prerelease: false,
+            assets: [{ name: yml.fileName, browser_download_url: artifactUrl }],
+        };
         sendUpdateStatus(true); // "update-available" equivalent
         if (UPDATE_MODE === "linux-appimage") {
-            await downloadAndSwapAppImage(best.release, best.yml);
+            await downloadAndSwapAppImage(release, yml);
         } else {
-            await downloadAndVerify(best.release, best.yml);
+            await downloadAndVerify(release, yml);
         }
     } catch (e) {
         console.warn("Plotina updater: check failed", e);
@@ -470,9 +520,9 @@ export async function checkForUpdates(
 
 /**
  * Dev channel: read the electron-builder metadata asset directly off the
- * rolling `dev-latest` release (no api.github.com listing, so the 60 req/h
- * budget stays with the stable checks) and run it through the exact same
- * download + verify + install path as stable. Dev versions carry a normal
+ * rolling `dev-latest` release (direct asset download, no API listing — the
+ * same no-API rule the stable /dl path follows) and run it through the exact
+ * same download + verify + install path as stable. Dev versions carry a normal
  * semver `-dev.<M>` suffix and compare normally.
  */
 async function checkDevFeed(feed: UpdateFeed, allowDowngrade: boolean, manual: boolean): Promise<void> {
@@ -876,12 +926,12 @@ export async function start(_updateBaseUrl: string): Promise<void> {
         console.warn(`Plotina updater: no usable GitHub feed in ${path.join(process.resourcesPath, "app-update.yml")}, auto update disabled`);
         return;
     }
-    const metadataFile = UPDATE_MODE === "linux-appimage" ? LINUX_METADATA_FILE : WINDOWS_METADATA_FILE;
     const channel = readUpdateChannel();
+    const where = channel === "dev"
+        ? `GitHub ${feed.owner}/${feed.repo} dev-latest (${devMetadataFileName(process.platform, process.env)})`
+        : stableMetadataUrl(process.platform, process.env);
     console.log(
-        `Plotina updater: channel=${channel}, checking ${feed.owner}/${feed.repo} ` +
-            `${channel === "dev" ? `dev-latest (${devMetadataFileName(process.platform, process.env)})` : `releases (${metadataFile})`} ` +
-            `for a newer version than ${app.getVersion()}`,
+        `Plotina updater: channel=${channel}, checking ${where} for a newer version than ${app.getVersion()}`,
     );
     setTimeout(() => void checkForUpdates(false), INITIAL_UPDATE_DELAY_MS);
     setInterval(() => void checkForUpdates(false), UPDATE_POLL_INTERVAL_MS);
