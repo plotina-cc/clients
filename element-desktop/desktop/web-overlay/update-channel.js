@@ -515,7 +515,17 @@ exist, so this file stays inert.
         var existingLabel = document.getElementById(TAB_KEY);
         if (!existingLabel || !existingLabel.isConnected) {
             if (existingLabel) existingLabel.remove();
-            tabList.appendChild(buildTabLabel(s));
+            var updatesLabel = buildTabLabel(s);
+            // Keep Updates immediately above Help & About, not after it.
+            var helpTab = null;
+            var labels = tabList.querySelectorAll(".mx_TabbedView_tabLabel");
+            for (var i = 0; i < labels.length; i++) {
+                if (labels[i].id === TAB_KEY) continue;
+                var text = (labels[i].textContent || "").trim();
+                if (/Помощь|Help\s*&\s*About/i.test(text)) { helpTab = labels[i]; break; }
+            }
+            if (helpTab && helpTab.parentElement === tabList) tabList.insertBefore(updatesLabel, helpTab);
+            else tabList.appendChild(updatesLabel);
         }
         var existingPanel = document.getElementById(PANEL_KEY);
         if (!existingPanel || !existingPanel.isConnected) {

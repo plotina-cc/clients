@@ -501,7 +501,7 @@
     range.max = "100";
     range.step = "5";
     range.value = String(level);
-    range.style.cssText = "flex:1 1 auto;accent-color:#17795a;";
+    range.style.cssText = "flex:1 1 auto;accent-color:var(--cpd-color-text-action-accent,#17795a);";
 
     var value = document.createElement("span");
     value.id = "plotina-noise-value";
@@ -522,12 +522,17 @@
     // storage key boot.js reads at load; the warm pool switches in setBackend().
     var beRow = document.createElement("div");
     beRow.setAttribute("data-plotina-backend-row", "");
-    beRow.style.cssText = "flex-basis:100%;display:flex;align-items:center;gap:8px;margin-top:8px;";
+    beRow.style.cssText = "flex-basis:100%;display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:8px;position:relative;";
     var beLabel = document.createElement("span");
     beLabel.textContent = s.backend + ":";
+
+    // Element's own selects are React/Compound controls; a native <select> draws
+    // its popup with the OS palette (white rows, blue selection) and ignores the
+    // Element theme. Keep a hidden native select for the existing callers and
+    // tests, but drive the visible control with a themed menu.
     var beSelect = document.createElement("select");
     beSelect.id = "plotina-noise-backend";
-    beSelect.style.cssText = "font:inherit;background:transparent;color:inherit;border:1px solid rgba(128,128,128,.5);border-radius:6px;padding:2px 6px;";
+    beSelect.style.cssText = "display:none;";
     beSelect.setAttribute("aria-label", s.backend);
     L.BACKENDS.forEach(function (id) {
       var opt = document.createElement("option");
@@ -540,10 +545,67 @@
     beSelect.addEventListener("change", function () {
       setBackend(beSelect.value);
     });
+
+    var beButton = document.createElement("button");
+    beButton.type = "button";
+    beButton.id = "plotina-noise-backend-button";
+    beButton.style.cssText = "display:inline-flex;align-items:center;justify-content:space-between;gap:8px;min-width:88px;padding:3px 8px;border:1px solid var(--cpd-color-border-interactive-secondary,rgba(128,128,128,.5));border-radius:6px;background:var(--cpd-color-bg-subtle-primary,rgba(128,128,128,.12));color:var(--cpd-color-text-primary,inherit);font:inherit;cursor:pointer;";
+    beButton.setAttribute("aria-haspopup", "listbox");
+    beButton.setAttribute("aria-expanded", "false");
+
+    var beMenu = document.createElement("div");
+    beMenu.id = "plotina-noise-backend-menu";
+    beMenu.setAttribute("role", "listbox");
+    beMenu.setAttribute("aria-label", s.backend);
+    beMenu.style.cssText = "display:none;position:absolute;left:0;top:calc(100% + 4px);z-index:20;min-width:148px;padding:4px;border:1px solid var(--cpd-color-border-interactive-secondary,rgba(128,128,128,.5));border-radius:8px;background:var(--cpd-color-bg-canvas-default,#1b1d22);box-shadow:0 8px 24px rgba(0,0,0,.28);";
+
+    function closeBackendMenu() {
+      beMenu.style.display = "none";
+      beButton.setAttribute("aria-expanded", "false");
+    }
+
+    function renderBackendMenu() {
+      beMenu.textContent = "";
+      L.BACKENDS.forEach(function (id) {
+        var option = document.createElement("button");
+        option.type = "button";
+        option.setAttribute("role", "option");
+        option.setAttribute("data-plotina-backend-option", id);
+        option.textContent = L.BACKEND_LABELS[id];
+        option.style.cssText = "display:block;width:100%;padding:6px 8px;border:0;border-radius:6px;text-align:left;font:inherit;cursor:pointer;background:transparent;color:var(--cpd-color-text-primary,inherit);";
+        option.addEventListener("click", function () {
+          setBackend(id);
+          beSelect.value = id;
+          closeBackendMenu();
+          syncBackendSelect();
+        });
+        beMenu.appendChild(option);
+      });
+    }
+
+    beButton.addEventListener("click", function (evt) {
+      evt.stopPropagation();
+      if (beSelect.disabled) return;
+      if (beMenu.style.display === "block") {
+        closeBackendMenu();
+        return;
+      }
+      renderBackendMenu();
+      beMenu.style.display = "block";
+      beButton.setAttribute("aria-expanded", "true");
+      syncBackendSelect();
+    });
+    document.addEventListener("mousedown", function (evt) {
+      if (!beMenu.isConnected) return;
+      if (!beMenu.contains(evt.target) && evt.target !== beButton) closeBackendMenu();
+    });
+
     var beNote = document.createElement("span");
     beNote.setAttribute("data-plotina-backend-note", "");
     beNote.style.cssText = "font-size:12px;opacity:.6;";
     beRow.appendChild(beLabel);
+    beRow.appendChild(beButton);
+    beRow.appendChild(beMenu);
     beRow.appendChild(beSelect);
     beRow.appendChild(beNote);
 
@@ -568,6 +630,20 @@
     var text = backendOverride ? "?plotina-backend=" + backend : (L.strings(lang).backendNote || "");
     var notes = document.querySelectorAll("[data-plotina-backend-note]");
     for (var j = 0; j < notes.length; j++) notes[j].textContent = text;
+
+    var buttons = document.querySelectorAll("#plotina-noise-backend-button");
+    for (var k = 0; k < buttons.length; k++) {
+      buttons[k].textContent = (L.BACKEND_LABELS[backend] || backend) + " ▾";
+      buttons[k].disabled = !!backendOverride;
+      buttons[k].setAttribute("aria-label", (L.strings(lang).backend || "Noise suppression") + ": " + (L.BACKEND_LABELS[backend] || backend));
+    }
+    var options = document.querySelectorAll("[data-plotina-backend-option]");
+    for (var m = 0; m < options.length; m++) {
+      var selected = options[m].getAttribute("data-plotina-backend-option") === backend;
+      options[m].setAttribute("aria-selected", selected ? "true" : "false");
+      options[m].style.background = selected ? "var(--cpd-color-bg-action-primary-rest,#17795a)" : "transparent";
+      options[m].style.color = selected ? "var(--cpd-color-text-on-solid-primary,#fff)" : "var(--cpd-color-text-primary,inherit)";
+    }
   }
 
   function inject() {
