@@ -1,13 +1,17 @@
 diff --git a/src/app/features/settings/about/About.tsx b/src/app/features/settings/about/About.tsx
-index 3e3a13a..bb76f2e 100644
+index 3e3a13a..f2a3a2a 100644
 --- a/src/app/features/settings/about/About.tsx
 +++ b/src/app/features/settings/about/About.tsx
-@@ -46,15 +46,15 @@ export function About({ requestClose }: AboutProps) {
-                   <Box direction="Column" gap="100">
-                     <Box gap="100" alignItems="End">
+@@ -1,5 +1,5 @@
+ import React from 'react';
+-import { Box, Text, IconButton, Icon, Icons, Scroll, Button, config, toRem } from 'folds';
++import { Box, Text, IconButton, Icon, Icons, Scroll, Button, toRem } from 'folds';
+ import { Page, PageContent, PageHeader } from '../../../components/page';
+ import { SequenceCard } from '../../../components/sequence-card';
+ import { SequenceCardStyle } from '../styles.css';
+@@ -48,13 +48,13 @@ export function About({ requestClose }: AboutProps) {
                        <Text size="H3">Plotina Lite Web</Text>
--                      <Text size="T200">v4.12.8</Text>
-+                      <Text size="T200">v4.12.8</Text>
+                       <Text size="T200">v4.12.8</Text>
                      </Box>
 -                    <Text>Yet another matrix client.</Text>
 +                    <Text>Матрикс-клиент для сообщества Плотина.</Text>
@@ -21,34 +25,174 @@ index 3e3a13a..bb76f2e 100644
                        rel="noreferrer noopener"
                        target="_blank"
                        variant="Secondary"
-@@ -63,11 +63,11 @@ export function About({ requestClose }: AboutProps) {
+@@ -63,20 +63,7 @@ export function About({ requestClose }: AboutProps) {
                        radii="300"
                        before={<Icon src={Icons.Code} size="100" filled />}
                      >
 -                      <Text size="B300">Source Code</Text>
-+                      <Text size="B300">Исходный код</Text>
-                     </Button>
-                     <Button
-                       as="a"
+-                    </Button>
+-                    <Button
+-                      as="a"
 -                      href="https://cinny.in/#sponsor"
-+                      href="https://plotina.cc"
-                       rel="noreferrer noopener"
-                       target="_blank"
-                       variant="Critical"
-@@ -76,7 +76,7 @@ export function About({ requestClose }: AboutProps) {
-                       radii="300"
-                       before={<Icon src={Icons.Heart} size="100" filled />}
-                     >
+-                      rel="noreferrer noopener"
+-                      target="_blank"
+-                      variant="Critical"
+-                      fill="Soft"
+-                      size="300"
+-                      radii="300"
+-                      before={<Icon src={Icons.Heart} size="100" filled />}
+-                    >
 -                      <Text size="B300">Support</Text>
-+                      <Text size="B300">Плотина</Text>
++                      <Text size="B300">Исходный код</Text>
                      </Button>
                    </Box>
                  </Box>
+@@ -121,138 +108,10 @@ export function About({ requestClose }: AboutProps) {
+                   />
+                 </SequenceCard>
+               </Box>
+-              <Box direction="Column" gap="100">
+-                <Text size="L400">Credits</Text>
+-                <SequenceCard
+-                  className={SequenceCardStyle}
+-                  variant="SurfaceVariant"
+-                  direction="Column"
+-                  gap="400"
+-                >
+-                  <Box
+-                    as="ul"
+-                    direction="Column"
+-                    gap="200"
+-                    style={{
+-                      margin: 0,
+-                      paddingLeft: config.space.S400,
+-                    }}
+-                  >
+-                    <li>
+-                      <Text size="T300">
+-                        The{' '}
+-                        <a
+-                          href="https://github.com/matrix-org/matrix-js-sdk"
+-                          rel="noreferrer noopener"
+-                          target="_blank"
+-                        >
+-                          matrix-js-sdk
+-                        </a>{' '}
+-                        is ©{' '}
+-                        <a
+-                          href="https://matrix.org/foundation"
+-                          rel="noreferrer noopener"
+-                          target="_blank"
+-                        >
+-                          The Matrix.org Foundation C.I.C
+-                        </a>{' '}
+-                        used under the terms of{' '}
+-                        <a
+-                          href="http://www.apache.org/licenses/LICENSE-2.0"
+-                          rel="noreferrer noopener"
+-                          target="_blank"
+-                        >
+-                          Apache 2.0
+-                        </a>
+-                        .
+-                      </Text>
+-                    </li>
+-                    <li>
+-                      <Text size="T300">
+-                        The{' '}
+-                        <a
+-                          href="https://github.com/mozilla/twemoji-colr"
+-                          target="_blank"
+-                          rel="noreferrer noopener"
+-                        >
+-                          twemoji-colr
+-                        </a>{' '}
+-                        font is ©{' '}
+-                        <a href="https://mozilla.org/" target="_blank" rel="noreferrer noopener">
+-                          Mozilla Foundation
+-                        </a>{' '}
+-                        used under the terms of{' '}
+-                        <a
+-                          href="http://www.apache.org/licenses/LICENSE-2.0"
+-                          target="_blank"
+-                          rel="noreferrer noopener"
+-                        >
+-                          Apache 2.0
+-                        </a>
+-                        .
+-                      </Text>
+-                    </li>
+-                    <li>
+-                      <Text size="T300">
+-                        The{' '}
+-                        <a
+-                          href="https://twemoji.twitter.com"
+-                          target="_blank"
+-                          rel="noreferrer noopener"
+-                        >
+-                          Twemoji
+-                        </a>{' '}
+-                        emoji art is ©{' '}
+-                        <a
+-                          href="https://twemoji.twitter.com"
+-                          target="_blank"
+-                          rel="noreferrer noopener"
+-                        >
+-                          Twitter, Inc and other contributors
+-                        </a>{' '}
+-                        used under the terms of{' '}
+-                        <a
+-                          href="https://creativecommons.org/licenses/by/4.0/"
+-                          target="_blank"
+-                          rel="noreferrer noopener"
+-                        >
+-                          CC-BY 4.0
+-                        </a>
+-                        .
+-                      </Text>
+-                    </li>
+-                    <li>
+-                      <Text size="T300">
+-                        The{' '}
+-                        <a
+-                          href="https://material.io/design/sound/sound-resources.html"
+-                          target="_blank"
+-                          rel="noreferrer noopener"
+-                        >
+-                          Material sound resources
+-                        </a>{' '}
+-                        are ©{' '}
+-                        <a href="https://google.com" target="_blank" rel="noreferrer noopener">
+-                          Google
+-                        </a>{' '}
+-                        used under the terms of{' '}
+-                        <a
+-                          href="https://creativecommons.org/licenses/by/4.0/"
+-                          target="_blank"
+-                          rel="noreferrer noopener"
+-                        >
+-                          CC-BY 4.0
+-                        </a>
+-                        .
+-                      </Text>
+-                    </li>
+-                  </Box>
+-                </SequenceCard>
+-              </Box>
+             </Box>
+           </PageContent>
+         </Scroll>
+       </Box>
+     </Page>
+   );
+-}
++}
+\ No newline at end of file
 diff --git a/src/app/pages/auth/AuthFooter.tsx b/src/app/pages/auth/AuthFooter.tsx
-index 1f92449..8f2e9b6 100644
+index 1f92449..b1d9f7f 100644
 --- a/src/app/pages/auth/AuthFooter.tsx
 +++ b/src/app/pages/auth/AuthFooter.tsx
-@@ -5,17 +5,17 @@ import * as css from './styles.css';
+@@ -5,13 +5,13 @@ import * as css from './styles.css';
  export function AuthFooter() {
    return (
      <Box className={css.AuthFooter} justifyContent="Center" gap="400" wrap="Wrap">
@@ -65,11 +209,6 @@ index 1f92449..8f2e9b6 100644
          target="_blank"
          rel="noreferrer"
        >
--        v4.12.8
-+        v4.12.8
-       </Text>
-       <Text
-         as="a"
 @@ -26,9 +26,6 @@ export function AuthFooter() {
        >
          Исходный код
@@ -81,10 +220,10 @@ index 1f92449..8f2e9b6 100644
          Powered by Matrix
        </Text>
 diff --git a/src/app/pages/client/WelcomePage.tsx b/src/app/pages/client/WelcomePage.tsx
-index abc3db2..461c3cb 100644
+index abc3db2..f0f2665 100644
 --- a/src/app/pages/client/WelcomePage.tsx
 +++ b/src/app/pages/client/WelcomePage.tsx
-@@ -18,13 +18,13 @@ export function WelcomePage() {
+@@ -18,9 +18,9 @@ export function WelcomePage() {
              title="Welcome to Plotina Lite Web"
              subTitle={
                <span>
@@ -96,12 +235,7 @@ index abc3db2..461c3cb 100644
                    target="_blank"
                    rel="noreferrer noopener"
                  >
--                  v4.12.8
-+                  v4.12.8
-                 </a>
-               </span>
-             }
-@@ -33,25 +33,25 @@ export function WelcomePage() {
+@@ -33,25 +33,13 @@ export function WelcomePage() {
                <Box grow="Yes" style={{ maxWidth: toRem(300) }} direction="Column" gap="300">
                  <Button
                    as="a"
@@ -113,21 +247,19 @@ index abc3db2..461c3cb 100644
                  >
                    <Text as="span" size="B400" truncate>
 -                    Source Code
-+                    Исходный код
-                   </Text>
-                 </Button>
-                 <Button
-                   as="a"
+-                  </Text>
+-                </Button>
+-                <Button
+-                  as="a"
 -                  href="https://cinny.in/#sponsor"
-+                  href="https://plotina.cc"
-                   target="_blank"
-                   rel="noreferrer noopener"
-                   fill="Soft"
-                   before={<Icon size="200" src={Icons.Heart} />}
-                 >
-                   <Text as="span" size="B400" truncate>
+-                  target="_blank"
+-                  rel="noreferrer noopener"
+-                  fill="Soft"
+-                  before={<Icon size="200" src={Icons.Heart} />}
+-                >
+-                  <Text as="span" size="B400" truncate>
 -                    Support
-+                    Плотина
++                    Исходный код
                    </Text>
                  </Button>
                </Box>

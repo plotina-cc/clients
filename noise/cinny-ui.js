@@ -180,6 +180,257 @@
       "linear-gradient(to right, " + accent + " 0 " + pct + "%, " + track + " " + pct + "% 100%)";
   }
 
+  /* ---------------------------------------------------------------- channel
+   * Lite Desktop (Electron) only: a "Канал обновлений" block directly under
+   * the noise card, driven by the preload bridge (window.plotinaLite.updater
+   * .channel). On Cinny Web the bridge does not exist and the block is never
+   * built, so the settings page stays untouched there. All policy (dev
+   * acknowledgement, downgrade rules) lives in the main process; this only
+   * renders state and forwards the user's choice. The select is native like
+   * the backend picker — layout properties only, no appearance overrides. */
+  var CHANNEL_TEXT = {
+    channelLabel: "Канал обновлений",
+    stableLabel: "Стабильный",
+    devLabel: "Dev",
+    devWarningMessage: "Включить Dev-канал обновлений?",
+    devWarningDetail:
+      "Dev-канал получает тестовые сборки с GitHub-релиза dev-latest. " +
+      "Они не проходят ту же проверку, что стабильные, могут откатываться и " +
+      "меняться без предупреждения. Возврат на стабильный канал — отдельное " +
+      "действие, оно может установить версию ниже текущей.",
+    checkForUpdates: "Проверить обновления",
+  };
+
+  function channelBridge() {
+    var lite = global.plotinaLite;
+    var up = lite && lite.updater;
+    var ch = up && up.channel;
+    if (!ch || typeof ch.get !== "function" || typeof ch.set !== "function") return null;
+    return up;
+  }
+
+  function errText(e) {
+    return String((e && e.message) || e || "неизвестная ошибка");
+  }
+
+  function channelStatusText(st) {
+    if (!st || !st.state) return "";
+    switch (st.state) {
+      case "checking":
+        return "Проверяю обновления…";
+      case "available":
+        return "Доступно обновление: " + st.version + (st.downgrade ? " (понижение версии)" : "");
+      case "downloaded":
+        return "Скачано: " + st.version + " — перезапустите приложение для установки";
+      case "up-to-date":
+        return "Обновлений нет" + (st.version ? " (" + st.version + ")" : "");
+      case "channel":
+        return (
+          CHANNEL_TEXT.channelLabel +
+          ": " +
+          (st.channel === "dev" ? CHANNEL_TEXT.devLabel : CHANNEL_TEXT.stableLabel)
+        );
+      case "channel-confirmation-required":
+        return "Для Dev-канала требуется подтверждение — выберите его ещё раз";
+      case "no-feed":
+        return "Лента обновлений недоступна";
+      case "not-packaged":
+        return "Обновления недоступны в этой сборке";
+      case "manual-required":
+        return st.message || "Обновления управляются вручную";
+      case "error":
+        return "Ошибка: " + (st.message || "неизвестно");
+      default:
+        return "";
+    }
+  }
+
+  var channelStatusUnsub = null;
+
+  function subscribeChannelStatus() {
+    if (channelStatusUnsub) return;
+    var lite = global.plotinaLite;
+    if (!lite || !lite.updater || typeof lite.updater.onStatus !== "function") return;
+    try {
+      channelStatusUnsub = lite.updater.onStatus(function (st) {
+        // One live subscription for the whole page: address the current block,
+        // so settings re-renders cannot stack listeners or hit detached nodes.
+        var el = document.querySelector("[data-plotina-channel-status]");
+        if (!el || !el.isConnected) return;
+        var msg = channelStatusText(st);
+        if (msg) el.textContent = msg;
+      });
+    } catch (e) {
+      channelStatusUnsub = null;
+    }
+  }
+
+  function buildChannelBlock(surface) {
+    var up = channelBridge();
+    if (!up) return null;
+
+    var block = document.createElement("div");
+    block.setAttribute("data-plotina-channel-block", "");
+    block.style.cssText = "display:flex;flex-direction:column;margin:0 0 16px;";
+
+    var heading = document.createElement("p");
+    heading.textContent = CHANNEL_TEXT.channelLabel;
+    heading.style.cssText =
+      "font-size:16px;font-weight:600;line-height:1.3;margin:0 0 10px;color:" +
+      surface.color + ";";
+
+    var card = document.createElement("div");
+    card.style.cssText =
+      "background:" + surface.background + ";color:" + surface.color +
+      ";border-radius:12px;padding:16px;";
+
+    var row = document.createElement("div");
+    row.style.cssText = "display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;";
+
+    var label = document.createElement("span");
+    label.textContent = CHANNEL_TEXT.channelLabel + ":";
+    label.style.cssText = "flex:0 0 auto;font-size:16px;";
+
+    var select = document.createElement("select");
+    select.setAttribute("data-plotina-channel", "");
+    select.setAttribute("aria-label", CHANNEL_TEXT.channelLabel);
+    select.style.cssText = "font:inherit;max-width:220px;flex:0 0 auto;";
+    var optStable = document.createElement("option");
+    optStable.value = "stable";
+    optStable.textContent = CHANNEL_TEXT.stableLabel;
+    var optDev = document.createElement("option");
+    optDev.value = "dev";
+    optDev.textContent = CHANNEL_TEXT.devLabel;
+    select.appendChild(optStable);
+    select.appendChild(optDev);
+
+    var checkBtn = document.createElement("button");
+    checkBtn.type = "button";
+    checkBtn.textContent = CHANNEL_TEXT.checkForUpdates;
+    checkBtn.style.cssText = "font:inherit;flex:0 0 auto;padding:3px 12px;cursor:pointer;";
+
+    var noteEl = document.createElement("div");
+    noteEl.setAttribute("data-plotina-channel-note", "");
+    noteEl.style.cssText = "flex-basis:100%;font-size:12px;opacity:.6;";
+
+    var statusEl = document.createElement("div");
+    statusEl.setAttribute("data-plotina-channel-status", "");
+    statusEl.style.cssText = "flex-basis:100%;font-size:12px;opacity:.8;margin-top:4px;";
+
+    var currentChannel = "stable";
+    var pinnedByEnv = false;
+
+    function paintState(state) {
+      if (!state || !state.channel) return;
+      var t = state.text;
+      if (t) {
+        Object.keys(CHANNEL_TEXT).forEach(function (k) {
+          if (typeof t[k] === "string" && t[k]) CHANNEL_TEXT[k] = t[k];
+        });
+      }
+      currentChannel = state.channel === "dev" ? "dev" : "stable";
+      pinnedByEnv = !!state.pinnedByEnv;
+      select.disabled = pinnedByEnv;
+      select.value = currentChannel;
+      heading.textContent = CHANNEL_TEXT.channelLabel;
+      label.textContent = CHANNEL_TEXT.channelLabel + ":";
+      optStable.textContent = CHANNEL_TEXT.stableLabel;
+      optDev.textContent = CHANNEL_TEXT.devLabel;
+      checkBtn.textContent = CHANNEL_TEXT.checkForUpdates;
+      noteEl.textContent =
+        "Текущий канал: " +
+        (currentChannel === "dev" ? CHANNEL_TEXT.devLabel : CHANNEL_TEXT.stableLabel) +
+        (state.currentVersion ? " · версия " + state.currentVersion : "") +
+        (pinnedByEnv ? " · закреплён переменной окружения" : "");
+    }
+
+    function setChannelValue(next) {
+      select.disabled = true;
+      Promise.resolve(up.channel.set(next, { acknowledged: next === "dev" })).then(
+        function (res) {
+          if (res && res.ok) {
+            paintState(res.state || { channel: next });
+            statusEl.textContent = "";
+            return;
+          }
+          select.disabled = pinnedByEnv;
+          select.value = currentChannel;
+          if (res && res.needsConfirmation) {
+            statusEl.textContent = "Подтверждение не получено — канал не изменён";
+          } else {
+            statusEl.textContent = "Ошибка: " + ((res && res.error) || "не удалось изменить канал");
+          }
+        },
+        function (e) {
+          select.disabled = pinnedByEnv;
+          select.value = currentChannel;
+          statusEl.textContent = "Ошибка: " + errText(e);
+        }
+      );
+    }
+
+    // Dev is an explicit opt-in: mirror the native menu's warning dialog before
+    // the set call. Without the acknowledgement the main process refuses anyway
+    // (writeChannel -> needsConfirmation), so this confirm is the only gate.
+    select.addEventListener("change", function () {
+      var next = select.value;
+      if (next === currentChannel) return;
+      if (next === "dev") {
+        var ok = false;
+        try {
+          ok = global.confirm(CHANNEL_TEXT.devWarningMessage + "\n\n" + CHANNEL_TEXT.devWarningDetail);
+        } catch (e) {
+          ok = false;
+        }
+        if (!ok) {
+          select.value = currentChannel;
+          return;
+        }
+      }
+      setChannelValue(next);
+    });
+
+    checkBtn.addEventListener("click", function () {
+      if (typeof up.checkForUpdates !== "function") return;
+      checkBtn.disabled = true;
+      statusEl.textContent = "Проверяю обновления…";
+      Promise.resolve(up.checkForUpdates()).then(
+        function () {
+          checkBtn.disabled = false;
+          // Real outcome arrives later as an 'update-status' event.
+        },
+        function (e) {
+          checkBtn.disabled = false;
+          statusEl.textContent = "Ошибка: " + errText(e);
+        }
+      );
+    });
+
+    row.appendChild(label);
+    row.appendChild(select);
+    row.appendChild(checkBtn);
+    row.appendChild(noteEl);
+    row.appendChild(statusEl);
+    block.appendChild(heading);
+    block.appendChild(card);
+    card.appendChild(row);
+
+    Promise.resolve()
+      .then(function () {
+        return up.channel.get();
+      })
+      .then(
+        function (state) {
+          paintState(state);
+        },
+        function (e) {
+          statusEl.textContent = "Ошибка: " + errText(e);
+        }
+      );
+    subscribeChannelStatus();
+    return block;
+  }
+
   function buildBlock(surface, lang) {
     var s = L.strings(lang);
     var level = readLevel();
@@ -245,27 +496,17 @@
     var beSelect = document.createElement("select");
     beSelect.setAttribute("data-plotina-backend", "");
     beSelect.setAttribute("aria-label", s.backend || "Noise suppression");
-    // A native <select> ignores background/color in WebKitGTK: the closed
-    // field is painted by GTK (light) while our text colour is light too, so
-    // the selected value disappears. Drop the native appearance, draw our own
-    // caret and tell WebKit which colour scheme the popup list must use.
-    var darkSelect = isDarkSurface(surface.background);
-    var caretColour = darkSelect ? "%239aa0a6" : "%23555b61";
-    beSelect.style.cssText =
-      "font:inherit;max-width:220px;flex:0 0 auto;border-radius:6px;padding:3px 26px 3px 8px;" +
-      "background-color:" + surface.background + ";color:" + surface.color +
-      ";border:1px solid rgba(128,128,128,.5);" +
-      "-webkit-appearance:none;appearance:none;" +
-      "color-scheme:" + (darkSelect ? "dark" : "light") + ";" +
-      "background-image:url(\"data:image/svg+xml,%3Csvg xmlns=&#39;http://www.w3.org/2000/svg&#39; viewBox=&#39;0 0 16 16&#39;%3E%3Cpath fill=&#39;" + caretColour + "&#39; d=&#39;M4 6l4 4 4-4z&#39;/%3E%3C/svg%3E\");" +
-      "background-repeat:no-repeat;background-position:right 8px center;background-size:12px;";
+    // Native select on purpose. The old WebKitGTK build could not paint a
+    // native field in a dark theme, so we faked one (appearance:none, SVG
+    // caret, color-scheme, recoloured options). Lite is Electron now and
+    // Chromium renders <select> correctly, so keep the platform control and
+    // touch only layout here.
+    beSelect.style.cssText = "font:inherit;max-width:220px;flex:0 0 auto;";
     if (L && L.BACKENDS) {
       L.BACKENDS.forEach(function (id) {
         var opt = document.createElement("option");
         opt.value = id;
         opt.textContent = L.BACKEND_LABELS[id];
-        opt.style.backgroundColor = surface.background;
-        opt.style.color = surface.color;
         beSelect.appendChild(opt);
       });
       beSelect.value = readBackend();
@@ -304,6 +545,11 @@
     card.appendChild(beRow);
     block.appendChild(heading);
     block.appendChild(card);
+    // Lite Desktop only: the update-channel card sits in the same container,
+    // so the existing BLOCK_ID guard already prevents duplicate injection on
+    // settings re-renders (inject() returns early while the block is alive).
+    var chBlock = buildChannelBlock(surface);
+    if (chBlock) block.appendChild(chBlock);
     return block;
   }
 

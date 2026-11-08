@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>running</title>
+</head>
+<body>
+<pre id="out">running</pre>
+<!-- Fake the Settings -> General anchor cinny-ui.js looks for. -->
+<div id="settings-pane">
+  <div id="appearance-row" style="background-color: rgb(242, 242, 242); color: rgb(0, 0, 0);">
+    <span>Appearance</span>
+  </div>
+</div>
+<script>
+/*
+ * Focused integration smoke for noise/cinny-ui.js (run by
+ * noise/tests/run-headless.sh, plain Chromium, no model assets needed):
+ *  - the backend picker is a plain native <select> (no appearance/caret/
+ *    colour overrides) and still persists on change;
+ *  - the Lite-only "Канал обновлений" block renders when the preload
+ *    bridge (window.plotinaLite) is faked: loads state, confirms before
+ *    Dev, calls set({channel, acknowledged}), shows channel/status/error,
+ *    the update-check button works, and injection stays duplicate-safe;
+ *  - without window.plotinaLite (Cinny Web) the channel block is inert.
+ * Load with ?nostub=1 to exercise the Cinny Web (no bridge) path.
+ */
+window.__setCalls = [];
+window.__confirmMsgs = [];
+window.__confirmAnswer = true;
+window.__checkCalls = 0;
+window.__statusCb = null;
+window.__channel = "stable";
+(function () {
+  if (/[?&]nostub=1/.test(location.search)) return; // simulate Cinny Web
+  window.confirm = function (msg) {
+    window.__confirmMsgs.push(msg);
+    return window.__confirmAnswer;
+  };
+  window.plotinaLite = {
+    isDesktop: true,
+    updater: {
+      checkForUpdates: function () {
+        window.__checkCalls++;
+        return Promise.resolve("appimage");
+      },
+      onStatus: function (cb) {
+        window.__statusCb = cb;
+        return function () {};
+      },
+      channel: {
+        get: function () {
+          return Promise.resolve({
+            channel: window.__channel,
+            source: "file",
+            pinnedByEnv: false,
+            selfUpdate: true,
+            installKind: "appimage",
+            currentVersion: "4.12.8-plotina.19",
+            text: {
+              channelLabel: "Канал обновлений",
+              stableLabel: "Стабильный",
+              devLabel: "Dev",
+              devWarningMessage: "Включить Dev-канал обновлений?",
+              devWarningDetail: "Тестовые сборки без строгой проверки.",
+              checkForUpdates: "Проверить обновления…",
+              channelEntry: function () { return ""; },
+            },
+          });
+        },
+        set: function (next, options) {
+          window.__setCalls.push([next, !!(options && options.acknowledged)]);
+          if (next === "dev" && !(options && options.acknowledged)) {
+            return Promise.resolve({ ok: false, needsConfirmation: true, channel: window.__channel });
+          }
+          window.__channel = next;
+          return Promise.resolve({
+            ok: true,
+            channel: next,
+            state: { channel: next, pinnedByEnv: false, currentVersion: "4.12.8-plotina.19", text: {} },
+          });
+        },
+        returnToStable: function () { return Promise.resolve({ ok: true }); },
+      },
+    },
+  };
+})();
+</script>
+<script src="../logic.js"></script>
+<script src="../cinny-ui.js" defer></script>
+<script>
+const results = [];
+function pass(name) { results.push("PASS " + name); }
+function fail(name, why) { results.push("FAIL " + name + " :: " + why); }
+function test(name, fn) {
+  try { fn(); pass(name); } catch (e) { fail(name, e && e.message ? e.message : e); }
+}
+function finish() {
+  document.getElementById("out").textContent = results.join("\n");
+  const fails = results.filter((r) => r.indexOf("FAIL") === 0).length;
+  document.title = fails ? "TESTS FAILED (" + fails + ")" : "TESTS OK";
+}
+function nextTick() { return new Promise((r) => setTimeout(r, 30)); }
+function waitFor(cond, done, budget) {
+  let waited = 0;
+  const tick = () => {
+    if (cond()) return done();
+    waited += 250;
+    if (waited > (budget || 4000)) return done();
+    setTimeout(tick, 250);
+  };
+  setTimeout(tick, 250);
+}
+
+waitFor(() => document.getElementById("plotina-noise-cinny"), () => {
+  const sel = document.querySelector("[data-plotina-backend]");
+
+  test("noise block injected once", () => {
+    const blocks = document.querySelectorAll("#plotina-noise-cinny");
+    if (blocks.length !== 1) throw new Error(blocks.length + " noise blocks");
+    if (!sel) throw new Error("backend select missing");
+  });
+
+  test("backend select keeps change behaviour", () => {
+    const L = window.PlotinaNoiseLogic;
+    sel.value = "dpdfnet4";
+    sel.dispatchEvent(new Event("change"));
+    if (localStorage.getItem(L.BACKEND_KEY) !== "dpdfnet4") throw new Error("storage not written");
+    sel.value = "dfn3";
+    sel.dispatchEvent(new Event("change"));
+    if (localStorage.getItem(L.BACKEND_KEY) !== "dfn3") throw new Error("switch back failed");
+  });
+
+  test("backend select is native (no appearance/caret/colour overrides)", () => {
+    const style = sel.style.cssText || "";
+    for (const bad of ["appearance", "background", "color-scheme", "border"]) {
+      if (style.indexOf(bad) !== -1) throw new Error("style contains " + bad + ": " + style);
+    }
+    for (const opt of sel.options) {
+      if (opt.style.cssText) throw new Error("option inline style: " + opt.style.cssText);
+    }
+  });
+
+  const nostub = /[?&]nostub=1/.test(location.search);
+  if (nostub) {
+    test("Cinny Web: no channel block without plotinaLite", () => {
+      if (document.querySelector("[data-plotina-channel]")) throw new Error("channel block injected on web");
+    });
+    finish();
+    return;
+  }
+
+  test("channel block exists with Stable/Dev options", () => {
+    const ch = document.querySelector("[data-plotina-channel]");
+    if (!ch) throw new Error("channel select missing");
+    if (ch.options.length !== 2 || ch.options[0].value !== "stable" || ch.options[1].value !== "dev") {
+      throw new Error("unexpected channel options");
+    }
+  });
+
+  const chSel = document.querySelector("[data-plotina-channel]");
+  const note = document.querySelector("[data-plotina-channel-note]");
+  const status = document.querySelector("[data-plotina-channel-status]");
+  const blocks2 = document.querySelectorAll("[data-plotina-channel]");
+
+  (async function () {
+    await waitFor(() => note && note.textContent.indexOf("Текущий канал") === 0, async () => {
+      test("channel.get() paints current channel", () => {
+        if (note.textContent.indexOf("Стабильный") === -1) throw new Error(note.textContent);
+        if (note.textContent.indexOf("4.12.8-plotina.19") === -1) throw new Error("version missing");
+        if (chSel.value !== "stable") throw new Error("select not synced");
+      });
+      test("channel select is native", () => {
+        const style = chSel.style.cssText || "";
+        if (style.indexOf("appearance") !== -1 || style.indexOf("background") !== -1) {
+          throw new Error("style overrides: " + style);
+        }
+      });
+
+      test("declining the Dev confirm reverts without set()", async () => {
+        window.__confirmAnswer = false;
+        window.__setCalls.length = 0;
+        chSel.value = "dev";
+        chSel.dispatchEvent(new Event("change"));
+      });
+      await nextTick(); await nextTick();
+      test("declined Dev: no set call, select reverted, confirm asked", () => {
+        if (window.__setCalls.length !== 0) throw new Error("set called: " + JSON.stringify(window.__setCalls));
+        if (chSel.value !== "stable") throw new Error("not reverted: " + chSel.value);
+        if (window.__confirmMsgs.length !== 1) throw new Error("confirm count " + window.__confirmMsgs.length);
+        if (window.__confirmMsgs[0].indexOf("Dev") === -1) throw new Error("confirm text: " + window.__confirmMsgs[0]);
+      });
+
+      window.__confirmAnswer = true;
+      chSel.value = "dev";
+      chSel.dispatchEvent(new Event("change"));
+      await nextTick(); await nextTick();
+      test("accepted Dev: set('dev', acknowledged:true) then note shows Dev", () => {
+        const call = window.__setCalls[window.__setCalls.length - 1];
+        if (!call || call[0] !== "dev" || call[1] !== true) {
+          throw new Error("calls: " + JSON.stringify(window.__setCalls));
+        }
+        if (note.textContent.indexOf("Dev") === -1) throw new Error(note.textContent);
+        if (window.__channel !== "dev") throw new Error("bridge state not dev");
+      });
+
+      chSel.value = "stable";
+      chSel.dispatchEvent(new Event("change"));
+      await nextTick(); await nextTick();
+      test("switch back to stable needs no confirm", () => {
+        const call = window.__setCalls[window.__setCalls.length - 1];
+        if (!call || call[0] !== "stable") throw new Error("calls: " + JSON.stringify(window.__setCalls));
+        if (note.textContent.indexOf("Стабильный") === -1) throw new Error(note.textContent);
+      });
+
+      const checkBtn = document.querySelector("#plotina-noise-cinny button");
+      test("check-for-updates button calls checkForUpdates and shows status", async () => {
+        if (!checkBtn) throw new Error("check button missing");
+        checkBtn.click();
+        if (window.__checkCalls !== 1) throw new Error("checkForUpdates not called");
+        if (status.textContent.indexOf("Проверяю") === -1) throw new Error(status.textContent);
+      });
+      await nextTick();
+      test("update-status events land in the status line", () => {
+        if (typeof window.__statusCb !== "function") throw new Error("no status subscription");
+        window.__statusCb({ state: "up-to-date", version: "4.12.8-plotina.19" });
+        if (status.textContent.indexOf("Обновлений нет") === -1) throw new Error(status.textContent);
+        window.__statusCb({ state: "error", message: "feed unreachable" });
+        if (status.textContent.indexOf("Ошибка") === -1) throw new Error(status.textContent);
+      });
+
+      test("repeated inject() stays duplicate-safe", () => {
+        const root = window.PlotinaNoiseCinny.inject();
+        if (document.querySelectorAll("#plotina-noise-cinny").length !== 1) throw new Error("duplicate noise block");
+        if (document.querySelectorAll("[data-plotina-channel]").length !== 1) throw new Error("duplicate channel block");
+        if (root === null) throw new Error("inject lost the live block");
+      });
+
+      finish();
+    }, 6000);
+  })();
+}, 6000);
+</script>
+</body>
+</html>

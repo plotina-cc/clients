@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Headless Chromium smoke for the selectable noise backend: selector wiring
-# (browser-ui.test.html, plain and with the URL override) and the real DPDFNet
-# module in a browser (dpdfnet-infer.test.html). Model + ort assets must be
-# fetched first: python3 noise/scripts/fetch-dpdfnet.py
+# Headless Chromium smoke for the Cinny settings UI and the selectable noise
+# backend: the noise block + Lite update-channel wiring
+# (cinny-channel.test.html, plain and with ?nostub=1 for the Cinny Web path),
+# selector wiring (browser-ui.test.html, plain and with the URL override) and
+# the real DPDFNet module in a browser (dpdfnet-infer.test.html). The DPDFNet
+# page needs its model + ort assets fetched first:
+# python3 noise/scripts/fetch-dpdfnet.py — the UI pages above run either way.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,9 +16,9 @@ CHROME="${CHROME:-chromium}"
 # virtual-time budget is a ceiling, not a wait.
 BUDGET="${BUDGET:-120000}"
 
+HAVE_DPDFNET=1
 if [ ! -f "$HERE/../vendor/dpdfnet/dpdfnet2_48khz_hr/model_stateful.onnx" ]; then
-  echo "run-headless: model assets not fetched — python3 noise/scripts/fetch-dpdfnet.py" >&2
-  exit 2
+  HAVE_DPDFNET=0
 fi
 
 python3 -m http.server "$PORT" --bind 127.0.0.1 --directory "$ROOT" >/tmp/plotina-dpdfnet-tests.log 2>&1 &
@@ -42,9 +45,16 @@ run_page() { # url  budget  expect-title-regex
   esac
 }
 
+run_page "http://127.0.0.1:${PORT}/noise/tests/cinny-channel.test.html" 20000
+run_page "http://127.0.0.1:${PORT}/noise/tests/cinny-channel.test.html?nostub=1" 20000
 run_page "http://127.0.0.1:${PORT}/noise/tests/browser-ui.test.html" 8000
 run_page "http://127.0.0.1:${PORT}/noise/tests/browser-ui.test.html?plotina-backend=dpdfnet4" 8000
-run_page "http://127.0.0.1:${PORT}/noise/tests/dpdfnet-infer.test.html" "$BUDGET"
+if [ "$HAVE_DPDFNET" = "1" ]; then
+  run_page "http://127.0.0.1:${PORT}/noise/tests/dpdfnet-infer.test.html" "$BUDGET"
+else
+  echo "run-headless: model assets not fetched — python3 noise/scripts/fetch-dpdfnet.py (dpdfnet-infer skipped)" >&2
+fi
 
 if [ "$status" -ne 0 ]; then echo "dpdfnet headless: FAILED"; exit 1; fi
+if [ "$HAVE_DPDFNET" != "1" ]; then exit 2; fi
 echo "dpdfnet headless: OK"
