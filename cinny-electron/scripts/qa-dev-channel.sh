@@ -12,10 +12,10 @@
 # the matching image, same trick as scripts/qa-updater-feed.sh — no FUSE):
 #   A  stable channel, stable install   -> reads latest-linux.yml only, verifies
 #      sha512, atomically swaps in the newer stable image.
-#   B  dev channel, stable install      -> reads latest-linux-dev.yml only,
+#   B  dev channel, stable install      -> reads latest-lite-linux-dev.yml only,
 #      swaps in the dev build (19-dev.1 sorts above 19).
 #   C  dev channel through LITE_DEV_FEED_URL, no QA override -> the production
-#      URL shape (<base>/latest-linux-dev.yml) is fetched and installed.
+#      URL shape (<base>/latest-lite-linux-dev.yml) is fetched and installed.
 #   D  dev install on the STABLE channel with a feed advertising a LOWER stable
 #      version -> refused: no download, no swap. A reduction is only ever
 #      applied by the explicit 'Вернуться на стабильный' action, which is
@@ -102,7 +102,7 @@ write_yml latest-linux.yml 4.12.8-plotina.20 "$IMAGES/Plotina-Lite-Desktop-4.12.
 run_case A 4.12.8-plotina.19 4.12.8-plotina.19 stable 1 "" '"state":"downloaded"' 40
 grep -q '"channel":"stable"' "$RUN_LOG" || fail "A: status carries channel=stable"
 grep -q '"state":"downloaded"' "$RUN_LOG" || fail "A: stable channel did not download"
-grep -q 'latest-linux-dev.yml' "$LOGDIR/http-A.log" && fail "A: the stable channel read dev metadata"
+grep -q 'latest-lite-linux-dev.yml' "$LOGDIR/http-A.log" && fail "A: the stable channel read dev metadata"
 grep -q 'GET /latest-linux.yml' "$LOGDIR/http-A.log" || fail "A: latest-linux.yml was not requested"
 [ "$(sha512_b64 "$RUN_IMG")" = "$(sha512_b64 "$IMAGES/Plotina-Lite-Desktop-4.12.8-plotina.20-x86_64.AppImage")" ] \
   || fail "A: the running image was not swapped to the stable .20 bytes"
@@ -110,23 +110,23 @@ ls "$RUNDIR"/*.plotina-new >/dev/null 2>&1 && fail "A: staged file left behind"
 echo "A OK (latest-linux.yml only, sha512 verified, atomic swap done)"
 
 echo "== B: dev channel installs the dev image"
-write_yml latest-linux-dev.yml 4.12.8-plotina.19-dev.1 "$IMAGES/Plotina-Lite-Desktop-4.12.8-plotina.19-dev.1-x86_64.AppImage"
+write_yml latest-lite-linux-dev.yml 4.12.8-plotina.19-dev.1 "$IMAGES/Plotina-Lite-Desktop-4.12.8-plotina.19-dev.1-x86_64.AppImage"
 run_case B 4.12.8-plotina.19 4.12.8-plotina.19 dev 1 "" '"state":"downloaded"' 40
 grep -q '"channel":"dev"' "$RUN_LOG" || fail "B: status carries channel=dev"
-grep -q 'GET /latest-linux-dev.yml' "$LOGDIR/http-B.log" || fail "B: dev metadata was not requested"
+grep -q 'GET /latest-lite-linux-dev.yml' "$LOGDIR/http-B.log" || fail "B: dev metadata was not requested"
 [ "$(sha512_b64 "$RUN_IMG")" = "$(sha512_b64 "$IMAGES/Plotina-Lite-Desktop-4.12.8-plotina.19-dev.1-x86_64.AppImage")" ] \
   || fail "B: the running image is not the dev build"
-echo "B OK (dev channel picks latest-linux-dev.yml and installs 4.12.8-plotina.19-dev.1)"
+echo "B OK (dev channel picks latest-lite-linux-dev.yml and installs 4.12.8-plotina.19-dev.1)"
 
 echo "== C: dev channel via LITE_DEV_FEED_URL (production URL shape, no QA override)"
-cp -f "$QA/feed/latest-linux-dev.yml" "$QA/feed/dev-latest/latest-linux-dev.yml"
+cp -f "$QA/feed/latest-lite-linux-dev.yml" "$QA/feed/dev-latest/latest-lite-linux-dev.yml"
 cp -f "$IMAGES/Plotina-Lite-Desktop-4.12.8-plotina.19-dev.1-x86_64.AppImage" "$QA/feed/dev-latest/"
 run_case C 4.12.8-plotina.19 4.12.8-plotina.19 dev 0 "dev-latest/" '"state":"downloaded"' 75
-grep -q 'GET /dev-latest/latest-linux-dev.yml' "$LOGDIR/http-C.log" || fail "C: <base>/latest-linux-dev.yml was not fetched"
+grep -q 'GET /dev-latest/latest-lite-linux-dev.yml' "$LOGDIR/http-C.log" || fail "C: <base>/latest-lite-linux-dev.yml was not fetched"
 grep -q 'api.github.com' "$LOGDIR/http-C.log" && fail "C: the dev channel must not use the GitHub API"
 [ "$(sha512_b64 "$RUN_IMG")" = "$(sha512_b64 "$IMAGES/Plotina-Lite-Desktop-4.12.8-plotina.19-dev.1-x86_64.AppImage")" ] \
   || fail "C: dev feed URL did not install the artifact"
-echo "C OK (LITE_DEV_FEED_URL=<dir> -> <dir>/latest-linux-dev.yml -> verified install)"
+echo "C OK (LITE_DEV_FEED_URL=<dir> -> <dir>/latest-lite-linux-dev.yml -> verified install)"
 
 echo "== D: a dev install on the stable channel is never auto-downgraded"
 write_yml latest-linux.yml 4.12.8-plotina.19 "$IMAGES/Plotina-Lite-Desktop-4.12.8-plotina.20-x86_64.AppImage"

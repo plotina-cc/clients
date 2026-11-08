@@ -54,7 +54,7 @@ const sha512b64 = (buf) => crypto.createHash('sha512').update(buf).digest('base6
 const artifactBytes = (label) => Buffer.from(`#!/bin/sh\necho '${label}'\n` + 'x'.repeat(4096));
 const aiName = (version) => `Plotina-Lite-Desktop-${version}-x86_64.AppImage`;
 
-/** latest-linux-dev.yml / latest-linux.yml body, deb listed FIRST (the trap
+/** latest-lite-linux-dev.yml / latest-linux.yml body, deb listed FIRST (the trap
  *  the AppImage picker must survive) with per-file sha512/size. */
 function linuxYml({ version, bytes }) {
   const file = aiName(version);
@@ -123,7 +123,7 @@ await t('F1 stable channel reads the release listing only, never a dev URL', asy
   const version = '4.12.8-plotina.19';
   const bytes = artifactBytes('stable-19');
   const rel = ghRelease(version, bytes);
-  const devYml = `${DEV_BASE}/latest-linux-dev.yml`;
+  const devYml = `${DEV_BASE}/latest-lite-linux-dev.yml`;
   globalThis.fetch = serve({ ...rel.routes, [devYml]: linuxYml({ version: '4.12.8-plotina.99-dev.9', bytes }) });
   resetChannel('stable');
   fs.writeFileSync(appImagePath, '#!/bin/sh\necho running-image\n');
@@ -133,7 +133,7 @@ await t('F1 stable channel reads the release listing only, never a dev URL', asy
   assert.ok(requested.includes(API_URL), 'listed GitHub releases');
   assert.ok(requested.includes(rel.ymlUrl), 'read latest-lite-linux.yml');
   assert.ok(requested.includes(rel.artUrl), 'downloaded the AppImage asset');
-  assert.ok(!requested.some((u) => u.includes('dev-latest') || u.includes('latest-linux-dev')), `no dev URL: ${requested}`);
+  assert.ok(!requested.some((u) => u.includes('dev-latest') || u.includes('latest-lite-linux-dev')), `no dev URL: ${requested}`);
   assert.strictEqual(statusFor('available').channel, 'stable');
   assert.strictEqual(statusFor('available').version, version);
   assert.strictEqual(statusFor('downloaded').channel, 'stable');
@@ -146,7 +146,7 @@ await t('F1 stable channel reads the release listing only, never a dev URL', asy
 await t('F2 dev channel reads the dev-latest direct URL and swaps in the dev build', async () => {
   const version = '4.12.8-plotina.19-dev.2';
   const bytes = artifactBytes('dev-19.2');
-  const devYml = `${DEV_BASE}/latest-linux-dev.yml`;
+  const devYml = `${DEV_BASE}/latest-lite-linux-dev.yml`;
   const devArt = `${DEV_BASE}/${aiName(version)}`;
   globalThis.fetch = serve({
     [devYml]: linuxYml({ version, bytes }),
@@ -186,7 +186,7 @@ await t('F4 return-to-stable installs a lower stable version (explicit downgrade
   const stableVersion = '4.12.8-plotina.19';
   const bytes = artifactBytes('stable-19');
   const rel = ghRelease(stableVersion, bytes);
-  const devYml = `${DEV_BASE}/latest-linux-dev.yml`;
+  const devYml = `${DEV_BASE}/latest-lite-linux-dev.yml`;
   globalThis.fetch = serve({ ...rel.routes, [devYml]: linuxYml({ version: '4.12.8-plotina.19-dev.9', bytes }) });
   switchTo('dev');
   fs.writeFileSync(appImagePath, '#!/bin/sh\necho dev-image\n');
@@ -218,7 +218,7 @@ await t('F4 return-to-stable installs a lower stable version (explicit downgrade
 await t('F5 an automatic check never downgrades a dev build to an older dev build', async () => {
   const version = '4.12.8-plotina.19-dev.3';
   const bytes = artifactBytes('dev-19.3');
-  const devYml = `${DEV_BASE}/latest-linux-dev.yml`;
+  const devYml = `${DEV_BASE}/latest-lite-linux-dev.yml`;
   const devArt = `${DEV_BASE}/${aiName(version)}`;
   globalThis.fetch = serve({ [devYml]: linuxYml({ version, bytes }), [devArt]: bytes });
   switchTo('dev');
@@ -243,9 +243,14 @@ await t('F6 preload IPC contract: get / set(needs confirmation) / return-to-stab
   assert.strictEqual(st.selfUpdate, true);
   assert.strictEqual(st.channel, 'stable');
   assert.strictEqual(st.metadataFile, 'latest-lite-linux.yml');
-  assert.strictEqual(st.devFeedUrl, `${DEV_BASE}/latest-linux-dev.yml`);
+  assert.strictEqual(st.devFeedUrl, `${DEV_BASE}/latest-lite-linux-dev.yml`);
   assert.strictEqual(st.currentVersion, '4.12.8-plotina.19-dev.4');
-  assert.strictEqual(st.text.channelEntry('dev'), 'Канал обновлений: Dev');
+  // bridge text is structured-clone-safe (strings/arrays only) and still
+  // lets the renderer compose 'Канал обновлений: Dev'.
+  structuredClone(st);
+  assert.strictEqual(st.text.channelLabel, 'Канал обновлений');
+  assert.strictEqual(st.text.devLabel, 'Dev');
+  assert.strictEqual(`${st.text.channelLabel}: ${st.text.devLabel}`, 'Канал обновлений: Dev');
 
   const unconfirmed = await state.handlers['plotina:update-channel-set'](null, { channel: 'dev' });
   assert.strictEqual(unconfirmed.ok, false);
@@ -255,7 +260,7 @@ await t('F6 preload IPC contract: get / set(needs confirmation) / return-to-stab
   const confirmed = await state.handlers['plotina:update-channel-set'](null, { channel: 'dev', acknowledged: true });
   assert.strictEqual(confirmed.ok, true);
   assert.strictEqual(confirmed.state.channel, 'dev');
-  assert.strictEqual(confirmed.state.metadataFile, 'latest-linux-dev.yml');
+  assert.strictEqual(confirmed.state.metadataFile, 'latest-lite-linux-dev.yml');
   assert.strictEqual(seen, 'dev', 'menu listener notified');
   assert.ok(statusFor('channel'), 'renderer told');
 

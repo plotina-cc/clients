@@ -187,6 +187,18 @@ own origin — and the main window runs `m.login.token` itself. In the browser b
 the login page is never opened as a popup, `window.opener` is null there, neither
 branch runs, and the web flow is unchanged.
 
+`patches/0008` adds the Settings → **Обновления** page
+(`SettingsPages.UpdatesPage`, menu item with `Icons.Download`, component
+`src/app/features/settings/updates/Updates.tsx`). It is the renderer half of
+the Lite Desktop update channel and speaks only through the preload bridge
+(`window.plotinaLite`: `appVersion()`, `updater.checkForUpdates()`,
+`updater.onStatus`, `updater.channel.{get,set,returnToStable}`), so all dev
+acknowledgement and downgrade policy stays in the main process. On Cinny Web
+the bridge is absent and the page shows an explanatory notice. It replaces the
+DOM block `noise/cinny-ui.js` used to inject under the noise slider (and the
+floating bottom-right button that overlapped the composer — both removed from
+the shell).
+
 **Why not point the app at our website.** Tauri can open an external URL, but
 then the remote page needs IPC access — that is the CVE-2024-35222 class of
 vulnerability. The web part is compiled into the app instead, and updates only

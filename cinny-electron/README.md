@@ -66,8 +66,9 @@ python3 -m unittest discover -s ../cinny/tests -p 'test_install_lite_electron.py
 ```
 `* rpm needs rpmbuild on the build host (ubuntu CI installs `rpm`; Arch
 without it warns and continues). Version: tag `v4.12.8-plotina-lite-desktop.N`
--> app version `4.12.8-plotina.N` (never four-segment); branch builds use
-`4.12.8-plotina.0.local`. Never `${version}` macros through pnpm/nx wrappers.
+-> app version `4.12.8-plotina.N` (never four-segment); dev tag
+`v4.12.8-plotina-lite-desktop.N-dev.M` -> `4.12.8-plotina.N-dev.M`; branch
+builds use `4.12.8-plotina.0.local`. Never `${version}` macros through pnpm/nx wrappers.
 Artifacts: `Plotina-Lite-Desktop-<version>-<arch>.{AppImage,deb,rpm,exe,msi}`
 plus `latest.yml`/`latest-linux.yml`, `.exe.blockmap`, and stable aliases +
 `SHA256SUMS` in `dist/stable/` for `/dl`. CI: workflow
@@ -159,7 +160,8 @@ never an in-app window (QA asserts no external target appears).
 Tray is behind `LITE_TRAY=1` (optional; menu carries "Check for updates…").
 
 **Packaged web dist.** `web/` (staged by `scripts/stage-web.sh`, validated for
-`index.html`/`sw.js`/`config.json` + the `plotina:sso:login-token` marker)
+`index.html`/`sw.js`/`config.json` + the `plotina:sso:login-token` and
+`plotina-updates-page` markers)
 goes into the app asar; `app-server.js` reads it through Electron's patched
 `fs`, so the same localhost server serves the bundled dist. `LITE_DIST` still
 overrides for dev/QA. WM_CLASS measured on the packaged binary is
@@ -169,7 +171,8 @@ overrides for dev/QA. WM_CLASS measured on the packaged binary is
 **Updater.** `src/updater.js` (adapted from `element-desktop/desktop/updater.ts`):
 reads `resources/app-update.yml` (electron-builder writes
 `provider: github, owner: plotina-cc, repo: clients`), lists GitHub releases,
-fetches `latest.yml` / `latest-linux.yml`, verifies sha512, then acts by
+fetches the Lite-scoped metadata (`latest-lite.yml` / `latest-lite-linux.yml`,
+see the channel table below), verifies sha512, then acts by
 install kind: AppImage atomic rename-swap + restart; NSIS silent
 `/S --updated`; deb/rpm package-manager guidance; **MSI manual-download
 state** — the NSIS `customInstall` writes an `install-kind` marker next to the
@@ -184,8 +187,8 @@ and installs.
 
 | channel | metadata (AppImage / NSIS) | how it is found |
 |---|---|---|
-| stable (default) | `latest-linux.yml` / `latest.yml` | GitHub releases listing of `plotina-cc/clients` (as before) |
-| dev | `latest-linux-dev.yml` / `latest-dev.yml` | direct download from the fixed `dev-latest` release: `https://github.com/plotina-cc/clients/releases/download/dev-latest/<file>` — no API call, no rate limit, assets are refreshed on command |
+| stable (default) | `latest-lite-linux.yml` / `latest-lite.yml` | GitHub releases listing of `plotina-cc/clients` (product-scoped names, so Desktop releases are never picked up) |
+| dev | `latest-lite-linux-dev.yml` / `latest-lite-dev.yml` | direct download from the fixed `dev-latest` release: `https://github.com/plotina-cc/clients/releases/download/dev-latest/<file>` — no API call, no rate limit, assets are refreshed on command |
 
 * Versions are ordinary semver-shaped builds: `4.12.8-plotina.<N>` (stable) and
   `4.12.8-plotina.<N>-dev.<M>` (dev). Comparison is plain tuple ordering over
@@ -208,14 +211,23 @@ and installs.
   `Канал обновлений: Стабильный` (radio `Стабильный` / `Dev`; choosing Dev shows
   the dev warning first and cancels silently), `Вернуться на стабильный`
   (enabled only on dev, prompts with restart buttons and says plainly that this
-  is a version reduction). Same items in the tray menu when `LITE_TRAY=1`; the
-  renderer contract is `plotinaLite.updater.channel.{get,set,returnToStable}`,
-  statuses arrive on `onStatus` with `channel` + `downgrade` fields.
+  is a version reduction). Same items in the tray menu when `LITE_TRAY=1`. The
+  full control surface is a dedicated Cinny settings tab, Settings →
+  **Обновления** (`patches/0008-plotina-updates-settings.patch`, page
+  `src/app/features/settings/updates/Updates.tsx`): packaged version via
+  `plotinaLite.appVersion()` (IPC `plotina:app-version` -> `app.getVersion()`),
+  native-looking channel select, dev warning card, check button, status line
+  and return-to-stable. The renderer contract is
+  `plotinaLite.updater.{checkForUpdates,installUpdate,onStatus}` +
+  `plotinaLite.updater.channel.{get,set,returnToStable}`; statuses arrive on
+  `onStatus` with `channel` + `downgrade` fields, and `channel.get().text` is
+  the structured-clone-safe string subset of `UI_TEXT` (helper functions stay
+  main-process-only — Electron IPC would refuse to serialize them).
 * sha512/size verification, the atomic AppImage rename-swap and the silent NSIS
   `/S --updated` install are shared by both channels and both directions:
   dev never gets a separate, weaker install path.
 * `LITE_DEV_FEED_URL` overrides the dev base for a local feed directory (same
-  layout, `latest-linux-dev.yml` + artifacts) — use it together with
+  layout, `latest-lite-linux-dev.yml` + artifacts) — use it together with
   `PLOTINA_QA_UPDATES=1`/`PLOTINA_UPDATE_FEED_URL`, which resolves the file name
   per channel.
 
@@ -230,15 +242,18 @@ and installs.
   `bash scripts/build-packages.sh win-nsis` (proven here: exe + blockmap +
   latest.yml); MSI needs the Windows job (WiX via wine here needs Wine-Mono,
   absent).
-- The `dev-latest` GitHub release itself is **not** created by this change and
-  no dev artifact has been published: until the operator uploads
-  `latest-dev.yml` / `latest-linux-dev.yml` there, a dev-channel client gets
-  HTTP 404 and reports "nothing to install" (deliberately not an error). The
-  local-kit route (`LITE_DEV_FEED_URL` + `scripts/qa-dev-channel.sh`) is what
-  was actually exercised. NSIS/dev path is implemented and unit-tested but not
-  built or run on Windows this round.
+- The `dev-latest` GitHub release: a `v<semver>-plotina-lite-desktop.N-dev.M`
+  tag build releases as prerelease AND publishes, via the workflow's
+  post-release step, the Lite-scoped rolling files `latest-lite-dev.yml` /
+  `latest-lite-linux-dev.yml` plus the versioned artifacts to `dev-latest`
+  (`gh release upload --clobber`). Desktop's `latest-dev.yml` /
+  `latest-linux-dev.yml` on the same release are never touched. Nothing has
+  been tagged or published from this change yet; until the first dev tag runs,
+  a dev-channel client gets HTTP 404 and reports "nothing to install"
+  (deliberately not an error). The local-kit route (`LITE_DEV_FEED_URL` +
+  `scripts/qa-dev-channel.sh`) is what was actually exercised. NSIS/dev path
+  is implemented and unit-tested but not built or run on Windows this round.
 - Open for Phase 3/4: tray dark/light variants, real IdP SSO run, Element
   Call join test against `call.plotina.cc`, E2EE device-verify UX, CSP header
   for the app server, `/dl` promotion + draft-release job, U1–U7 on a real
-  feed, Settings → About update button inside the web app (the shell menu entry
-  and the preload IPC already exist).
+  feed.

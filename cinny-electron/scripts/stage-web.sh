@@ -10,10 +10,14 @@ SRC="${LITE_DIST:?set LITE_DIST to the built Cinny web dist}"
 [ -f "$SRC/index.html" ] || { echo "not a dist: $SRC/index.html missing" >&2; exit 1; }
 [ -f "$SRC/sw.js" ] || { echo "not a dist: $SRC/sw.js missing (service worker)" >&2; exit 1; }
 [ -f "$SRC/config.json" ] || { echo "not a dist: $SRC/config.json missing" >&2; exit 1; }
-# Patch 0007 (SSO token handoff) must be baked in — the shell's opener flow
-# depends on it. Accept it from any hashed bundle asset, same as Phase-1 QA.
+# Patch 0007 (SSO token handoff) and patch 0008 (Settings -> Updates page)
+# must be baked in — the shell's opener flow depends on the first, the
+# update-channel UI lives entirely in the second. Accept markers from any
+# hashed bundle asset, same as Phase-1 QA.
 grep -Raqs 'plotina:sso:login-token' "$SRC/assets" || {
   echo "dist is missing the plotina:sso:login-token patch marker" >&2; exit 1; }
+grep -Raqs 'plotina-updates-page' "$SRC/assets" || {
+  echo "dist is missing the plotina-updates-page patch marker (0008)" >&2; exit 1; }
 
 DEST="$HERE/web"
 rm -rf "$DEST"

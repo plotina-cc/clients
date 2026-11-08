@@ -20,9 +20,9 @@ const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), 'plotina-channel-'));
 // ---------------------------------------------------------------- C1 feed URLs
 t('C1 metadata file per install kind x channel', () => {
   assert.strictEqual(ch.metadataFileFor({ installKind: 'appimage', channel: 'stable' }), 'latest-lite-linux.yml');
-  assert.strictEqual(ch.metadataFileFor({ installKind: 'appimage', channel: 'dev' }), 'latest-linux-dev.yml');
+  assert.strictEqual(ch.metadataFileFor({ installKind: 'appimage', channel: 'dev' }), 'latest-lite-linux-dev.yml');
   assert.strictEqual(ch.metadataFileFor({ installKind: 'nsis', channel: 'stable' }), 'latest-lite.yml');
-  assert.strictEqual(ch.metadataFileFor({ installKind: 'nsis', channel: 'dev' }), 'latest-dev.yml');
+  assert.strictEqual(ch.metadataFileFor({ installKind: 'nsis', channel: 'dev' }), 'latest-lite-dev.yml');
   // channel omitted -> stable is the default
   assert.strictEqual(ch.metadataFileFor({ installKind: 'nsis' }), 'latest-lite.yml');
   // kinds that never self-update read no feed at all
@@ -36,10 +36,10 @@ t('C1 metadata file per install kind x channel', () => {
 t('C1b dev feed URL is the GitHub dev-latest release, never edge', () => {
   assert.strictEqual(
     ch.devFeedUrl({ installKind: 'nsis', channel: 'dev' }),
-    'https://github.com/plotina-cc/clients/releases/download/dev-latest/latest-dev.yml');
+    'https://github.com/plotina-cc/clients/releases/download/dev-latest/latest-lite-dev.yml');
   assert.strictEqual(
     ch.devFeedUrl({ installKind: 'appimage', channel: 'dev' }),
-    'https://github.com/plotina-cc/clients/releases/download/dev-latest/latest-linux-dev.yml');
+    'https://github.com/plotina-cc/clients/releases/download/dev-latest/latest-lite-linux-dev.yml');
   // stable channel never points at the dev release
   assert.strictEqual(ch.devFeedUrl({ installKind: 'appimage', channel: 'stable' }), null);
   assert.strictEqual(ch.devFeedUrl({ installKind: 'package', channel: 'dev' }), null);
@@ -47,7 +47,7 @@ t('C1b dev feed URL is the GitHub dev-latest release, never edge', () => {
   // env override for local QA kits, trailing slash normalized
   assert.strictEqual(
     ch.devFeedUrl({ installKind: 'appimage', channel: 'dev', devFeedBase: ch.resolveDevFeedBase({ LITE_DEV_FEED_URL: 'http://127.0.0.1:8099/dev/' }) }),
-    'http://127.0.0.1:8099/dev/latest-linux-dev.yml');
+    'http://127.0.0.1:8099/dev/latest-lite-linux-dev.yml');
   assert.strictEqual(ch.resolveDevFeedBase({}), ch.DEV_FEED_BASE);
 });
 
@@ -57,7 +57,7 @@ t('C1c QA local feed override keeps the stable layout and follows the channel', 
     'http://127.0.0.1:9/latest-lite-linux.yml');
   assert.strictEqual(
     ch.qaFeedUrl({ base: 'http://127.0.0.1:9', installKind: 'appimage', channel: 'dev' }),
-    'http://127.0.0.1:9/latest-linux-dev.yml');
+    'http://127.0.0.1:9/latest-lite-linux-dev.yml');
   assert.strictEqual(ch.qaFeedUrl({ base: '', installKind: 'appimage', channel: 'dev' }), null);
   assert.strictEqual(ch.qaFeedUrl({ base: 'http://h/', installKind: 'msi', channel: 'dev' }), null);
 });

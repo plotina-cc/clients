@@ -7,10 +7,12 @@
 //           (latest.yml for NSIS, latest-linux.yml for AppImage). Unchanged
 //           behaviour: newest non-prerelease release that carries the file.
 //   dev     opt-in test feed on GitHub (NOT the edge host): one fixed release
-//           tag `dev-latest` whose assets are re-uploaded on command, read by
-//           direct download URL — no release listing, no API quota:
-//             …/releases/download/dev-latest/latest-dev.yml        (NSIS)
-//             …/releases/download/dev-latest/latest-linux-dev.yml  (AppImage)
+//           tag `dev-latest` SHARED between products, whose assets are
+//           re-uploaded on command, read by direct download URL — no release
+//           listing, no API quota. Lite-scoped file names only (Desktop
+//           publishes latest-dev.yml / latest-linux-dev.yml there):
+//             …/releases/download/dev-latest/latest-lite-dev.yml        (NSIS)
+//             …/releases/download/dev-latest/latest-lite-linux-dev.yml  (AppImage)
 //
 // Dev builds keep ordinary semver-shaped versions with a `-dev.<M>` tail
 // (4.12.8-plotina.19-dev.2), so comparison is plain tuple ordering — no
@@ -49,8 +51,11 @@ const DEV_FEED_BASE = `https://github.com/${RELEASE_OWNER}/${RELEASE_REPO}/relea
 // names or an old Desktop can install a Lite release over itself.
 const WINDOWS_METADATA_FILE = 'latest-lite.yml';
 const LINUX_METADATA_FILE = 'latest-lite-linux.yml';
-const DEV_WINDOWS_METADATA_FILE = 'latest-dev.yml';
-const DEV_LINUX_METADATA_FILE = 'latest-linux-dev.yml';
+// The dev release `dev-latest` is shared the same way: Desktop publishes its
+// rolling latest-dev.yml / latest-linux-dev.yml there, so Lite reads (and its
+// CI publishes) only the product-scoped dev names.
+const DEV_WINDOWS_METADATA_FILE = 'latest-lite-dev.yml';
+const DEV_LINUX_METADATA_FILE = 'latest-lite-linux-dev.yml';
 
 // Only these install kinds can move their own bits (see src/updater.js).
 const SELF_UPDATE_KINDS = new Set(['appimage', 'nsis']);

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Headless Chromium smoke for the Cinny settings UI and the selectable noise
-# backend: the noise block + Lite update-channel wiring
-# (cinny-channel.test.html, plain and with ?nostub=1 for the Cinny Web path),
-# selector wiring (browser-ui.test.html, plain and with the URL override) and
-# the real DPDFNet module in a browser (dpdfnet-infer.test.html). The DPDFNet
-# page needs its model + ort assets fetched first:
-# python3 noise/scripts/fetch-dpdfnet.py — the UI pages above run either way.
+# backend: the noise block and selector wiring (browser-ui.test.html, plain
+# and with the URL override) plus the real DPDFNet module in a browser
+# (dpdfnet-infer.test.html). The DPDFNet page needs its model + ort assets
+# fetched first: python3 noise/scripts/fetch-dpdfnet.py — the UI pages above
+# run either way. (The Lite update-channel UI is no longer part of this
+# bundle: it moved to the Settings -> Updates page of the Cinny bundle, see
+# cinny/patches/0008-plotina-updates-settings.patch and the Electron tests.)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,8 +46,6 @@ run_page() { # url  budget  expect-title-regex
   esac
 }
 
-run_page "http://127.0.0.1:${PORT}/noise/tests/cinny-channel.test.html" 20000
-run_page "http://127.0.0.1:${PORT}/noise/tests/cinny-channel.test.html?nostub=1" 20000
 run_page "http://127.0.0.1:${PORT}/noise/tests/browser-ui.test.html" 8000
 run_page "http://127.0.0.1:${PORT}/noise/tests/browser-ui.test.html?plotina-backend=dpdfnet4" 8000
 if [ "$HAVE_DPDFNET" = "1" ]; then

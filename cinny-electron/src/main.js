@@ -353,17 +353,10 @@ function refreshAppMenu() {
   if (tray) { try { tray.setContextMenu(Menu.buildFromTemplate(trayTemplate())); } catch { /* tray gone */ } }
 }
 
-// The native menu bar is not reliably reachable on every Linux desktop
-// (KDE/Wayland can hide it and Alt may do nothing). The preload adds a small
-// in-window "Обновления" button, which opens this same native menu at the
-// cursor — available on the login screen, before any Matrix account exists.
-ipcMain.handle('plotina:show-updates-menu', (event) => {
-  const win = BrowserWindow.fromWebContents(event.sender) || mainWindow;
-  if (!win || win.isDestroyed()) return false;
-  const menu = Menu.buildFromTemplate(updatesSubmenu());
-  menu.popup({ window: win });
-  return true;
-});
+// Real packaged version (e.g. 4.12.8-plotina.23 or 4.12.8-plotina.23-dev.1)
+// for the Settings -> Updates page. app.getVersion() is the electron-builder
+// stamped value; the web bundle's own version string must not be trusted.
+ipcMain.handle('plotina:app-version', () => app.getVersion());
 
 // Tray: the same black mark; Electron/GTK scales it to the panel. The
 // light/dark variant selection from the migration plan (§5.2) stays with the

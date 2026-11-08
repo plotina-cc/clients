@@ -137,6 +137,20 @@ const userDataDir = () => app.getPath('userData');
 function currentChannelInfo() { return policy.readChannel(userDataDir(), process.env); }
 function currentChannel() { return currentChannelInfo().channel; }
 
+/** UI_TEXT projected onto structured-clone-safe values (strings and string
+ *  arrays). The full UI_TEXT carries helper functions (channelEntry,
+ *  downgradeDetail) which electron's IPC cannot serialize — DataCloneError —
+ *  so over the bridge we ship the parts and the renderer composes the labels.
+ *  Menu code in main.js keeps using UI_TEXT directly (same process). */
+function uiTextForBridge() {
+  const out = {};
+  for (const [key, value] of Object.entries(policy.UI_TEXT)) {
+    if (typeof value === 'string' || Array.isArray(value)) out[key] = value;
+  }
+  return out;
+}
+const BRIDGE_UI_TEXT = uiTextForBridge();
+
 /** Everything the Settings entry needs to render itself (menu + renderer). */
 function channelState() {
   const info = currentChannelInfo();
@@ -155,7 +169,7 @@ function channelState() {
       channel: policy.DEV,
       devFeedBase: policy.resolveDevFeedBase(process.env),
     }),
-    text: policy.UI_TEXT,
+    text: BRIDGE_UI_TEXT,
   };
 }
 

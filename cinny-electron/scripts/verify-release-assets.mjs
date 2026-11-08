@@ -41,8 +41,10 @@ const LINUX_DIR = path.resolve(arg('linux'));
 const WIN_DIR = path.resolve(arg('windows'));
 const VERSION = arg('version');
 const OUT_DIR = path.resolve(arg('out'));
-if (!/^[0-9]+\.[0-9]+\.[0-9]+-plotina\.[0-9]+$/.test(VERSION)) {
-  console.error(`FATAL: --version '${VERSION}' is not <semver>-plotina.<rev> (tag contract §7.1)`);
+// <semver>-plotina.<rev> for stable releases, plus the dev tail
+// <semver>-plotina.<rev>-dev.<M> for test releases (tag contract §7.1).
+if (!/^[0-9]+\.[0-9]+\.[0-9]+-plotina\.[0-9]+(-dev\.[0-9]+)?$/.test(VERSION)) {
+  console.error(`FATAL: --version '${VERSION}' is not <semver>-plotina.<rev>[-dev.<M>] (tag contract §7.1)`);
   process.exit(2);
 }
 
