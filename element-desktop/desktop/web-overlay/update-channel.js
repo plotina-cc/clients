@@ -176,7 +176,14 @@ exist, so this file stays inert.
     function syncChannelUI() {
         var s = strings();
         if (!refs.select) return;
-        if (refs.select.value !== channel) refs.select.value = channel;
+        refs.select.textContent = (channel === "dev" ? s.dev : s.stable) + " \u25be";
+        Object.keys(refs.optionButtons || {}).forEach(function (key) {
+            var selected = key === channel;
+            var option = refs.optionButtons[key];
+            option.setAttribute("aria-selected", selected ? "true" : "false");
+            option.style.background = selected ? "var(--cpd-color-bg-action-primary,#0dbd8b)" : "transparent";
+            option.style.color = selected ? "var(--cpd-color-text-on-solid-primary,#fff)" : "inherit";
+        });
         refs.warning.textContent = channel === "dev" ? s.devWarning : "";
         refs.warning.style.display = channel === "dev" ? "" : "none";
         var needsConfirm = channel !== "stable" && pendingStableReturn;
@@ -202,16 +209,86 @@ exist, so this file stays inert.
         var label = document.createElement("span");
         label.textContent = s.label;
 
-        var select = document.createElement("select");
-        select.setAttribute("aria-label", s.label);
-        select.style.cssText = "font:inherit;background:transparent;color:inherit;border:1px solid rgba(128,128,128,.5);border-radius:6px;padding:2px 6px;";
-        [["stable", s.stable], ["dev", s.dev]].forEach(function (o) {
-            var opt = document.createElement("option");
-            opt.value = o[0];
-            opt.textContent = o[1];
-            select.appendChild(opt);
+        // Native <select> popups ignore the app theme on Linux (and use the
+        // system's blue selection), so the channel choice is a small custom
+        // menu that follows Element's theme tokens.
+        var control = document.createElement("div");
+        control.style.cssText = "position:relative;display:inline-block;";
+        var trigger = document.createElement("button");
+        trigger.type = "button";
+        trigger.setAttribute("aria-haspopup", "listbox");
+        trigger.setAttribute("aria-label", s.label);
+        trigger.style.cssText = [
+            "font:inherit", "color:var(--cpd-color-text-primary,#f2f3f5)",
+            "background:var(--cpd-color-bg-subtle-primary,#242832)",
+            "border:1px solid var(--cpd-color-border-interactive-primary,#5a6270)",
+            "border-radius:6px", "padding:3px 9px", "cursor:pointer",
+        ].join(";");
+        var menu = document.createElement("div");
+        menu.setAttribute("role", "listbox");
+        menu.style.cssText = [
+            "display:none", "position:absolute", "left:0", "top:calc(100% + 4px)",
+            "min-width:150px", "z-index:2147483647", "padding:4px",
+            "background:var(--cpd-color-bg-subtle-primary,#242832)",
+            "color:var(--cpd-color-text-primary,#f2f3f5)",
+            "border:1px solid var(--cpd-color-border-interactive-primary,#5a6270)",
+            "border-radius:8px", "box-shadow:0 8px 24px rgba(0,0,0,.35)",
+        ].join(";");
+        var optionButtons = {};
+        var open = false;
+        function setOpen(next) {
+            open = next;
+            menu.style.display = open ? "block" : "none";
+            trigger.setAttribute("aria-expanded", open ? "true" : "false");
+        }
+        function choose(next) {
+            setOpen(false);
+            appliedNote = "";
+            if (next === "dev") {
+                pendingStableReturn = false;
+                setChannel("dev", false).then(function () {
+                    appliedNote = strings().devWarning;
+                    syncChannelUI();
+                });
+            } else if (isRunningDevBuild()) {
+                // Version reduction needs an explicit confirmation: keep the
+                // current dev channel until the user presses the button.
+                pendingStableReturn = true;
+                syncChannelUI();
+            } else {
+                pendingStableReturn = false;
+                setChannel("stable", false).then(function () {
+                    appliedNote = strings().applied;
+                    syncChannelUI();
+                });
+            }
+        }
+        [["stable", s.stable], ["dev", s.dev]].forEach(function (item) {
+            var option = document.createElement("button");
+            option.type = "button";
+            option.setAttribute("role", "option");
+            option.textContent = item[1];
+            option.style.cssText = [
+                "display:block", "width:100%", "text-align:left", "font:inherit",
+                "color:inherit", "background:transparent", "border:0",
+                "border-radius:5px", "padding:6px 9px", "cursor:pointer",
+            ].join(";");
+            option.addEventListener("click", function () { choose(item[0]); });
+            optionButtons[item[0]] = option;
+            menu.appendChild(option);
         });
-        select.value = channel;
+        trigger.addEventListener("click", function (event) {
+            event.stopPropagation();
+            setOpen(!open);
+        });
+        document.addEventListener("click", function (event) {
+            if (!control.contains(event.target)) setOpen(false);
+        });
+        document.addEventListener("keydown", function (event) {
+            if (event.key === "Escape") setOpen(false);
+        });
+        control.appendChild(trigger);
+        control.appendChild(menu);
 
         var warning = document.createElement("div");
         warning.style.cssText = "flex-basis:100%;font-size:12px;opacity:.75;";
@@ -231,30 +308,6 @@ exist, so this file stays inert.
         var version = document.createElement("span");
         version.style.cssText = "font-size:12px;opacity:.7;";
 
-        select.addEventListener("change", function () {
-            var next = select.value;
-            appliedNote = "";
-            if (next === "dev") {
-                pendingStableReturn = false;
-                setChannel("dev", false).then(function () {
-                    appliedNote = strings().devWarning;
-                    syncChannelUI();
-                });
-            } else if (isRunningDevBuild()) {
-                // Version reduction needs an explicit confirmation: keep the
-                // select on dev until the user presses the confirm button.
-                pendingStableReturn = true;
-                select.value = "dev";
-                syncChannelUI();
-            } else {
-                pendingStableReturn = false;
-                setChannel("stable", false).then(function () {
-                    appliedNote = strings().applied;
-                    syncChannelUI();
-                });
-            }
-        });
-
         confirm.addEventListener("click", function () {
             pendingStableReturn = false;
             setChannel("stable", true).then(function () {
@@ -263,10 +316,11 @@ exist, so this file stays inert.
             });
         });
 
-        refs = { select: select, warning: warning, confirm: confirm, confirmHint: confirmHint, appliedNote: appliedNoteEl, version: version };
+        refs = { select: trigger, menu: menu, optionButtons: optionButtons, warning: warning,
+                 confirm: confirm, confirmHint: confirmHint, appliedNote: appliedNoteEl, version: version };
 
         row.appendChild(label);
-        row.appendChild(select);
+        row.appendChild(control);
         row.appendChild(version);
         row.appendChild(warning);
         row.appendChild(confirmWrap);
@@ -276,7 +330,6 @@ exist, so this file stays inert.
         syncChannelUI();
         return row;
     }
-
     function inject() {
         var existing = document.getElementById(CHANNEL_KEY);
         if (existing) {
