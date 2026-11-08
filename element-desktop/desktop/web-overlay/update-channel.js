@@ -43,6 +43,13 @@ exist, so this file stays inert.
             applied: "Канал переключён. Проверка обновлений начата.",
             version: "Версия:",
             restartNote: "Перезапустите Plotina Desktop, чтобы установить обновление.",
+            updatesTab: "Обновления",
+            updatesTitle: "Обновления",
+            checkButton: "Проверить наличие обновлений",
+            checking: "Проверяю обновления…",
+            noUpdates: "Обновлений нет.",
+            updateFound: "Доступно обновление.",
+            channelHeading: "Канал обновлений",
         },
         en: {
             label: "Update channel:",
@@ -55,6 +62,13 @@ exist, so this file stays inert.
             applied: "Channel switched. Checking for updates now.",
             version: "Version:",
             restartNote: "Restart Plotina Desktop to install the update.",
+            updatesTab: "Updates",
+            updatesTitle: "Updates",
+            checkButton: "Check for updates",
+            checking: "Checking for updates…",
+            noUpdates: "You are up to date.",
+            updateFound: "An update is available.",
+            channelHeading: "Update channel",
         },
     };
 
@@ -67,6 +81,8 @@ exist, so this file stays inert.
     var BUTTON_LABELS = ["Проверить наличие обновлений", "Check for update"];
 
     var CHANNEL_KEY = "plotina-update-channel-row";
+    var TAB_KEY = "plotina-updates-tab";
+    var PANEL_KEY = "plotina-updates-panel";
     var channel = "stable";
     var appVersion = "";
     var probed = false;
@@ -247,7 +263,9 @@ exist, so this file stays inert.
             if (next === "dev") {
                 pendingStableReturn = false;
                 setChannel("dev", false).then(function () {
-                    appliedNote = strings().devWarning;
+                    // The channel warning is already rendered by syncChannelUI()
+                    // for channel=dev; do not repeat it in the applied note.
+                    appliedNote = "";
                     syncChannelUI();
                 });
             } else if (isRunningDevBuild()) {
@@ -330,19 +348,146 @@ exist, so this file stays inert.
         syncChannelUI();
         return row;
     }
-    function inject() {
-        var existing = document.getElementById(CHANNEL_KEY);
-        if (existing) {
-            if (existing.isConnected) {
-                syncChannelUI();
-                return;
-            }
-            existing.remove();
+    function settingsRoot() {
+        return document.querySelector(".mx_UserSettingsDialog");
+    }
+
+    function hideNativeUpdateButton() {
+        // The upstream Check-for-updates button lives in Help & About. Updates
+        // now have their own tab, so remove that row from the old tab.
+        var el = exactTextNode(BUTTON_LABELS);
+        if (!el) return;
+        if (el.closest && el.closest("#" + PANEL_KEY)) return; // our own check button
+        var row = el;
+        for (var d = 0; d < 5 && row.parentElement; d++) {
+            row = row.parentElement;
+            if (row.querySelector && row.querySelector("button, [role=\"button\"]")) break;
         }
-        var anchor = findAnchor();
-        if (!anchor) return;
+        if (row && row !== document.body) row.style.display = "none";
+    }
+
+    function buildTabLabel(s) {
+        var label = document.createElement("li");
+        label.id = TAB_KEY;
+        label.className = "mx_TabbedView_tabLabel";
+        label.setAttribute("role", "tab");
+        label.setAttribute("aria-selected", "false");
+        label.setAttribute("aria-controls", PANEL_KEY);
+        label.tabIndex = 0;
+        label.style.cursor = "pointer";
+        var text = document.createElement("span");
+        text.className = "mx_TabbedView_tabLabel_text";
+        text.textContent = s.updatesTab;
+        label.appendChild(text);
+        label.addEventListener("click", function (event) {
+            event.preventDefault();
+            activateTab();
+        });
+        label.addEventListener("keydown", function (event) {
+            if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                activateTab();
+            }
+        });
+        return label;
+    }
+
+    function activateTab() {
+        var root = settingsRoot();
+        if (!root) return;
+        root.querySelectorAll(".mx_TabbedView_tabLabel").forEach(function (el) {
+            var active = el.id === TAB_KEY;
+            el.classList.toggle("mx_TabbedView_tabLabel_active", active);
+            el.setAttribute("aria-selected", active ? "true" : "false");
+        });
+        root.querySelectorAll(".mx_TabbedView_tabPanel").forEach(function (el) {
+            el.style.display = el.id === PANEL_KEY ? "" : "none";
+        });
+        var panel = document.getElementById(PANEL_KEY);
+        if (panel) panel.style.display = "";
+    }
+
+    function buildPanel(s) {
+        var panel = document.createElement("div");
+        panel.className = "mx_TabbedView_tabPanel";
+        panel.id = PANEL_KEY;
+        panel.setAttribute("role", "tabpanel");
+        panel.setAttribute("aria-labelledby", TAB_KEY);
+        panel.style.display = "none";
+
+        var scroll = document.createElement("div");
+        scroll.className = "mx_AutoHideScrollbar mx_TabbedView_tabPanelContent";
+        var tab = document.createElement("div");
+        tab.className = "mx_SettingsTab";
+        tab.style.padding = "24px 32px";
+        tab.style.maxWidth = "680px";
+
+        var heading = document.createElement("div");
+        heading.className = "mx_SettingsTab_heading";
+        heading.textContent = s.updatesTitle;
+        heading.style.cssText = "font-size:20px;font-weight:600;margin:0 0 20px;color:var(--cpd-color-text-primary,#f2f3f5);";
+
+        var checkSection = document.createElement("div");
+        checkSection.className = "mx_SettingsTab_section";
+        checkSection.style.marginBottom = "24px";
+        var check = document.createElement("button");
+        check.type = "button";
+        check.textContent = s.checkButton;
+        check.className = "mx_AccessibleButton mx_AccessibleButton_kind_primary";
+        check.style.cssText = "font:inherit;background:var(--cpd-color-bg-action-primary,#0dbd8b);color:var(--cpd-color-text-on-solid-primary,#fff);border:0;border-radius:8px;padding:8px 14px;cursor:pointer;";
+        var status = document.createElement("div");
+        status.style.cssText = "font-size:12px;opacity:.7;margin-top:8px;min-height:16px;";
+        check.addEventListener("click", function () {
+            status.textContent = s.checking;
+            try { window.electron.send("check_updates"); } catch (e) { status.textContent = String(e); }
+        });
+        checkSection.appendChild(check);
+        checkSection.appendChild(status);
+        if (window.electron && typeof window.electron.on === "function") {
+            window.electron.on("check_updates", function (_event, result) {
+                if (result === false) status.textContent = s.noUpdates;
+                else if (result === true) status.textContent = s.updateFound;
+                else if (typeof result === "string" && result) status.textContent = result;
+            });
+        }
+
+        var channelSection = document.createElement("div");
+        channelSection.className = "mx_SettingsTab_section";
+        var channelHeading = document.createElement("div");
+        channelHeading.textContent = s.channelHeading;
+        channelHeading.style.cssText = "font-size:16px;font-weight:600;margin:0 0 8px;";
+        channelSection.appendChild(channelHeading);
+        channelSection.appendChild(buildRow());
+
+        tab.appendChild(heading);
+        tab.appendChild(checkSection);
+        tab.appendChild(channelSection);
+        scroll.appendChild(tab);
+        panel.appendChild(scroll);
+        return panel;
+    }
+
+    function inject() {
+        var root = settingsRoot();
+        if (!root) return;
+        var tabList = root.querySelector(".mx_TabbedView_tabLabels");
+        var tabbedView = root.querySelector(".mx_TabbedView");
+        if (!tabList || !tabbedView) return;
+
+        hideNativeUpdateButton();
+        var s = strings();
+        var existingLabel = document.getElementById(TAB_KEY);
+        if (!existingLabel || !existingLabel.isConnected) {
+            if (existingLabel) existingLabel.remove();
+            tabList.appendChild(buildTabLabel(s));
+        }
+        var existingPanel = document.getElementById(PANEL_KEY);
+        if (!existingPanel || !existingPanel.isConnected) {
+            if (existingPanel) existingPanel.remove();
+            tabbedView.appendChild(buildPanel(s));
+        }
+        if (!refs.select) return;
         probe();
-        anchor.insertAdjacentElement("afterend", buildRow());
     }
 
     var pending = false;
