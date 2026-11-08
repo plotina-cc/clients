@@ -206,7 +206,7 @@ index 0000000..254c547
 +            step={LEVEL_STEP}
 +            value={level}
 +            aria-label={strings.title}
-+            style={{ width: '100%' }}
++            style={{ width: '100%', accentColor: color.Primary.Main }}
 +            onChange={handleLevel}
 +          />
 +        </SettingTile>
