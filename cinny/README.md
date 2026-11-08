@@ -2,9 +2,11 @@
 
 One directory per client, because the modification is the same for both
 surfaces: the web app and the desktop build consume the shared wrapper in
-`../noise/` (`logic.js`, `boot.js`, `cinny-ui.js`, `vendor/` with DeepFilterNet3).
-Only the delivery differs — the web client is served as static files, the desktop
-build compiles the dist into a Tauri binary.
+`../noise/` (`logic.js`, `boot.js`, `vendor/` with DeepFilterNet3) plus the
+source patches in `patches/` — `0009` compiles the Settings → General noise
+block into the bundle as a React component. Only the delivery differs — the
+web client is served as static files, the desktop build compiles the dist into
+a Tauri binary.
 
 No source fork is needed: Cinny is taken at a pinned tag, the **built web dist**
 is patched before packaging, and the installers are built with our own config.
@@ -28,7 +30,7 @@ and aborts the build if the settings default is missing from the bundle.
 ```
 config.json          default homeserver (plotina.cc), no featured communities
 UPSTREAM_TAG         the cinny-desktop tag we build against
-apply-noise.py       copies noise/ into dist and inserts the tags into two documents
+apply-noise.py       copies noise/ into dist and inserts the tags into the call document
 branding.py          applies Plotina icons, HTML metadata and manifest to the dist
 tests/               unit tests for branding.py (python3 -m unittest discover -s cinny/tests)
 tauri.plotina.json   build override: no beforeBuildCommand, updater disabled
@@ -43,7 +45,8 @@ windows/             our NSIS installer: installer.nsi + build-installer.sh
 Static files on the edge (`/srv/cinny`), built by
 `.github/workflows/build-cinny-web.yml` and unpacked there unchanged: the
 workflow takes the tag from `UPSTREAM_TAG`, applies the patches in `patches/`
-(Sentry and the source link), embeds `noise/` (models fetched and verified
+(Sentry, branding, SSO handoff, the Updates page and the noise settings block),
+embeds `noise/` (models fetched and verified
 against `noise.lock.json`) and uploads `plotina-lite-web.tar.gz` with
 `build-info.json` next to it (release, upstream tag, the repository commit and
 the Cinny commit, run).
@@ -61,13 +64,17 @@ Cache headers are the part Caddy does own: `/noise/dfn/*` for 30 days,
 `/noise/*.js` as `no-cache`, and `index.html` as `no-cache` so a new shell with
 new asset hashes is picked up.
 
-**Why two documents.** Cinny renders calls in an iframe pointing at
-`public/element-call/index.html`; that iframe has its own `window`, so wrapping
-`getUserMedia` in the parent page would never see the call. The parent only needs
-the settings UI.
+**Why the call frame is patched and the shell is not.** Cinny renders calls in
+an iframe pointing at `public/element-call/index.html`; that iframe has its own
+`window`, so wrapping `getUserMedia` in the parent page would never see the
+call. The call frame gets `logic.js` + `boot.js` through `apply-noise.py`.
+The parent needs no noise script at all: the Settings → General block is React
+(`patches/0009`) and shares the `plotina.noise.*` localStorage keys with the
+frame — a write there fires a `storage` event in the call, where boot.js
+retunes the running processors.
 
 Verifying: `https://cinny.plotina.cc/noise/logic.js` returns 200; Settings →
-General shows the noise slider at the top with the default level 60
+General shows the noise slider above Appearance with the default level 60
 (`localStorage: plotina.noise.level`); inside a call, in the iframe,
 `window.__plotinaNoise.isSupported()` is `true` and `window.__plotinaNoiseStats`
 counts `callRequests`, `otherAudioRequests`, `processed` and `failed` — that is
@@ -140,7 +147,7 @@ cd upstream && npm ci
 cd cinny && npm ci && npm run build && cd ..
 
 mkdir -p noise/vendor
-cp ../noise/logic.js ../noise/boot.js ../noise/cinny-ui.js noise/
+cp ../noise/logic.js ../noise/boot.js noise/
 cp -a ../noise/vendor/. noise/vendor/
 python3 scripts/fetch-noise.py
 cp config.json upstream/config.json
@@ -195,9 +202,17 @@ the Lite Desktop update channel and speaks only through the preload bridge
 `updater.onStatus`, `updater.channel.{get,set,returnToStable}`), so all dev
 acknowledgement and downgrade policy stays in the main process. On Cinny Web
 the bridge is absent and the page shows an explanatory notice. It replaces the
-DOM block `noise/cinny-ui.js` used to inject under the noise slider (and the
-floating bottom-right button that overlapped the composer — both removed from
-the shell).
+floating bottom-right update button that overlapped the composer.
+
+`patches/0009` adds the noise settings block to Settings → **General**
+(`src/app/features/settings/general/PlotinaNoise.tsx`, rendered above
+Appearance): Cinny's own `SequenceCard`/`SettingTile`/`Box`/`Text` plus a
+native range input and a native backend select, reading and writing the same
+`plotina.noise.level` / `plotina.noise.backend` keys boot.js consumes. It
+replaces the DOM block `noise/cinny-ui.js` used to inject with a
+MutationObserver, anchor text search, colour sampling and hand-written CSS —
+that file is deleted, and the shell no longer carries any noise `<script>`
+tags.
 
 **Why not point the app at our website.** Tauri can open an external URL, but
 then the remote page needs IPC access — that is the CVE-2024-35222 class of

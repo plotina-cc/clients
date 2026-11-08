@@ -103,7 +103,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p noise/vendor
-          cp ../noise/logic.js ../noise/boot.js ../noise/cinny-ui.js noise/
+          cp ../noise/logic.js ../noise/boot.js noise/
           cp -a ../noise/vendor/. noise/vendor/
           python scripts/fetch-noise.py
           # DPDFNet backend binaries (ort wasm + model): gitignored and pinned
@@ -243,7 +243,9 @@ jobs:
         working-directory: cinny
         shell: bash
         run: |
-          grep -q 'noise/cinny-ui.js' upstream/cinny/dist/index.html
+          # Patch 0009 compiles the noise settings into the bundle; the old
+          # shell injection must be gone for the check to stay meaningful.
+          grep -Raqs 'plotina-noise-settings' upstream/cinny/dist/assets
           grep -q 'noise/boot.js' upstream/cinny/dist/public/element-call/index.html
           test -f upstream/cinny/dist/noise/dfn/v3/pkg/df_bg.wasm
           test -f upstream/cinny/dist/noise/vendor/dfn.esm.js

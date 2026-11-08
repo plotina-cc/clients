@@ -103,7 +103,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p noise/vendor
-          cp ../noise/logic.js ../noise/boot.js ../noise/cinny-ui.js noise/
+          cp ../noise/logic.js ../noise/boot.js noise/
           cp -a ../noise/vendor/. noise/vendor/
           python scripts/fetch-noise.py
           python ../noise/scripts/fetch-dpdfnet.py --dest noise
@@ -146,8 +146,10 @@ jobs:
           # The Electron shell's opener flow requires patch 0007 in the dist.
           grep -Raqs 'plotina:sso:login-token' upstream/cinny/dist/assets
           # Patch 0008 adds the Settings -> Updates page; its testid marker
-          # must survive minification or the page never ships.
+          # must survive minification or the page never ships. Patch 0009
+          # adds the Settings -> General noise block the same way.
           grep -Raqs 'plotina-updates-page' upstream/cinny/dist/assets
+          grep -Raqs 'plotina-noise-settings' upstream/cinny/dist/assets
           test -f upstream/cinny/dist/sw.js
 
       - name: Package the web dist
