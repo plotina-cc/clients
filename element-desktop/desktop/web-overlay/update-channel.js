@@ -486,6 +486,18 @@ exist, so this file stays inert.
             if (existingPanel) existingPanel.remove();
             tabbedView.appendChild(buildPanel(s));
         }
+        if (!tabList.__plotinaUpdatesListener) {
+            tabList.__plotinaUpdatesListener = true;
+            tabList.addEventListener("click", function (event) {
+                var own = event.target.closest && event.target.closest("#" + TAB_KEY);
+                var panel = document.getElementById(PANEL_KEY);
+                if (!own && panel) panel.style.display = "none";
+                if (!own && existingLabel) {
+                    existingLabel.classList.remove("mx_TabbedView_tabLabel_active");
+                    existingLabel.setAttribute("aria-selected", "false");
+                }
+            }, true);
+        }
         if (!refs.select) return;
         probe();
     }
