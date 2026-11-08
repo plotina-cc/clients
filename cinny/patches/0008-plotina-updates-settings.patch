@@ -45,7 +45,7 @@ new file mode 100644
 index 0000000..aa8152a
 --- /dev/null
 +++ b/src/app/features/settings/updates/Updates.tsx
-@@ -0,0 +1,422 @@
+@@ -0,0 +1,424 @@
 +// Plotina Lite Desktop: Settings -> «Обновления».
 +//
 +// The renderer half of the update channel. All policy (dev acknowledgement,
@@ -59,10 +59,11 @@ index 0000000..aa8152a
 +// `text` (structured-clone-safe strings only) those values win, so the page
 +// can never drift from the strings the native menu shows.
 +import React, { useEffect, useState } from 'react';
-+import { Box, Button, Icon, IconButton, Icons, Scroll, Text } from 'folds';
++import { Box, Button, Icon, IconButton, Icons, Scroll, Text, color, config } from 'folds';
 +import { Page, PageContent, PageHeader } from '../../../components/page';
 +import { SequenceCard } from '../../../components/sequence-card';
 +import { SequenceCardStyle } from '../styles.css';
++import { ThemeKind, useActiveTheme } from '../../../hooks/useTheme';
 +
 +// ---------------------------------------------------------------- bridge API
 +type BridgeText = Record<string, string | string[]>;
@@ -198,6 +199,7 @@ index 0000000..aa8152a
 +  const [status, setStatus] = useState<string>('');
 +  const [checking, setChecking] = useState(false);
 +  const [confirmDev, setConfirmDev] = useState(false);
++  const theme = useActiveTheme();
 +
 +  const channel = state?.channel === 'dev' ? 'dev' : 'stable';
 +  const text = state?.text;
@@ -360,7 +362,7 @@ index 0000000..aa8152a
 +                          backend picker): layout properties only. */}
 +                      <select
 +                        aria-label={str(text, 'channelLabel')}
-+                        style={{ font: 'inherit' }}
++                        style={{ font: 'inherit', minWidth: 160, padding: '6px 10px', borderRadius: 8, color: color.SurfaceVariant.OnContainer, background: color.SurfaceVariant.Container, border: '1px solid ' + color.SurfaceVariant.ContainerLine, outline: 'none', colorScheme: theme.kind === ThemeKind.Dark ? 'dark' : 'light' }}
 +                        value={channel}
 +                        onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
 +                          selectChannel(e.target.value)

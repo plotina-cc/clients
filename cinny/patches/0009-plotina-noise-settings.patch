@@ -23,7 +23,7 @@ new file mode 100644
 index 0000000..254c547
 --- /dev/null
 +++ b/src/app/features/settings/general/PlotinaNoise.tsx
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,214 @@
 +// Plotina: the noise-suppression block in Settings -> General.
 +//
 +// Built the Cinny way: SequenceCard / SettingTile / Box / Text with native
@@ -38,10 +38,11 @@ index 0000000..254c547
 +// running processors. Keys, defaults, clamping and wording mirror
 +// noise/logic.js — keep the two files in step.
 +import React, { ChangeEventHandler, useEffect, useState } from 'react';
-+import { Box, Text } from 'folds';
++import { Box, Text, color, config } from 'folds';
 +import { SequenceCard } from '../../../components/sequence-card';
 +import { SettingTile } from '../../../components/setting-tile';
 +import { SequenceCardStyle } from '../styles.css';
++import { ThemeKind, useActiveTheme } from '../../../hooks/useTheme';
 +
 +const LEVEL_KEY = 'plotina.noise.level';
 +const DEFAULT_LEVEL = 60;
@@ -139,6 +140,7 @@ index 0000000..254c547
 +}
 +
 +export function PlotinaNoise() {
++  const theme = useActiveTheme();
 +  const [strings] = useState(pickStrings);
 +  const [level, setLevel] = useState(readLevel);
 +  const [backend, setBackend] = useState(readBackend);
@@ -219,7 +221,7 @@ index 0000000..254c547
 +        <SettingTile
 +          title={strings.backend}
 +          after={
-+            <select aria-label={strings.backend} value={backend} onChange={handleBackend}>
++            <select aria-label={strings.backend} value={backend} onChange={handleBackend} style={{ font: 'inherit', minWidth: 160, padding: '6px 10px', borderRadius: 8, color: color.SurfaceVariant.OnContainer, background: color.SurfaceVariant.Container, border: '1px solid ' + color.SurfaceVariant.ContainerLine, outline: 'none', colorScheme: theme.kind === ThemeKind.Dark ? 'dark' : 'light' }}>
 +              {BACKENDS.map((id) => (
 +                <option key={id} value={id}>
 +                  {BACKEND_LABELS[id]}
