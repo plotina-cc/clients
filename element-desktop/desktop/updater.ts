@@ -300,6 +300,8 @@ interface Release {
 interface LatestYml {
     version: string;
     fileName: string;
+    /** The url field as published; edge metadata uses an absolute URL. */
+    url: string;
     sha512: string;
     releaseDate: string;
     /** Published artifact size in bytes, when the metadata carries it. */
@@ -408,8 +410,12 @@ export function parseLatestYml(text: string): LatestYml | null {
         return m[1].trim().replace(/^["']|["']$/g, "");
     };
     const version = grab(/^version:\s*(.+)$/m);
-    // first `url:` entry of the files list
-    const fileName = grab(/^files:[\s\S]*?-\s*url:\s*(.+)$/m);
+    // first `url:` entry of the files list; edge metadata publishes an
+    // absolute URL there, while GitHub metadata uses a bare asset name.
+    const fileUrl = grab(/^files:[\s\S]*?-\s*url:\s*(.+)$/m);
+    const fileName = fileUrl
+        ? decodeURIComponent(fileUrl.split("/").pop() || "")
+        : null;
     // top-level (column-0) sha512 covers the installer itself
     const sha512 = grab(/^sha512:\s*(.+)$/m);
     const releaseDate = grab(/^releaseDate:\s*(.+)$/m);
@@ -425,8 +431,8 @@ export function parseLatestYml(text: string): LatestYml | null {
         const entrySize = firstBlock ? /^ {2,}size:\s*(\d+)/m.exec(firstBlock) : null;
         if (entrySize) size = Number(entrySize[1]);
     }
-    if (!version || !fileName || !sha512) return null;
-    return { version, fileName, sha512, releaseDate: releaseDate ?? "", size: Number.isFinite(size) ? size : null };
+    if (!version || !fileUrl || !fileName || !sha512) return null;
+    return { version, fileName, url: fileUrl, sha512, releaseDate: releaseDate ?? "", size: Number.isFinite(size) ? size : null };
 }
 
 function sendUpdateStatus(status: boolean | string): void {
@@ -548,12 +554,18 @@ async function checkDevFeed(feed: UpdateFeed, allowDowngrade: boolean, manual: b
         if (manual) sendUpdateStatus(false);
         return;
     }
-    let ymlRes = await fetch(devMetadataDownloadUrl(feed, devFile), {
+    // The edge mirror is the source of truth for local/dev builds: it is
+    // updated by the publish job even when the GitHub asset CDN is stale or
+    // still points at the previous dev release. GitHub remains a fallback for
+    // an edge mirror that is temporarily unavailable.
+    let ymlRes = await fetch(devMetadataFallbackUrl(devFile), {
         headers: { "User-Agent": `Plotina-Desktop/${app.getVersion()}` },
     });
-    if (ymlRes.status >= 500) {
-        console.warn(`Plotina updater: GitHub dev feed HTTP ${ymlRes.status}; trying the edge mirror`);
-        ymlRes = await fetch(devMetadataFallbackUrl(devFile), {
+    let metadataSource = "edge";
+    if (!ymlRes.ok) {
+        console.warn(`Plotina updater: edge dev feed HTTP ${ymlRes.status}; trying GitHub dev-latest`);
+        metadataSource = "github";
+        ymlRes = await fetch(devMetadataDownloadUrl(feed, devFile), {
             headers: { "User-Agent": `Plotina-Desktop/${app.getVersion()}` },
         });
     }
@@ -564,11 +576,15 @@ async function checkDevFeed(feed: UpdateFeed, allowDowngrade: boolean, manual: b
         if (manual) sendUpdateStatus(false);
         return;
     }
+    const artifactUrl = /^https?:\/\//i.test(yml.url)
+        ? yml.url
+        : devAssetDownloadUrl(feed, yml.fileName);
+    console.log(`Plotina updater: using ${metadataSource} dev metadata for ${yml.version}`);
     const release: Release = {
         tag_name: DEV_RELEASE_TAG,
         draft: false,
         prerelease: false,
-        assets: [{ name: yml.fileName, browser_download_url: devAssetDownloadUrl(feed, yml.fileName) }],
+        assets: [{ name: yml.fileName, browser_download_url: artifactUrl }],
     };
     sendUpdateStatus(true);
     if (UPDATE_MODE === "linux-appimage") {
