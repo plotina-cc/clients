@@ -199,7 +199,31 @@ Linux produces `dist-stable/Plotina-Desktop.AppImage` and
 python3, git and curl; the upstream clone and the 53 MB tarball are cached in
 `.build/`.
 
-### Installing the AppImage
+### Installing on Linux
+
+The installer is self-contained and, on Debian/Ubuntu with usable sudo,
+subscribes the system to the signed Plotina apt repo and installs
+`plotina-desktop` from it — so new builds arrive with the regular
+`apt-get update && apt-get upgrade` instead of a one-off downloaded `.deb`:
+
+```bash
+curl -fsSL https://plotina.cc/dl/Plotina-Desktop-install.sh | bash
+```
+
+That step writes the key to `/usr/share/keyrings/plotina.gpg` (fetched to a
+temp file, sanity-checked, then installed atomically) and the source line
+
+```
+deb [signed-by=/usr/share/keyrings/plotina.gpg] https://plotina.cc/apt ./
+```
+
+to `/etc/apt/sources.list.d/plotina.list` — exactly as documented in
+<https://plotina.cc/apt/README.md>. Existing keyring/list files are left
+untouched; `--deb` forces this path. If it is not possible (non-Debian, no
+sudo, refused password, apt or network failure), the installer falls back to
+the per-user AppImage below, and `--appimage` forces that. A positional `.deb`
+path/URL and `PLOTINA_DEB_URL` are deprecated escape hatches: they install
+that exact file via apt/dpkg without subscribing the machine to the repo.
 
 An AppImage does not register its `.desktop` file, so the browser keeps sending
 the SSO callback (`io.element.desktop`) to an installed upstream Element. Run
@@ -211,9 +235,9 @@ element-desktop/scripts/install-appimage.sh ~/Downloads/Plotina-Desktop.AppImage
 
 It puts the image in `~/.local/bin/plotina-desktop`, installs the icon and
 desktop entry, and makes `io.element.desktop`, `element` and
-`cc.plotina.element` point at it. The `.deb` installs the same desktop entry
-system-wide; if an upstream Element is already the default handler, choose
-Plotina Desktop once in the browser's protocol prompt.
+`cc.plotina.element` point at it. The apt-repo `.deb` installs the same
+desktop entry system-wide; if an upstream Element is already the default
+handler, choose Plotina Desktop once in the browser's protocol prompt.
 
 The same steps run in CI: `.github/workflows/build-element-desktop.yml` triggers
 on a `v*-plotina.*` tag, builds one webapp and hands it to the Linux and Windows
@@ -235,9 +259,11 @@ There is no auto-update and nothing to point at a feed:
 - `update_base_url` is absent from the baked config, which is the switch that
   starts the updater on the remaining platforms.
 
-A new version is a new installer, installed over the old one. Profiles are
-separate from upstream Element (`plotina-desktop` as the app name), so both can
-be installed side by side.
+A new version is a new installer, installed over the old one — except apt-repo
+installs (`plotina-desktop` from `https://plotina.cc/apt`), which track
+releases through `apt-get update && apt-get upgrade` like any other package.
+Profiles are separate from upstream Element (`plotina-desktop` as the app
+name), so both can be installed side by side.
 
 ## Verifying a build by hand
 
