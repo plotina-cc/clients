@@ -514,14 +514,17 @@ exist, so this file stays inert.
     function scheduleInject() {
         if (pending) return;
         pending = true;
-        setTimeout(function () {
+        // Run in the MutationObserver microtask, before the browser paints the
+        // newly opened settings dialog. The old 200 ms delay let the native
+        // tab list paint first, so "Обновления" popped in visibly afterwards.
+        Promise.resolve().then(function () {
             pending = false;
             try {
                 inject();
             } catch (e) {
                 console.warn("plotina-update-channel: injection failed", e);
             }
-        }, 200);
+        });
     }
 
     new MutationObserver(scheduleInject).observe(document.documentElement, { childList: true, subtree: true });
