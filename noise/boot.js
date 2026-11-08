@@ -369,8 +369,8 @@
 
     md.getUserMedia = async function (constraints) {
       var audio = constraints && constraints.audio;
-      if (audio && typeof audio === "object" && !L.shouldProcess(constraints)) {
-        /* Voice messages and anything else that is not call audio. Counted so
+      if (audio && typeof audio === "object" && typeof audio.noiseSuppression !== "boolean") {
+        /* Voice messages and anything else that is not Element Call. Counted so
            an upstream change in constraint shape is visible from the console. */
         stats.otherAudioRequests += 1;
       }
