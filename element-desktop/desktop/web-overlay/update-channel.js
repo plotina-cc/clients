@@ -47,8 +47,12 @@ exist, so this file stays inert.
             updatesTitle: "Обновления",
             checkButton: "Проверить наличие обновлений",
             checking: "Проверяю обновления…",
-            noUpdates: "Обновлений нет.",
-            updateFound: "Доступно обновление.",
+            checkingButton: "Проверяю…",
+            checkHint: "Проверяю обновления… Если найдётся обновление, появится системный диалог.",
+            checkTimeout: "Проверка занимает дольше обычного. Проверьте соединение или попробуйте ещё раз.",
+            noUpdates: "Обновлений нет — установлена последняя версия.",
+            updateFound: "Обновление найдено, скачивается…",
+            updateDownloaded: "Обновление скачано. Перезапустите Plotina Desktop, чтобы установить его.",
             channelHeading: "Канал обновлений",
         },
         en: {
@@ -66,8 +70,12 @@ exist, so this file stays inert.
             updatesTitle: "Updates",
             checkButton: "Check for updates",
             checking: "Checking for updates…",
+            checkingButton: "Checking…",
+            checkHint: "Checking for updates… If an update is found, a system dialog will appear.",
+            checkTimeout: "The check is taking longer than usual. Check your connection and try again.",
             noUpdates: "You are up to date.",
-            updateFound: "An update is available.",
+            updateFound: "Update found, downloading…",
+            updateDownloaded: "Update downloaded. Restart Plotina Desktop to install it.",
             channelHeading: "Update channel",
         },
     };
@@ -444,18 +452,38 @@ exist, so this file stays inert.
         check.className = "mx_AccessibleButton mx_AccessibleButton_kind_primary";
         check.style.cssText = "font:inherit;background:var(--cpd-color-bg-action-primary,#0dbd8b);color:var(--cpd-color-text-on-solid-primary,#fff);border:0;border-radius:8px;padding:8px 14px;cursor:pointer;";
         var status = document.createElement("div");
+        status.setAttribute("aria-live", "polite");
         status.style.cssText = "font-size:12px;opacity:.7;margin-top:8px;min-height:16px;";
+        var checkBusy = false;
+        var checkTimer = null;
+        function setCheckBusy(busy, note) {
+            checkBusy = busy;
+            check.disabled = busy;
+            check.setAttribute("aria-busy", busy ? "true" : "false");
+            check.textContent = busy ? s.checkingButton : s.checkButton;
+            if (note !== undefined) status.textContent = note;
+            if (checkTimer) { clearTimeout(checkTimer); checkTimer = null; }
+            if (busy) {
+                checkTimer = setTimeout(function () {
+                    if (checkBusy) setCheckBusy(false, s.checkTimeout);
+                }, 60000);
+            }
+        }
         check.addEventListener("click", function () {
-            status.textContent = s.checking;
-            try { window.electron.send("check_updates"); } catch (e) { status.textContent = String(e); }
+            setCheckBusy(true, s.checkHint);
+            try { window.electron.send("check_updates"); } catch (e) { setCheckBusy(false, String(e)); }
         });
         checkSection.appendChild(check);
         checkSection.appendChild(status);
         if (window.electron && typeof window.electron.on === "function") {
             window.electron.on("check_updates", function (_event, result) {
-                if (result === false) status.textContent = s.noUpdates;
-                else if (result === true) status.textContent = s.updateFound;
-                else if (typeof result === "string" && result) status.textContent = result;
+                if (result === false) setCheckBusy(false, s.noUpdates);
+                else if (result === true) setCheckBusy(true, s.updateFound);
+                else if (typeof result === "string" && result) setCheckBusy(false, result);
+            });
+            window.electron.on("update-downloaded", function (_event, info) {
+                var name = info && info.releaseName ? " (" + info.releaseName + ")" : "";
+                setCheckBusy(false, s.updateDownloaded + name);
             });
         }
 
