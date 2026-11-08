@@ -1,0 +1,84 @@
+diff --git a/src/app/features/settings/general/PlotinaNoise.tsx b/src/app/features/settings/general/PlotinaNoise.tsx
+index 7360542..32a5c7b 100644
+--- a/src/app/features/settings/general/PlotinaNoise.tsx
++++ b/src/app/features/settings/general/PlotinaNoise.tsx
+@@ -153,6 +153,60 @@ export function PlotinaNoise() {
+     // data-testid survives minification; the CI jobs grep this marker to
+     // prove patch 0009 is baked into the dist.
+     <Box direction="Column" gap="100" data-testid="plotina-noise-settings">
++      <style>{`
++        #plotina-noise-range {
++          --plotina-range-pct: 60%;
++          -webkit-appearance: none;
++          appearance: none;
++          display: block;
++          width: 100%;
++          height: 20px;
++          margin: 0;
++          background: transparent;
++          cursor: pointer;
++        }
++        #plotina-noise-range::-webkit-slider-runnable-track {
++          height: 6px;
++          border-radius: 999px;
++          background: linear-gradient(
++            to right,
++            ${color.Primary.Main} 0 var(--plotina-range-pct),
++            ${color.SurfaceVariant.ContainerLine} var(--plotina-range-pct) 100%
++          );
++        }
++        #plotina-noise-range::-webkit-slider-thumb {
++          -webkit-appearance: none;
++          appearance: none;
++          width: 16px;
++          height: 16px;
++          margin-top: -5px;
++          border-radius: 50%;
++          background: ${color.Primary.Main};
++          border: 2px solid ${color.SurfaceVariant.Container};
++        }
++        #plotina-noise-range::-moz-range-track {
++          height: 6px;
++          border-radius: 999px;
++          background: ${color.SurfaceVariant.ContainerLine};
++        }
++        #plotina-noise-range::-moz-range-progress {
++          height: 6px;
++          border-radius: 999px;
++          background: ${color.Primary.Main};
++        }
++        #plotina-noise-range::-moz-range-thumb {
++          width: 14px;
++          height: 14px;
++          border-radius: 50%;
++          background: ${color.Primary.Main};
++          border: 2px solid ${color.SurfaceVariant.Container};
++        }
++        #plotina-noise-range:focus-visible {
++          outline: 2px solid ${color.Primary.Main};
++          outline-offset: 2px;
++          border-radius: 4px;
++        }
++      `}</style>
+       <Text size="L400">{strings.section}</Text>
+ 
+       <SequenceCard
+@@ -170,16 +224,15 @@ export function PlotinaNoise() {
+             </Text>
+           }
+         >
+-          {/* Native range on purpose — no appearance:none, no pseudo-element
+-              CSS. Width is the only layout touch. */}
+           <input
++            id="plotina-noise-range"
+             type="range"
+             min={LEVEL_MIN}
+             max={LEVEL_MAX}
+             step={LEVEL_STEP}
+             value={level}
+             aria-label={strings.title}
+-            style={{ width: '100%', accentColor: color.Primary.Main }}
++            style={{ width: '100%', '--plotina-range-pct': `${level}%` } as React.CSSProperties}
+             onChange={handleLevel}
+           />
+         </SettingTile>
