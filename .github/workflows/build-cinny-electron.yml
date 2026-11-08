@@ -7,8 +7,13 @@
 # v*-plotina-lite-desktop.* build web -> linux/windows packaging -> smoke and
 # then run the `release` job, which verifies the artifacts and attaches them
 # to the GitHub release for that tag; the in-app updater (src/updater.js)
-# reads latest.yml / latest-linux.yml from that release. Nothing is published
-# to /dl from CI: the edge host pulls the release itself (pull-release).
+# reads latest-lite.yml / latest-lite-linux.yml from that release. A dev tag
+# v<semver>-plotina-lite-desktop.N-dev.M instead publishes a PRERELEASE for
+# the tag and rolls the same verified artifacts plus Lite-scoped metadata
+# (latest-lite-dev.yml / latest-lite-linux-dev.yml) into the shared
+# `dev-latest` release; Desktop's latest-dev.yml / latest-linux-dev.yml there
+# are never touched. Nothing is published to /dl from CI: the edge host pulls
+# the release itself (pull-release).
 #
 # workflow_dispatch stays for branch testing; builds run with --publish never
 # and the release job only runs on tags, so a branch or dispatch build can
@@ -98,7 +103,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p noise/vendor
-          cp ../noise/logic.js ../noise/boot.js ../noise/cinny-ui.js noise/
+          cp ../noise/logic.js ../noise/boot.js noise/
           cp -a ../noise/vendor/. noise/vendor/
           python scripts/fetch-noise.py
           python ../noise/scripts/fetch-dpdfnet.py --dest noise
@@ -140,6 +145,11 @@ jobs:
           set -euo pipefail
           # The Electron shell's opener flow requires patch 0007 in the dist.
           grep -Raqs 'plotina:sso:login-token' upstream/cinny/dist/assets
+          # Patch 0008 adds the Settings -> Updates page; its testid marker
+          # must survive minification or the page never ships. Patch 0009
+          # adds the Settings -> General noise block the same way.
+          grep -Raqs 'plotina-updates-page' upstream/cinny/dist/assets
+          grep -Raqs 'plotina-noise-settings' upstream/cinny/dist/assets
           test -f upstream/cinny/dist/sw.js
 
       - name: Package the web dist
@@ -344,12 +354,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "${GITHUB_REF_NAME}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-plotina-lite-desktop\.([0-9]+)$ ]]; then
+          # v<semver>-plotina-lite-desktop.N        -> stable release
+          # v<semver>-plotina-lite-desktop.N-dev.M  -> dev prerelease + dev-latest roll
+          if [[ "${GITHUB_REF_NAME}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-plotina-lite-desktop\.([0-9]+)-dev\.([0-9]+)$ ]]; then
+            echo "app_version=${BASH_REMATCH[1]}-plotina.${BASH_REMATCH[2]}-dev.${BASH_REMATCH[3]}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "release APP_VERSION=${BASH_REMATCH[1]}-plotina.${BASH_REMATCH[2]}-dev.${BASH_REMATCH[3]} (dev tag: prerelease)"
+          elif [[ "${GITHUB_REF_NAME}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-plotina-lite-desktop\.([0-9]+)$ ]]; then
             echo "app_version=${BASH_REMATCH[1]}-plotina.${BASH_REMATCH[2]}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
             echo "release APP_VERSION=${BASH_REMATCH[1]}-plotina.${BASH_REMATCH[2]}"
           else
-            echo "FATAL: tag '${GITHUB_REF_NAME}' is not v<semver>-plotina-lite-desktop.<rev>" >&2
+            echo "FATAL: tag '${GITHUB_REF_NAME}' is not v<semver>-plotina-lite-desktop.<rev>[-dev.<M>]" >&2
             echo "       expected e.g. v4.12.8-plotina-lite-desktop.18 -> 4.12.8-plotina.18" >&2
+            echo "                 or  v4.12.8-plotina-lite-desktop.18-dev.2 -> 4.12.8-plotina.18-dev.2" >&2
             exit 1
           fi
 
@@ -381,6 +399,7 @@ jobs:
           test -s release-assets/Plotina-Lite-Desktop-install.sh
 
       - uses: softprops/action-gh-release@v2
+        if: steps.ver.outputs.prerelease != 'true'
         with:
           tag_name: ${{ github.ref_name }}
           # Human-facing title: the base version plus the release counter, so
@@ -400,3 +419,55 @@ jobs:
             Файлы без версии в имени (Plotina-Lite-Desktop.AppImage, .deb, .rpm, -setup.exe, .msi) — стабильные ссылки на текущую сборку; контрольные суммы — в SHA256SUMS.
 
             Исходники этой сборки — в этом репозитории (AGPL-3.0): upstream-тег cinny-desktop из cinny/UPSTREAM_TAG и его submodule cinny плюс оверлей cinny/ и оболочка cinny-electron/. Полный набор: https://github.com/plotina-cc/clients/blob/main/SOURCE.md
+
+      # ---- dev tags: prerelease release + dev-latest roll -------------------
+      - uses: softprops/action-gh-release@v2
+        if: steps.ver.outputs.prerelease == 'true'
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Plotina Lite Desktop ${{ steps.ver.outputs.app_version }} dev (Electron)"
+          # Dev tags are test builds: prerelease so the stable updater listing
+          # (non-prerelease only, src/updater.js) never sees them, and never
+          # the repository's 'latest' release.
+          prerelease: true
+          make_latest: "false"
+          generate_release_notes: false
+          files: release-assets/*
+          body: |
+            Тестовая (dev) сборка Plotina Lite Desktop ${{ steps.ver.outputs.app_version }}. Ставится только клиентами с включённым каналом обновлений Dev (Настройки → Обновления). Rolling-метаданные latest-lite-dev.yml / latest-lite-linux-dev.yml и эти же артефакты опубликованы в релизе dev-latest.
+
+      - name: Publish rolling dev metadata + artifacts to dev-latest
+        if: steps.ver.outputs.prerelease == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.ver.outputs.app_version }}"
+          # Product-scoped copies of the verified Lite metadata. The shared
+          # dev-latest release also carries Plotina Desktop's rolling
+          # latest-dev.yml / latest-linux-dev.yml: Lite must never upload or
+          # clobber those names, or a Desktop dev client would install Lite
+          # bytes.
+          cp release-assets/latest-lite-linux.yml release-assets/latest-lite-linux-dev.yml
+          cp release-assets/latest-lite.yml release-assets/latest-lite-dev.yml
+          shopt -s nullglob
+          upload=(release-assets/latest-lite-linux-dev.yml release-assets/latest-lite-dev.yml)
+          for pat in \
+            "Plotina-Lite-Desktop-${version}-*.AppImage" \
+            "Plotina-Lite-Desktop-${version}-*.deb" \
+            "Plotina-Lite-Desktop-${version}-*.rpm" \
+            "Plotina-Lite-Desktop-${version}-*.exe" \
+            "Plotina-Lite-Desktop-${version}-*.exe.blockmap" \
+            "Plotina-Lite-Desktop-${version}-*.msi"; do
+            upload+=(release-assets/${pat})
+          done
+          echo "dev-latest upload set:"; printf '  %s\n' "${upload[@]}"
+          [ "${#upload[@]}" -ge 4 ] || { echo "FATAL: dev upload set too small (${#upload[@]} files) — versioned artifacts missing?" >&2; exit 1; }
+          # dev-latest is shared with Desktop: create only if absent, never
+          # delete, clobber-upload just this product's files.
+          gh release view dev-latest >/dev/null 2>&1 || \
+            gh release create dev-latest --prerelease \
+              --title "Plotina dev-latest (rolling test builds)" \
+              --notes "Rolling dev builds of plotina-cc/clients products. Product-scoped metadata: Plotina Desktop -> latest-dev.yml / latest-linux-dev.yml; Plotina Lite Desktop -> latest-lite-dev.yml / latest-lite-linux-dev.yml. Do not delete this release."
+          gh release upload dev-latest --clobber "${upload[@]}"

@@ -1,8 +1,8 @@
 // Plotina Lite Desktop updater (Electron).
 //
 // Adapted from element-desktop/desktop/updater.ts (the proven reference:
-// GitHub releases + electron-builder latest.yml/latest-linux.yml metadata +
-// sha512 + AppImage atomic swap + NSIS silent `/S --updated`). Differences for
+// electron-builder latest*.yml metadata + sha512 + size + AppImage atomic
+// swap + NSIS silent `/S --updated`). Differences for
 // Lite (per docs/LITE_ELECTRON_MIGRATION.md §7 and the Phase-2 decision):
 //
 //   * Install-kind detection lives here and is reported to the renderer over
@@ -20,11 +20,32 @@
 //   * QA feed override: PLOTINA_QA_UPDATES=1 reads
 //     PLOTINA_UPDATE_FEED_URL (a local http server hosting latest*.yml +
 //     artifacts, same layout as a release). Production ignores both.
+//   * Two update channels. src/update-channel.js owns the policy (URLs, the
+//     version grammar, the downgrade rules, the persisted preference, the
+//     strings); this module is the glue. 'stable' is the DIRECT edge feed:
+//     one GET of https://plotina.cc/dl/latest-lite-linux.yml (AppImage) /
+//     /dl/latest-lite.yml (NSIS) and the artifact from the stable alias
+//     /dl/Plotina-Lite-Desktop.AppImage / /dl/Plotina-Lite-Desktop-setup.exe
+//     — no api.github.com call anywhere on the stable path, no release
+//     listing, no anonymous rate limit. 'dev' is opt-in and reads the fixed
+//     `dev-latest` release by direct download URL — also no API call.
+//     The preference lives in <userData>/update-channel.json and is switched
+//     from the app/tray menu entry 'Канал обновлений: Стабильный / Dev' or by
+//     the renderer through the preload contract. Two invariants:
+//       - a `-dev.` build is never offered on the stable channel, even if the
+//         stable feed is misconfigured and advertises one;
+//       - a version reduction is never applied automatically — only through
+//         returnToStable(), the explicit 'Вернуться на стабильный' action,
+//         because a dev build of the same -plotina.N rev sorts HIGHER than
+//         that stable release and so needs a downgrade to leave.
 //
 // SECURITY (same trade-off as Plotina Desktop): builds are unsigned (no
-// Authenticode cert yet), so trust in an update = TLS to api.github.com +
-// the sha512 published in latest*.yml. This stops corruption and casual
-// tampering, not a compromised release. When a certificate is added,
+// Authenticode cert yet), so trust in an update = TLS to plotina.cc (our edge;
+// /dl is mirrored from the GitHub release by infra scripts/pull-release.py) or
+// to github.com for the dev feed, plus the sha512 AND size published in the
+// latest*.yml metadata (dev feed included: same verification, same placement
+// code). This stops corruption and casual tampering, not a compromised release
+// or a compromised edge host. When a certificate is added,
 // electron-builder writes `publisherName` into app-update.yml and this module
 // should verify it via PowerShell Get-AuthenticodeSignature before install.
 'use strict';
@@ -38,12 +59,10 @@ const path = require('node:path');
 const { Readable } = require('node:stream');
 const { pipeline } = require('node:stream/promises');
 const { createWriteStream } = require('node:fs');
+const policy = require('./update-channel');
 
-const UPDATE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000; // GitHub API: 60 req/h/IP
+const UPDATE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000; // our own edge: a check is one small GET; stay polite
 const INITIAL_UPDATE_DELAY_MS = process.env.PLOTINA_QA_UPDATES === '1' ? 1000 : 30 * 1000;
-const MAX_METADATA_CHECKS = 5;
-const WINDOWS_METADATA_FILE = 'latest.yml';
-const LINUX_METADATA_FILE = 'latest-linux.yml';
 const DOWNLOAD_PAGE = 'https://plotina.cc/dl/';
 const USER_AGENT = 'Plotina-Lite-Desktop';
 
@@ -74,7 +93,7 @@ function detectInstallKind() {
 const INSTALL_KIND = detectInstallKind();
 // Only these kinds can move their own bits; everything else is manual or
 // package-manager owned.
-const SELF_UPDATE_KINDS = new Set(['appimage', 'nsis']);
+const SELF_UPDATE_KINDS = policy.SELF_UPDATE_KINDS;
 
 const PACKAGE_GUIDANCE = {
   deb: 'Plotina Lite Desktop (system package) is updated by the package manager: run `sudo apt update && sudo apt install plotina-lite-desktop`.',
@@ -89,20 +108,25 @@ function packageGuidance() {
 }
 
 // ------------------------------------------------------------------- feed
+/** Stable feed coordinates. electron-builder writes resources/app-update.yml
+ *  from the `publish` block. If it is absent or unusable we still know this
+ *  product's own home (plotina-cc/clients, the same constants the dev feed
+ *  uses), so a hand-assembled tree keeps updating instead of going silently
+ *  dead — which source was used is logged at init(). */
 function readUpdateFeed() {
-  if (!process.resourcesPath) return null; // unpackaged dev run
+  const builtin = { owner: policy.RELEASE_OWNER, repo: policy.RELEASE_REPO, source: 'builtin' };
+  if (!process.resourcesPath) return builtin; // unpackaged dev run
   const ymlPath = path.join(process.resourcesPath, 'app-update.yml');
   let text;
-  try { text = fsSync.readFileSync(ymlPath, 'utf8'); } catch { return null; }
+  try { text = fsSync.readFileSync(ymlPath, 'utf8'); } catch { return builtin; }
   const field = (name) => {
     const line = text.split(/\r?\n/).find((l) => l.startsWith(name + ':'));
     return line ? line.slice(name.length + 1).trim().replace(/^["']|["']$/g, '') : '';
   };
-  if (field('provider') !== 'github') return null;
-  const owner = field('owner');
-  const repo = field('repo');
-  if (!owner || !repo) return null;
-  return { owner, repo };
+  if (field('provider') !== 'github') return builtin;
+  const owner = field('owner') || builtin.owner;
+  const repo = field('repo') || builtin.repo;
+  return { owner, repo, source: ymlPath };
 }
 
 function qaFeedOverride() {
@@ -112,31 +136,96 @@ function qaFeedOverride() {
   return { local: true, base };
 }
 
-// ----------------------------------------------------------------- parsers
-/** Numeric tokens of a version. STRICT shape: x.y.z-plotina.N — the tag
- *  contract (§7.1). Anything else (notably the mangled 4-segment form
- *  4.12.818 — the Element `.30` lesson) is NOT a candidate for update. */
-const PLOTINA_VERSION = /^(\d+)\.(\d+)\.(\d+)-plotina\.(\d+)/;
-function versionTokens(v) {
-  const m = PLOTINA_VERSION.exec(String(v));
-  return m ? [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])] : null;
+// ----------------------------------------------------------------- channel
+const userDataDir = () => app.getPath('userData');
+
+function currentChannelInfo() { return policy.readChannel(userDataDir(), process.env); }
+function currentChannel() { return currentChannelInfo().channel; }
+
+/** UI_TEXT projected onto structured-clone-safe values (strings and string
+ *  arrays). The full UI_TEXT carries helper functions (channelEntry,
+ *  downgradeDetail) which electron's IPC cannot serialize — DataCloneError —
+ *  so over the bridge we ship the parts and the renderer composes the labels.
+ *  Menu code in main.js keeps using UI_TEXT directly (same process). */
+function uiTextForBridge() {
+  const out = {};
+  for (const [key, value] of Object.entries(policy.UI_TEXT)) {
+    if (typeof value === 'string' || Array.isArray(value)) out[key] = value;
+  }
+  return out;
+}
+const BRIDGE_UI_TEXT = uiTextForBridge();
+
+/** Everything the Settings entry needs to render itself (menu + renderer). */
+function channelState() {
+  const info = currentChannelInfo();
+  const channelName = info.channel;
+  return {
+    channel: channelName,
+    source: info.source, // file | env | default
+    pinnedByEnv: info.source === 'env',
+    devAcknowledgedAt: info.devAcknowledgedAt,
+    installKind: INSTALL_KIND,
+    selfUpdate: SELF_UPDATE_KINDS.has(INSTALL_KIND),
+    currentVersion: app.getVersion(),
+    metadataFile: policy.metadataFileFor({ installKind: INSTALL_KIND, channel: channelName }),
+    devFeedUrl: policy.devFeedUrl({
+      installKind: INSTALL_KIND,
+      channel: policy.DEV,
+      devFeedBase: policy.resolveDevFeedBase(process.env),
+    }),
+    text: BRIDGE_UI_TEXT,
+  };
 }
 
-function isVersionNewer(candidate, current) {
-  const a = versionTokens(candidate);
-  const b = versionTokens(current);
-  if (!a || !b) return false; // unparseable shape: never auto-apply
-  for (let i = 0; i < 4; i++) {
-    if (a[i] !== b[i]) return a[i] > b[i];
+let channelListeners = [];
+function onChannelChanged(fn) { if (typeof fn === 'function') channelListeners.push(fn); }
+function notifyChannelChanged(channelName) {
+  for (const fn of channelListeners) {
+    try { fn(channelName); } catch (e) { console.warn('[updater] channel listener failed', e); }
   }
-  return false;
 }
+
+/** Switch channel. Dev requires an acknowledgement — the caller (menu or
+ *  renderer) must have shown the warning first; an unacknowledged request
+ *  changes nothing and reports that confirmation is required. */
+function setChannel(nextChannel, { acknowledged = false, manual = true } = {}) {
+  if (!policy.CHANNELS.includes(nextChannel)) {
+    return { ok: false, error: `unknown channel: ${nextChannel}`, state: channelState() };
+  }
+  const result = policy.writeChannel(userDataDir(), nextChannel, {
+    acknowledged: acknowledged || nextChannel === policy.STABLE,
+  });
+  if (!result.ok) {
+    if (manual) sendStatus({ state: 'channel-confirmation-required', channel: currentChannel() });
+    return { ...result, state: channelState() };
+  }
+  // A pending download came from the other channel's feed; dropping it is the
+  // safe reading of "I changed my mind".
+  if (pendingUpdate && pendingUpdate.channel !== nextChannel) {
+    console.log(`[updater] dropping pending ${pendingUpdate.version} (${pendingUpdate.channel}) after channel change`);
+    pendingUpdate = null;
+  }
+  console.log(`[updater] channel -> ${nextChannel}`);
+  sendStatus({ state: 'channel', ...channelState() });
+  notifyChannelChanged(nextChannel);
+  return { ok: true, channel: nextChannel, state: channelState() };
+}
+
+// ----------------------------------------------------------------- parsers
+/** Version grammar: [major,minor,patch,plotina,dev] — delegated to the policy
+ *  module so the grammar exists in exactly one place. Unparseable shapes
+ *  (notably the mangled four-segment 4.12.818, the Element `.30` lesson) are
+ *  never candidates for update. */
+const versionTokens = policy.versionTokens;
+const isVersionNewer = policy.isVersionNewer;
 
 /**
  * electron-builder's latest*.yml. Returns {version, fileName, sha512, size,
  * releaseDate, blockMapSize?}. For latest-linux.yml we MUST pick the
  * .AppImage entry from `files:` (never first-url: a deb first would break
- * the AppImage swap).
+ * the AppImage swap). Same parser for the dev metadata files, which are
+ * produced by the same electron-builder run.
  */
 function parseLatestYml(text, { requireAppImage } = {}) {
   const grab = (re) => { const m = re.exec(text); return m ? m[1].trim().replace(/^["']|["']$/g, '') : null; };
@@ -177,7 +266,8 @@ function parseLatestYml(text, { requireAppImage } = {}) {
 
 // ------------------------------------------------------------------- status
 let checking = false;
-let pendingUpdate = null;   // { version, installerPath, releaseDate, updateURL, mode }
+let pendingUpdate = null;   // { version, channel, plan, installerPath, releaseDate, mode }
+let timers = [];            // polling handles, so tests can dispose()
 
 let statusTarget = () => null; // () => webContents | null
 function sendStatus(payload) {
@@ -194,11 +284,24 @@ function matchesSha512(file, expected) {
     .catch(() => false);
 }
 
+/** Second, cheap gate next to the digest: the byte count the metadata claims.
+ *  Absent/invalid sizes are skipped (older feeds), exactly like Desktop. */
+async function matchesSize(file, expected) {
+  if (expected === null || expected === undefined || !Number.isFinite(expected) || expected <= 0) return true;
+  try {
+    return (await fs.stat(file)).size === expected;
+  } catch {
+    return false;
+  }
+}
+
 // --------------------------------------------------------------- download
-async function downloadArtifact(url, dest, expectedSha512) {
+async function downloadArtifact(url, dest, expectedSha512, expectedSize = null) {
   if (await matchesSha512(dest, expectedSha512)) {
-    console.log(`[updater] reusing verified download ${dest}`);
-    return;
+    if (await matchesSize(dest, expectedSize)) {
+      console.log(`[updater] reusing verified download ${dest}`);
+      return;
+    }
   }
   console.log(`[updater] downloading ${url}`);
   const res = await fetch(url, { headers: { 'User-Agent': `${USER_AGENT}/${app.getVersion()}` } });
@@ -209,6 +312,10 @@ async function downloadArtifact(url, dest, expectedSha512) {
   if (!(await matchesSha512(tmp, expectedSha512))) {
     await fs.rm(tmp, { force: true }); // a corrupted artifact never survives
     throw new Error(`sha512 mismatch for ${path.basename(dest)}; refusing to install`);
+  }
+  if (!(await matchesSize(tmp, expectedSize))) {
+    await fs.rm(tmp, { force: true }); // the digest matched a wrong-length stream: never install it
+    throw new Error(`size mismatch for ${path.basename(dest)}; refusing to install`);
   }
   await fs.rm(dest, { force: true });
   await fs.rename(tmp, dest);
@@ -227,7 +334,8 @@ async function swapAppImage(stagedPath, currentPath) {
   // rename() within one directory is atomic; the running FUSE mount keeps the
   // old inode, the directory entry gets the new bytes (same as Plotina
   // Desktop). Fallbacks: copy+rename in-dir, then save-to-Downloads + tell
-  // the user where it is.
+  // the user where it is. Works identically for a downgrade — the bytes are
+  // simply older ones.
   try {
     await fs.rename(stagedPath, currentPath);
     await fs.chmod(currentPath, 0o755).catch(() => {});
@@ -244,44 +352,147 @@ async function swapAppImage(stagedPath, currentPath) {
 }
 
 // ------------------------------------------------------------------ checks
-async function metadataUrlAndAssets(base) {
-  // QA local feed: metadata + artifacts sit in one directory.
-  const metaFile = INSTALL_KIND === 'appimage' ? LINUX_METADATA_FILE : WINDOWS_METADATA_FILE;
-  const res = await fetch(`${base.replace(/\/$/, '')}/${metaFile}`, { headers: { 'User-Agent': `${USER_AGENT}/${app.getVersion()}` } });
-  if (!res.ok) throw new Error(`feed responded HTTP ${res.status} for ${metaFile}`);
-  const yml = parseLatestYml(await res.text(), { requireAppImage: INSTALL_KIND === 'appimage' });
-  if (!yml) throw new Error(`feed ${metaFile} is not parseable`);
-  if (!isVersionNewer(yml.version, app.getVersion())) return null;
-  return { yml, assetUrl: new URL(encodeURI(yml.fileName), base.replace(/[^/]*$/, '')).toString() };
-}
-
-async function findGitHubUpdate(feed) {
-  const metaFile = INSTALL_KIND === 'appimage' ? LINUX_METADATA_FILE : WINDOWS_METADATA_FILE;
-  const res = await fetch(`https://api.github.com/repos/${feed.owner}/${feed.repo}/releases?per_page=100`, {
-    headers: { Accept: 'application/vnd.github+json', 'User-Agent': `${USER_AGENT}/${app.getVersion()}` },
+/** Attach the policy verdict to a parsed metadata document. */
+function candidateFrom(yml, assetUrl, { channelName, allowDowngrade }) {
+  const plan = policy.planUpdate({
+    candidateVersion: yml.version,
+    currentVersion: app.getVersion(),
+    allowDowngrade,
+    channel: channelName,
   });
-  if (!res.ok) throw new Error(`GitHub releases responded HTTP ${res.status}`);
-  const releases = await res.json();
-  const candidates = releases
-    .filter((r) => !r.draft && !r.prerelease && r.assets.some((a) => a.name === metaFile))
-    .slice(0, MAX_METADATA_CHECKS);
-  let best = null;
-  for (const release of candidates) {
-    const asset = release.assets.find((a) => a.name === metaFile);
-    const ymlRes = await fetch(asset.browser_download_url, { headers: { 'User-Agent': `${USER_AGENT}/${app.getVersion()}` } });
-    if (!ymlRes.ok) continue;
-    let yml;
-    try { yml = parseLatestYml(await ymlRes.text(), { requireAppImage: INSTALL_KIND === 'appimage' }); }
-    catch (e) { console.warn('[updater]', e.message); continue; }
-    if (!yml || !isVersionNewer(yml.version, app.getVersion())) continue;
-    const artifact = release.assets.find((a) => a.name === yml.fileName);
-    if (!artifact) continue;
-    if (!best || isVersionNewer(yml.version, best.yml.version)) best = { yml, assetUrl: artifact.browser_download_url };
-  }
-  return best;
+  return { yml, assetUrl, plan, channel: channelName };
 }
 
-async function runCheck(manual) {
+async function fetchMetadata(url, { requireAppImage }) {
+  const name = path.basename(new URL(url).pathname);
+  const res = await fetch(url, { headers: { 'User-Agent': `${USER_AGENT}/${app.getVersion()}` } });
+  if (res.status === 404) return null; // feed not published yet: not an error
+  if (!res.ok) throw new Error(`feed responded HTTP ${res.status} for ${name}`);
+  const yml = parseLatestYml(await res.text(), { requireAppImage });
+  if (!yml) throw new Error(`feed ${name} is not parseable`);
+  return yml;
+}
+
+/** QA local feed: metadata + artifacts sit in one directory; the channel
+ *  decides only which file name is fetched. */
+async function metadataUrlAndAssets(base, { channelName, allowDowngrade }) {
+  const url = policy.qaFeedUrl({ base, installKind: INSTALL_KIND, channel: channelName });
+  if (!url) return null;
+  const yml = await fetchMetadata(url, { requireAppImage: INSTALL_KIND === 'appimage' });
+  if (!yml) return null;
+  const assetUrl = new URL(encodeURI(yml.fileName), url.replace(/[^/]*$/, '')).toString();
+  return candidateFrom(yml, assetUrl, { channelName, allowDowngrade });
+}
+
+/** Dev channel: the fixed `dev-latest` release read by direct download URL.
+ *  Artifacts live next to the metadata in the same release, so the asset URL
+ *  is resolved against it — the same layout as the QA feed. */
+async function findDevUpdate({ allowDowngrade, devFeedBase }) {
+  const url = policy.devFeedUrl({ installKind: INSTALL_KIND, channel: policy.DEV, devFeedBase });
+  if (!url) return null;
+  let yml;
+  try {
+    yml = await fetchMetadata(url, { requireAppImage: INSTALL_KIND === 'appimage' });
+  } catch (e) {
+    if (!/HTTP 5\d\d/.test(String(e && e.message))) throw e;
+    const fallbackUrl = policy.devFeedFallbackUrl({ installKind: INSTALL_KIND, channel: policy.DEV });
+    if (!fallbackUrl) throw e;
+    console.warn(`[updater] GitHub dev feed failed (${e.message}); trying the edge mirror`);
+    yml = await fetchMetadata(fallbackUrl, { requireAppImage: INSTALL_KIND === 'appimage' });
+    if (!yml) { console.log('[updater] dev feed not published yet (HTTP 404)'); return null; }
+  }
+  if (!yml) { console.log('[updater] dev feed not published yet (HTTP 404)'); return null; }
+  if (!policy.isDevVersion(yml.version)) {
+    // Installable for a dev-channel user (no rule against a stable-shaped
+    // build), but it means the dev tag was repurposed — say so loudly.
+    console.warn(`[updater] dev feed advertises a non-dev version ${yml.version}`);
+  }
+  const assetUrl = new URL(encodeURI(yml.fileName), url.replace(/[^/]*$/, '')).toString();
+  return candidateFrom(yml, assetUrl, { channelName: policy.DEV, allowDowngrade });
+}
+
+/** Stable channel: ONE direct GET of the electron-builder metadata on our
+ *  edge (policy.stableFeedUrl: /dl/latest-lite-linux.yml / /dl/latest-lite.yml
+ *  — no api.github.com listing), plus the channel firewall (a stray `-dev.`
+ *  build advertised there is refused) and the downgrade pass for the explicit
+ *  return-to-stable. The artifact is the stable ALIAS on the same path — the
+ *  versioned fileName in the metadata is never used to build a URL; the alias
+ *  is byte-identical and its sha512+size are what the metadata certifies. */
+async function findStableUpdate({ channelName = policy.STABLE, allowDowngrade = false } = {}) {
+  const url = policy.stableFeedUrl({ installKind: INSTALL_KIND, channel: channelName });
+  const assetUrl = policy.stableArtifactUrl({ installKind: INSTALL_KIND });
+  if (!url || !assetUrl) return null;
+  const yml = await fetchMetadata(url, { requireAppImage: INSTALL_KIND === 'appimage' });
+  if (!yml) { console.log('[updater] stable feed not published yet (HTTP 404)'); return null; }
+  if (!yml.fileName.startsWith('Plotina-Lite-Desktop')) {
+    // Belt and braces: /dl is Lite-scoped by file name, but never accept
+    // another product's artifact if the edge ever serves the wrong yml.
+    throw new Error(`stable feed ${url} names ${yml.fileName}, which is not a Plotina Lite Desktop artifact`);
+  }
+  const cand = candidateFrom(yml, assetUrl, { channelName, allowDowngrade });
+  if (cand.plan === 'foreign') {
+    console.warn(`[updater] refusing ${yml.version} from the stable feed: a dev build is never offered on the stable channel`);
+  }
+  return cand;
+}
+
+/** Download + verify + place the artifact, then prompt for a restart. Shared
+ *  by the upgrade path and the return-to-stable (downgrade) path, so both keep
+ *  sha512 verification and the atomic AppImage swap / silent NSIS install. */
+async function applyCandidate(found, { manual }) {
+  const { yml, assetUrl, plan, channel: channelName } = found;
+  const downgrade = plan === 'downgrade';
+  sendStatus({ state: 'available', version: yml.version, channel: channelName, downgrade });
+
+  if (INSTALL_KIND === 'appimage') {
+    const currentPath = resolveCurrentAppImage();
+    const dir = path.dirname(currentPath);
+    const stagingDir = isDirWritable(dir) ? dir : path.join(app.getPath('userData'), 'plotina-updates');
+    await fs.mkdir(stagingDir, { recursive: true });
+    const staged = path.join(stagingDir, `${yml.fileName}.plotina-new`);
+    await downloadArtifact(assetUrl, staged, yml.sha512, yml.size);
+    const swap = await swapAppImage(staged, currentPath);
+    if (!swap.swapped) {
+      sendStatus({ state: 'error', message: `downloaded but could not replace ${currentPath} (${swap.reason}); the running AppImage is untouched` });
+      await dialog.showMessageBox({
+        type: 'warning', title: 'Plotina Lite Desktop',
+        message: `Plotina Lite Desktop ${yml.version} was downloaded and verified but cannot replace the running AppImage.`,
+        detail: `${swap.reason || ''}\nCopy ${staged} over ${currentPath} yourself, then restart.`,
+        buttons: ['OK'], noLink: true,
+      });
+      return;
+    }
+    pendingUpdate = { version: yml.version, channel: channelName, plan, mode: 'appimage-restart', installerPath: currentPath };
+  } else { // nsis
+    const dir = path.join(app.getPath('userData'), 'plotina-updates');
+    await fs.mkdir(dir, { recursive: true });
+    const dest = path.join(dir, yml.fileName);
+    await downloadArtifact(assetUrl, dest, yml.sha512, yml.size);
+    pendingUpdate = { version: yml.version, channel: channelName, plan, mode: 'windows-installer', installerPath: dest };
+  }
+  sendStatus({ state: 'downloaded', version: yml.version, channel: channelName, releaseDate: yml.releaseDate, downgrade });
+
+  const T = policy.UI_TEXT;
+  const isRestart = pendingUpdate.mode === 'appimage-restart';
+  const detail = downgrade
+    ? `${T.downgradeDetail(app.getVersion(), yml.version)}\n` +
+      (isRestart ? 'Новый образ уже установлен поверх текущего — перезапустите приложение.'
+        : 'Установщик будет запущен после перезапуска; установка выполняется автоматически (/S).')
+    : (isRestart
+      ? 'The new AppImage has been installed over the old one. Restart to run it. The image is checked against the sha512 published with the release; it is not code-signed.'
+      : 'Restart to install the update. The installer is checked against the sha512 published with the release; it is not code-signed.');
+  const { response } = await dialog.showMessageBox({
+    type: 'info',
+    title: downgrade ? T.returnToStableTitle : 'Plotina Lite Desktop',
+    message: downgrade ? `${T.returnToStable}: ${yml.version}` : `Plotina Lite Desktop ${yml.version} is ready.`,
+    detail,
+    buttons: downgrade ? T.restartButtons : [isRestart ? 'Restart now' : 'Restart to update', 'Later'],
+    defaultId: 0, cancelId: 1, noLink: true,
+  });
+  if (response === 0) installUpdate();
+}
+
+async function runCheck(manual = false, opts = {}) {
   if (INSTALL_KIND === 'dev' || process.env.LITE_NO_UPDATES === '1') {
     if (manual) sendStatus({ state: 'not-packaged' });
     return;
@@ -305,65 +516,57 @@ async function runCheck(manual) {
     return;
   }
 
-  if (pendingUpdate) { sendStatus({ state: 'downloaded', ...pendingUpdate }); return; }
+  const channelName = opts.channelName || currentChannel();
+  const allowDowngrade = !!opts.allowDowngrade;
+  if (pendingUpdate && !allowDowngrade) { sendStatus({ state: 'downloaded', ...pendingUpdate }); return; }
   if (checking) return;
   checking = true;
   try {
     const qa = qaFeedOverride();
-    const feed = qa ? { local: true } : readUpdateFeed();
+    const feed = readUpdateFeed();
     if (!feed) { if (manual) sendStatus({ state: 'no-feed' }); return; }
 
-    const found = qa
-      ? await metadataUrlAndAssets(qa.base)
-      : await findGitHubUpdate(feed);
-    if (!found) { if (manual) sendStatus({ state: 'up-to-date', version: app.getVersion() }); return; }
-    const { yml, assetUrl } = found;
-    sendStatus({ state: 'available', version: yml.version });
+    let found;
+    if (qa) found = await metadataUrlAndAssets(qa.base, { channelName, allowDowngrade });
+    else if (channelName === policy.DEV) found = await findDevUpdate({ allowDowngrade, devFeedBase: policy.resolveDevFeedBase(process.env) });
+    else found = await findStableUpdate({ channelName: policy.STABLE, allowDowngrade });
 
-    if (INSTALL_KIND === 'appimage') {
-      const currentPath = resolveCurrentAppImage();
-      const dir = path.dirname(currentPath);
-      const stagingDir = isDirWritable(dir) ? dir : path.join(app.getPath('userData'), 'plotina-updates');
-      await fs.mkdir(stagingDir, { recursive: true });
-      const staged = path.join(stagingDir, `${yml.fileName}.plotina-new`);
-      await downloadArtifact(assetUrl, staged, yml.sha512);
-      const swap = await swapAppImage(staged, currentPath);
-      if (!swap.swapped) {
-        sendStatus({ state: 'error', message: `downloaded but could not replace ${currentPath} (${swap.reason}); the running AppImage is untouched` });
-        await dialog.showMessageBox({
-          type: 'warning', title: 'Plotina Lite Desktop',
-          message: `Plotina Lite Desktop ${yml.version} was downloaded and verified but cannot replace the running AppImage.`,
-          detail: `${swap.reason || ''}\nCopy ${staged} over ${currentPath} yourself, then restart.`,
-          buttons: ['OK'], noLink: true,
-        });
-        return;
-      }
-      pendingUpdate = { version: yml.version, mode: 'appimage-restart', installerPath: currentPath };
-    } else { // nsis
-      const dir = path.join(app.getPath('userData'), 'plotina-updates');
-      await fs.mkdir(dir, { recursive: true });
-      const dest = path.join(dir, yml.fileName);
-      await downloadArtifact(assetUrl, dest, yml.sha512);
-      pendingUpdate = { version: yml.version, mode: 'windows-installer', installerPath: dest };
+    if (!found) {
+      if (manual) sendStatus({ state: 'up-to-date', version: app.getVersion(), channel: channelName });
+      return;
     }
-    sendStatus({ state: 'downloaded', version: yml.version, releaseDate: yml.releaseDate });
-    const isRestart = pendingUpdate.mode === 'appimage-restart';
-    const { response } = await dialog.showMessageBox({
-      type: 'info', title: 'Plotina Lite Desktop',
-      message: `Plotina Lite Desktop ${yml.version} is ready.`,
-      detail: isRestart
-        ? 'The new AppImage has been installed over the old one. Restart to run it. The image is checked against the sha512 published with the release; it is not code-signed.'
-        : 'Restart to install the update. The installer is checked against the sha512 published with the release; it is not code-signed.',
-      buttons: [isRestart ? 'Restart now' : 'Restart to update', 'Later'],
-      defaultId: 0, cancelId: 1, noLink: true,
-    });
-    if (response === 0) installUpdate();
+    if (found.plan !== 'apply' && found.plan !== 'downgrade') {
+      // 'same' | 'blocked' | 'invalid' | 'foreign': stay exactly where we are.
+      if (found.plan === 'blocked') {
+        console.log(`[updater] ${channelName} feed offers ${found.yml.version}, older than running ${app.getVersion()}; not applied (use '${policy.UI_TEXT.returnToStable}')`);
+      }
+      if (found.plan === 'foreign' || found.plan === 'invalid') {
+        console.warn(`[updater] refusing ${found.yml && found.yml.version} on the ${channelName} channel (plan=${found.plan})`);
+      }
+      if (manual) sendStatus({ state: 'up-to-date', version: app.getVersion(), channel: channelName, offered: found.yml && found.yml.version, plan: found.plan });
+      return;
+    }
+    await applyCandidate(found, { manual });
   } catch (e) {
     console.warn('[updater] check failed', e);
-    sendStatus({ state: 'error', message: String(e && e.message || e) });
+    sendStatus({ state: 'error', message: String(e && e.message || e), channel: channelName });
   } finally {
     checking = false;
   }
+}
+
+/** The explicit 'Вернуться на стабильный' action: pin the preference to stable
+ *  and install the current stable build even when it is a REDUCTION from a dev
+ *  build (plain comparison would refuse it). Verification and placement use
+ *  the same code path as any other update. */
+async function returnToStable({ manual = true } = {}) {
+  const stored = policy.writeChannel(userDataDir(), policy.STABLE);
+  if (!stored.ok) return { ok: false, ...stored };
+  console.log(`[updater] ${policy.UI_TEXT.returnToStable}: channel pinned to stable`);
+  sendStatus({ state: 'channel', ...channelState() });
+  notifyChannelChanged(policy.STABLE);
+  await runCheck(manual, { channelName: policy.STABLE, allowDowngrade: true });
+  return { ok: true, channel: policy.STABLE, state: channelState() };
 }
 
 function installUpdate(spawnImpl = spawn) {
@@ -377,18 +580,26 @@ function installUpdate(spawnImpl = spawn) {
     return;
   }
   // /S silent NSIS; --updated marks an update run (electron-builder NSIS
-  // script uses it to skip first-run side effects).
+  // script uses it to skip first-run side effects). A return-to-stable run is
+  // the same silent install: NSIS replaces the payload either way.
   const child = spawnImpl(pendingUpdate.installerPath, ['/S', '--updated'], { detached: true, stdio: 'ignore' });
   child.on('error', (e) => console.error('[updater] installer failed', e));
   child.unref();
 }
 
 // -------------------------------------------------------------------- api
-function init(getStatusTarget) {
+function init(getStatusTarget, { onChannelChange } = {}) {
   statusTarget = getStatusTarget || (() => null);
+  if (onChannelChange) onChannelChanged(onChannelChange);
   ipcMain.handle('plotina:install-kind', () => INSTALL_KIND);
   ipcMain.handle('plotina:check-updates', () => { void runCheck(true); return INSTALL_KIND; });
   ipcMain.handle('plotina:install-update', () => installUpdate());
+  // Channel contract (the Settings entry is the app/tray menu today and the
+  // web app's Settings later; both speak this through src/preload.js).
+  ipcMain.handle('plotina:update-channel-get', () => channelState());
+  ipcMain.handle('plotina:update-channel-set', (_e, args = {}) =>
+    setChannel(args && args.channel, { acknowledged: !!(args && args.acknowledged), manual: !args || args.manual !== false }));
+  ipcMain.handle('plotina:update-return-stable', () => returnToStable({ manual: true }));
 
   if (!SELF_UPDATE_KINDS.has(INSTALL_KIND)) {
     console.log(`[updater] install kind '${INSTALL_KIND}': no self-update polling (manual or package-manager path)`);
@@ -398,19 +609,38 @@ function init(getStatusTarget) {
     console.log('[updater] disabled (dev build or LITE_NO_UPDATES=1)');
     return;
   }
-  if (!qaFeedOverride()) {
-    const feed = readUpdateFeed();
-    if (!feed) { console.warn(`[updater] no usable GitHub feed in ${path.join(process.resourcesPath, 'app-update.yml')}; updater off`); return; }
-    console.log(`[updater] feed ${feed.owner}/${feed.repo} kind=${INSTALL_KIND} version=${app.getVersion()}`);
+  const info = currentChannelInfo();
+  if (qaFeedOverride()) {
+    console.log(`[updater] QA feed override active (channel=${info.channel})`);
   } else {
-    console.log('[updater] QA feed override active');
+    const feed = readUpdateFeed();
+    const where = info.channel === policy.DEV
+      ? policy.devFeedUrl({ installKind: INSTALL_KIND, channel: policy.DEV, devFeedBase: policy.resolveDevFeedBase(process.env) })
+      : `${policy.stableFeedUrl({ installKind: INSTALL_KIND, channel: policy.STABLE })} (app-update.yml source: ${feed.source})`;
+    console.log(`[updater] channel=${info.channel}(${info.source}) feed ${where} kind=${INSTALL_KIND} version=${app.getVersion()}`);
   }
-  setTimeout(() => void runCheck(false), INITIAL_UPDATE_DELAY_MS);
-  setInterval(() => void runCheck(false), UPDATE_POLL_INTERVAL_MS);
+  timers = [
+    setTimeout(() => void runCheck(false), INITIAL_UPDATE_DELAY_MS),
+    setInterval(() => void runCheck(false), UPDATE_POLL_INTERVAL_MS),
+  ];
+  // unref so a headless test run can exit; Electron's own loop is unaffected.
+  for (const timer of timers) { if (typeof timer.unref === 'function') timer.unref(); }
+}
+
+function dispose() {
+  for (const timer of timers) { clearTimeout(timer); clearInterval(timer); }
+  timers = [];
+  channelListeners = [];
 }
 
 module.exports = {
-  init, installUpdate, runCheck, detectInstallKind,
-  // pure helpers, exported for unit tests (scripts/test-updater.mjs)
-  _internals: { isVersionNewer, parseLatestYml, readUpdateFeed, versionTokens, PACKAGE_GUIDANCE, packageGuidance },
+  init, dispose, installUpdate, runCheck, detectInstallKind,
+  channelState, setChannel, returnToStable, onChannelChanged,
+  // pure helpers, exported for unit tests (scripts/test-updater.mjs,
+  // tests/updater-channel-flow.test.mjs)
+  _internals: {
+    isVersionNewer, parseLatestYml, readUpdateFeed, versionTokens,
+    PACKAGE_GUIDANCE, packageGuidance, candidateFrom, fetchMetadata,
+    INSTALL_KIND, policy,
+  },
 };

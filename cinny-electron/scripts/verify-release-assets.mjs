@@ -41,8 +41,10 @@ const LINUX_DIR = path.resolve(arg('linux'));
 const WIN_DIR = path.resolve(arg('windows'));
 const VERSION = arg('version');
 const OUT_DIR = path.resolve(arg('out'));
-if (!/^[0-9]+\.[0-9]+\.[0-9]+-plotina\.[0-9]+$/.test(VERSION)) {
-  console.error(`FATAL: --version '${VERSION}' is not <semver>-plotina.<rev> (tag contract §7.1)`);
+// <semver>-plotina.<rev> for stable releases, plus the dev tail
+// <semver>-plotina.<rev>-dev.<M> for test releases (tag contract §7.1).
+if (!/^[0-9]+\.[0-9]+\.[0-9]+-plotina\.[0-9]+(-dev\.[0-9]+)?$/.test(VERSION)) {
+  console.error(`FATAL: --version '${VERSION}' is not <semver>-plotina.<rev>[-dev.<M>] (tag contract §7.1)`);
   process.exit(2);
 }
 
@@ -128,7 +130,9 @@ function checkMetadata(dir, ymlName, { requireAppImage, platform }) {
     if (!fs.existsSync(f)) fail(`${platform}: ${ymlName} path ${y.pathTop} not present`);
     else if (y.sha512Top && sha512b64(f) !== y.sha512Top) fail(`${platform}: ${ymlName} top-level sha512 mismatch for ${y.pathTop}`);
   }
-  picked.push({ dir, file: ymlName, tag: platform });
+  // Keep the generic parent file only as the build-time source; the release
+  // upload must carry the Lite-scoped name and nothing a Desktop build scans.
+  picked.push({ dir, file: ymlName, dest: platform === 'linux' ? 'latest-lite-linux.yml' : 'latest-lite.yml', tag: platform });
 }
 checkMetadata(LINUX_DIR, 'latest-linux.yml', { requireAppImage: true, platform: 'linux' });
 checkMetadata(WIN_DIR, 'latest.yml', { requireAppImage: false, platform: 'windows' });

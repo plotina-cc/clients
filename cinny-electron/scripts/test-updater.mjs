@@ -38,7 +38,10 @@ t('U7 version ordering', () => {
   // The 4-segment mangle and any other shape are NEVER applied.
   assert.strictEqual(isVersionNewer('4.12.818', '4.12.8-plotina.18'), false, '4-segment mangle rejected');
   assert.strictEqual(isVersionNewer('4.12.8', '4.12.8-plotina.18'), false);
-  assert.deepStrictEqual(versionTokens('4.12.8-plotina.19'), [4, 12, 8, 19]);
+  // tokens carry the dev slot: [major,minor,patch,plotina,dev] (grammar and
+  // dev ordering are covered by tests/dev-channel.test.mjs)
+  assert.deepStrictEqual(versionTokens('4.12.8-plotina.19'), [4, 12, 8, 19, 0]);
+  assert.deepStrictEqual(versionTokens('4.12.8-plotina.19-dev.2'), [4, 12, 8, 19, 2]);
   assert.strictEqual(versionTokens('4.12.818'), null);
 });
 

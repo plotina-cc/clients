@@ -26,7 +26,10 @@ status=0
 # noise/*.js, so a test could pass against code that was no longer on disk.
 PROFILE="$(mktemp -d)"
 trap 'kill "$SERVER_PID" 2>/dev/null || true; rm -rf "$PROFILE"' EXIT
-for page in unit.html cinny-ui.test.html; do
+# cinny-ui.test.html went with noise/cinny-ui.js: the Cinny noise settings are
+# a React component now (cinny/patches/0009) and are proven by the CI bundle
+# grep for 'plotina-noise-settings', not by this harness.
+for page in unit.html; do
   DOM="$("$CHROME" --headless=new --no-sandbox --disable-gpu --virtual-time-budget=5000 \
     --user-data-dir="$PROFILE" --disk-cache-size=1 \
     --dump-dom "http://127.0.0.1:${PORT}/${REL}/${page}" 2>/dev/null)"

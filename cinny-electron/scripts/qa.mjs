@@ -255,7 +255,13 @@ try {
 
   const gdm = await mainCDP.eval(`(async () => {
     try {
-      const s = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      const s = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: { autoGainControl: false, noiseSuppression: false, voiceIsolation: false },
+        selfBrowserSurface: 'include',
+        surfaceSwitching: 'include',
+        systemAudio: 'include',
+      });
       const t = s.getVideoTracks()[0];
       const label = t.label; t.stop();
       return { ok: true, label };
@@ -263,6 +269,7 @@ try {
   })()`).catch((e) => ({ ok: false, error: e.message }));
   evidence.webRTC.getDisplayMedia = gdm;
   evidence.notes.push(gdm.ok ? 'getDisplayMedia resolved via desktopCapturer handler' : 'getDisplayMedia probe: ' + gdm.error);
+  if (!gdm.ok) fail('getDisplayMedia (Element Call constraints) failed: ' + gdm.error);
   if (gdm.ok) pass('getDisplayMedia (screen share) available via desktopCapturer handler');
 
   await mainCDP.screenshot('01-login-page.png');

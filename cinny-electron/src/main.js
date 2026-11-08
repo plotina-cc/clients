@@ -2,11 +2,12 @@
 // web dist bundled in the asar, installer identity, updater).
 'use strict';
 
-const { app, BrowserWindow, session, shell, screen, Tray, Menu, desktopCapturer, nativeImage } = require('electron');
+const { app, BrowserWindow, session, shell, screen, Tray, Menu, ipcMain, desktopCapturer, nativeImage, dialog } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { createAppServer } = require('./app-server');
 const updater = require('./updater');
+const { UI_TEXT } = require('./update-channel');
 
 const APP_TITLE = 'Plotina Lite Desktop';
 if (process.env.LITE_USER_DATA) {
@@ -38,7 +39,17 @@ const allowsMediaOrigin = (origin) =>
 // shared QA hosts) can then serve the window different content. 127.0.0.1
 // only ever hits our own embedded server.
 const ORIGIN_HOST = '127.0.0.1';
-const HOMESERVER_LOGIN_URL = /^https?:\/\/plotina\.cc\/_matrix\/client\/[^/]+\/login(\?|$)/;
+// Matrix SSO is not a single /login URL: Synapse redirects to
+// /login/sso/redirect, and the web app may open either that URL or an
+// /auth/... URL in a popup. Match the whole auth surface, not just /login.
+function isHomeserverLoginUrl(raw) {
+  try {
+    const u = new URL(raw);
+    return u.hostname === 'plotina.cc' &&
+      u.pathname.startsWith('/_matrix/client/') &&
+      (/\/login(?:\/|$)/.test(u.pathname) || u.pathname.includes('/auth/'));
+  } catch { return false; }
+}
 
 let server = null;
 let mainWindow = null;
@@ -164,7 +175,7 @@ function wireSSOInterception(win) {
   const wc = win.webContents;
   wc.on('will-navigate', (event, url) => {
     if (isAppOrigin(url)) return; // internal routing
-    if (HOMESERVER_LOGIN_URL.test(url)) {
+    if (isHomeserverLoginUrl(url)) {
       event.preventDefault();
       // Open through the *renderer*'s window.open so Electron's native
       // window-open gives the child a genuine window.opener + postMessage
@@ -191,10 +202,23 @@ function wireSSOInterception(win) {
         },
       };
     }
+    if (isHomeserverLoginUrl(url)) {
+      // Keep the SSO popup inside Electron so it retains window.opener; a
+      // system browser has no opener and the patched login page cannot post
+      // the loginToken back into the app.
+      console.log('[window-open] allow (homeserver SSO)');
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          autoHideMenuBar: true,
+          title: `${APP_TITLE} - Sign in`,
+          webPreferences: { sandbox: true },
+        },
+      };
+    }
     if (/^https?:\/\//.test(url)) {
       // A top-level popup to an external site: hand it to the OS browser.
-      // (SSO children are allowed by the branch above and keep their own
-      // default window-open behaviour.)
+      // (SSO children are handled above and keep their own opener.)
       console.log('[window-open] external -> shell.openExternal');
       shell.openExternal(url).catch(() => {});
       return { action: 'deny' };
@@ -245,6 +269,94 @@ function getMainWindowIcon() {
   if (width <= MAX_X11_WINDOW_ICON_PX && height <= MAX_X11_WINDOW_ICON_PX) return image;
   return image.resize({ width: MAX_X11_WINDOW_ICON_PX, height: MAX_X11_WINDOW_ICON_PX });
 }
+
+// ------------------------------------------------- updates menu / channel UI
+// The Settings entry for the update channel. The bundled Cinny dist is a
+// prebuilt artifact (patching it is a separate change), so the entry lives in
+// the shell menu today — application menu always, tray menu when LITE_TRAY=1 —
+// and the same contract is exposed to the renderer through preload
+// (plotinaLite.updater.channel), so a web Settings page can host it later.
+// Dev is opt-in and gated behind the warning dialog; the radio items are
+// rebuilt from the live updater state after every change.
+async function chooseChannel(next) {
+  const before = updater.channelState();
+  if (next === before.channel) return before;
+  if (next === 'dev') {
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      title: UI_TEXT.devWarningTitle,
+      message: UI_TEXT.devWarningMessage,
+      detail: UI_TEXT.devWarningDetail,
+      buttons: UI_TEXT.devWarningButtons,
+      defaultId: 0, cancelId: 1, noLink: true,
+    });
+    if (response !== 0) { refreshAppMenu(); return before; } // radio snaps back
+  }
+  const res = updater.setChannel(next, { acknowledged: true });
+  if (!res.ok) console.warn('[menu] channel change refused:', res.error || `needs confirmation (${next})`);
+  refreshAppMenu();
+  return res.state || updater.channelState();
+}
+
+function updatesSubmenu() {
+  const st = updater.channelState();
+  const items = [
+    { label: UI_TEXT.checkForUpdates, click: () => { void updater.runCheck(true); } },
+    { type: 'separator' },
+    {
+      label: UI_TEXT.channelEntry(st.channel), // 'Канал обновлений: Стабильный'
+      enabled: st.selfUpdate,
+      submenu: [
+        { label: UI_TEXT.stableLabel, type: 'radio',
+          checked: st.channel === 'stable', click: () => { void chooseChannel('stable'); } },
+        { label: UI_TEXT.devLabel, type: 'radio',
+          checked: st.channel === 'dev', click: () => { void chooseChannel('dev'); } },
+        { type: 'separator' },
+        { label: UI_TEXT.returnToStable, enabled: st.channel === 'dev',
+          click: () => { void updater.returnToStable({ manual: true }); } },
+      ],
+    },
+  ];
+  if (!st.selfUpdate) items.push({ label: UI_TEXT.manualKindsNote, enabled: false });
+  return items;
+}
+
+function menuTemplate() {
+  // Standard roles first (copy/paste/zoom must keep working in the chat), then
+  // our Updates menu. Roles are Electron-localized; the channel strings come
+  // from src/update-channel.js (UI_TEXT).
+  const template = [];
+  if (process.platform === 'darwin') template.push({ role: 'appMenu' });
+  template.push(
+    { role: 'fileMenu' },
+    { role: 'editMenu' },
+    { role: 'viewMenu' },
+    { role: 'windowMenu' },
+    { label: UI_TEXT.updatesMenu, submenu: updatesSubmenu() },
+  );
+  return template;
+}
+
+function trayTemplate() {
+  return [
+    { label: 'Show', click: () => mainWindow?.show() },
+    { type: 'separator' },
+    { label: UI_TEXT.updatesMenu, submenu: updatesSubmenu() },
+    { type: 'separator' },
+    { label: 'Quit', click: () => app.quit() },
+  ];
+}
+
+function refreshAppMenu() {
+  try { Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate())); }
+  catch (e) { console.warn('[menu] application menu failed:', e.message); }
+  if (tray) { try { tray.setContextMenu(Menu.buildFromTemplate(trayTemplate())); } catch { /* tray gone */ } }
+}
+
+// Real packaged version (e.g. 4.12.8-plotina.23 or 4.12.8-plotina.23-dev.1)
+// for the Settings -> Updates page. app.getVersion() is the electron-builder
+// stamped value; the web bundle's own version string must not be trusted.
+ipcMain.handle('plotina:app-version', () => app.getVersion());
 
 // Tray: the same black mark; Electron/GTK scales it to the panel. The
 // light/dark variant selection from the migration plan (§5.2) stays with the
@@ -354,7 +466,12 @@ function configurePermissions(session) {
       window: BrowserWindow.getAllWindows()[0],
     });
     if (!sources.length) return callback({});
-    callback({ video: sources[0], audio: params.mediaTypes?.includes('audio') ? sources[0] : undefined });
+    // Do not return a screen source as `audio`: Electron rejects
+    // getDisplayMedia({video:true, audio:{...}}) with AbortError "Invalid
+    // capture constraints". Element Call always requests screen audio, so
+    // passing the screen source there broke screen sharing on Linux and
+    // Windows. Video-only screen capture is accepted for the same request.
+    callback({ video: sources[0] });
   }, { useSystemPicker: false });
 }
 
@@ -459,18 +576,17 @@ if (!gotLock) {
       try {
         tray = new Tray(getTrayIconPath());
         tray.setToolTip(APP_TITLE);
-        tray.setContextMenu(Menu.buildFromTemplate([
-          { label: 'Show', click: () => mainWindow?.show() },
-          { type: 'separator' },
-          { label: 'Check for updates…', click: () => { void updater.runCheck(true); } },
-          { label: 'Quit', click: () => app.quit() },
-        ]));
+        tray.setContextMenu(Menu.buildFromTemplate(trayTemplate()));
         tray.on('click', () => mainWindow?.show());
       } catch (e) { console.log('[lite] tray unavailable:', e.message); }
     }
 
     createMainWindow();
-    updater.init(() => (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null));
+    // Application menu (carries the update-channel entry) + the updater, which
+    // asks for a menu rebuild whenever the channel actually changes.
+    refreshAppMenu();
+    updater.init(() => (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null),
+      { onChannelChange: () => refreshAppMenu() });
 
     // Deep-link inbox written by second instances (see above).
     const inboxDir = path.join(app.getPath('userData'), 'deep-link-inbox');

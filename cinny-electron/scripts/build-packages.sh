@@ -5,9 +5,11 @@
 #   (targets default to the host OS: `linux` on Linux, `windows` on Windows)
 #
 # What it does, in order:
-#   1. derive APP_VERSION (tag contract §7.1; a branch/local build gets
-#      4.12.8-plotina.0.local — rpm cannot carry a '-' inside Release, so the
-#      documented `0-local` fallback is written `0.local`),
+#   1. derive APP_VERSION (tag contract §7.1, dev tail included:
+#      v<semver>-plotina-lite-desktop.N[-dev.M] -> <semver>-plotina.N[-dev.M];
+#      a branch/local build gets 4.12.8-plotina.0.local — rpm cannot carry a
+#      '-' inside Release, so the documented `0-local` fallback is written
+#      `0.local`),
 #   2. generate the icon set (scripts/build-icons.sh),
 #   3. stage the Cinny web dist into web/ (scripts/stage-web.sh) so it is
 #      bundled inside the app asar — the shell never depends on a shared dist
@@ -26,7 +28,15 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$HERE"
 
 # ---- 1. version -------------------------------------------------------------
-if [[ "${GITHUB_REF_NAME:-}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-plotina-lite-desktop\.([0-9]+)$ ]]; then
+# Tag grammar (§7.1, extended with the dev tail):
+#   v<semver>-plotina-lite-desktop.N        stable -> APP_VERSION <semver>-plotina.N
+#   v<semver>-plotina-lite-desktop.N-dev.M  dev    -> APP_VERSION <semver>-plotina.N-dev.M
+# (the dev shape is what src/update-channel.js parses as a -dev. candidate;
+#  dev tags are released as prerelease + rolled into dev-latest by CI)
+if [[ "${GITHUB_REF_NAME:-}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-plotina-lite-desktop\.([0-9]+)-dev\.([0-9]+)$ ]]; then
+  APP_VERSION="${BASH_REMATCH[1]}-plotina.${BASH_REMATCH[2]}-dev.${BASH_REMATCH[3]}"
+  TAG_OK=1
+elif [[ "${GITHUB_REF_NAME:-}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-plotina-lite-desktop\.([0-9]+)$ ]]; then
   APP_VERSION="${BASH_REMATCH[1]}-plotina.${BASH_REMATCH[2]}"
   TAG_OK=1
 else
@@ -37,11 +47,12 @@ fi
 APP_VERSION="${APP_VERSION_OVERRIDE:-$APP_VERSION}"
 # A tag-triggered build IS the release path (workflow build-cinny-electron.yml
 # fires on v*-plotina-lite-desktop.*): a tag that does not parse to
-# <semver>-plotina.<rev> would silently stamp 0.local artifacts into the
-# updater feed. Fail loudly instead; only branch/local builds may use it.
+# <semver>-plotina.<rev>[-dev.<M>] would silently stamp 0.local artifacts into
+# the updater feed. Fail loudly instead; only branch/local builds may use it.
 if [ "${GITHUB_REF_TYPE:-}" = "tag" ] && [ -z "${APP_VERSION_OVERRIDE:-}" ] && [ "$TAG_OK" != 1 ]; then
-  echo "FATAL: tag '$GITHUB_REF_NAME' is not v<semver>-plotina-lite-desktop.<rev>" >&2
-  echo "       (expected e.g. v4.12.8-plotina-lite-desktop.18 -> APP_VERSION 4.12.8-plotina.18)" >&2
+  echo "FATAL: tag '$GITHUB_REF_NAME' is not v<semver>-plotina-lite-desktop.<rev>[-dev.<M>]" >&2
+  echo "       (expected e.g. v4.12.8-plotina-lite-desktop.18 -> APP_VERSION 4.12.8-plotina.18" >&2
+  echo "        or      v4.12.8-plotina-lite-desktop.18-dev.2 -> APP_VERSION 4.12.8-plotina.18-dev.2)" >&2
   exit 1
 fi
 echo "APP_VERSION=$APP_VERSION"
@@ -57,9 +68,22 @@ fi
 
 # ---- 2/3. icons + web --------------------------------------------------------
 bash scripts/build-icons.sh
-if [ ! -f web/index.html ] || [ -n "${LITE_DIST:-}" ]; then
+if [ -n "${LITE_DIST:-}" ]; then
   bash scripts/stage-web.sh
+elif [ ! -f web/index.html ]; then
+  echo "build-packages: web/index.html missing; set LITE_DIST to a freshly built patched Cinny dist" >&2
+  exit 1
+else
+  echo "build-packages: using existing web/ (LITE_DIST not set)"
 fi
+# A stale web/ from a previous upstream build is the exact failure that shipped
+# "Welcome to Cinny" and the Support button. Never package it silently.
+grep -q 'Plotina' web/index.html || {
+  echo "build-packages: web/index.html is not Plotina-branded; set LITE_DIST" >&2; exit 1; }
+grep -Raq 'Welcome to Plotina Lite Web' web/assets || {
+  echo "build-packages: web assets lack the Plotina welcome marker; set LITE_DIST" >&2; exit 1; }
+grep -Raq 'plotina-updates-page' web/assets || {
+  echo "build-packages: web assets lack the Plotina updates marker; set LITE_DIST" >&2; exit 1; }
 # electron + electron-builder must be installed (npm ci in CI; dev here).
 [ -x node_modules/.bin/electron-builder ] || { echo "run npm install first" >&2; exit 1; }
 

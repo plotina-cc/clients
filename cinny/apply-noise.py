@@ -3,10 +3,14 @@
 
 Usage: apply-noise.py --dist <cinny/dist> --noise <path to noise/>
 
-Two documents need patching:
-  * dist/index.html                  -> the app shell (level slider)
+One document needs patching:
   * dist/public/element-call/index.html -> the embedded Element Call page that
     actually captures the microphone
+
+The app shell (dist/index.html) is deliberately left alone: the Settings ->
+General noise block is React now (patches/0009-plotina-noise-settings.patch),
+compiled into the bundle, and it shares the plotina.noise.* keys with the call
+frame over localStorage. No <script> tags belong in the shell any more.
 
 Branding is deliberately not done here; run branding.py after this script.
 
@@ -19,13 +23,11 @@ import shutil
 import sys
 from pathlib import Path
 
-CINNY_TAG = '<script src="/noise/logic.js"></script><script src="/noise/cinny-ui.js" defer></script>'
 CALL_TAG = '<script src="/noise/logic.js"></script><script src="/noise/boot.js" defer></script>'
 
 REQUIRED_ASSETS = [
     "logic.js",
     "boot.js",
-    "cinny-ui.js",
     "vendor/dfn.esm.js",
     "dfn/v3/pkg/df_bg.wasm",
     "dfn/v3/models/DeepFilterNet3_onnx.tar.gz",
@@ -64,7 +66,8 @@ def main() -> None:
     dist = Path(args.dist).resolve()
     noise_src = Path(args.noise).resolve()
 
-    if not (dist / "index.html").is_file():
+    call_doc = dist / "public" / "element-call" / "index.html"
+    if not call_doc.is_file():
         sys.exit(f"apply-noise: {dist} does not look like a Cinny dist")
 
     noise_dst = dist / "noise"
@@ -76,8 +79,7 @@ def main() -> None:
         if not (noise_dst / rel).is_file():
             sys.exit(f"apply-noise: missing asset {rel} in {noise_src}")
 
-    patch_html(dist / "index.html", CINNY_TAG, "/noise/cinny-ui.js")
-    patch_html(dist / "public" / "element-call" / "index.html", CALL_TAG, "/noise/boot.js")
+    patch_html(call_doc, CALL_TAG, "/noise/boot.js")
 
     # The dist is what the web server hands out and what goes into the Tauri
     # bundle; AGPL-3.0 requires the licence text and the modification notice to

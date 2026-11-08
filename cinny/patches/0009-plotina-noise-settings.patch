@@ -1,0 +1,240 @@
+diff --git a/src/app/features/settings/general/General.tsx b/src/app/features/settings/general/General.tsx
+index b861a06..1e99e82 100644
+--- a/src/app/features/settings/general/General.tsx
++++ b/src/app/features/settings/general/General.tsx
+@@ -50,6 +50,7 @@ import { useMessageLayoutItems } from '../../../hooks/useMessageLayout';
+ import { useMessageSpacingItems } from '../../../hooks/useMessageSpacing';
+ import { useDateFormatItems } from '../../../hooks/useDateFormat';
+ import { SequenceCardStyle } from '../styles.css';
++import { PlotinaNoise } from './PlotinaNoise';
+ 
+ type ThemeSelectorProps = {
+   themeNames: Record<string, string>;
+@@ -1002,6 +1003,7 @@ export function General({ requestClose }: GeneralProps) {
+         <Scroll hideTrack visibility="Hover">
+           <PageContent>
+             <Box direction="Column" gap="700">
++              <PlotinaNoise />
+               <Appearance />
+               <DateAndTime />
+               <Editor />
+diff --git a/src/app/features/settings/general/PlotinaNoise.tsx b/src/app/features/settings/general/PlotinaNoise.tsx
+new file mode 100644
+index 0000000..254c547
+--- /dev/null
++++ b/src/app/features/settings/general/PlotinaNoise.tsx
+@@ -0,0 +1,214 @@
++// Plotina: the noise-suppression block in Settings -> General.
++//
++// Built the Cinny way: SequenceCard / SettingTile / Box / Text with native
++// form controls, so the block themes with the rest of the page. The old
++// injected block (noise/cinny-ui.js) hand-built the same DOM with a
++// MutationObserver, anchor text search, colour sampling and manual CSS; all
++// of that is gone.
++//
++// The audio lives in the embedded Element Call frame (noise/boot.js), which
++// shares this origin. The two localStorage keys below are its only interface:
++// a write here fires a "storage" event over there, and boot.js retunes the
++// running processors. Keys, defaults, clamping and wording mirror
++// noise/logic.js — keep the two files in step.
++import React, { ChangeEventHandler, useEffect, useState } from 'react';
++import { Box, Text, color, config } from 'folds';
++import { SequenceCard } from '../../../components/sequence-card';
++import { SettingTile } from '../../../components/setting-tile';
++import { SequenceCardStyle } from '../styles.css';
++import { ThemeKind, useActiveTheme } from '../../../hooks/useTheme';
++
++const LEVEL_KEY = 'plotina.noise.level';
++const DEFAULT_LEVEL = 60;
++const LEVEL_MIN = 0;
++const LEVEL_MAX = 100;
++const LEVEL_STEP = 5;
++
++const BACKEND_KEY = 'plotina.noise.backend';
++const BACKENDS = ['dfn3', 'dpdfnet4'];
++const DEFAULT_BACKEND = 'dfn3';
++const BACKEND_LABELS: Record<string, string> = { dfn3: 'DFN3', dpdfnet4: 'DPDFNet' };
++
++// Same languages and wording as STRINGS in noise/logic.js, including its
++// fallback: no language at all is treated as Russian, a "ru" prefix is
++// Russian, anything else English.
++const STRINGS = {
++  ru: {
++    section: 'Звук',
++    title: 'Уровень шумоподавления',
++    hint: '0 — выключено, 60 — по умолчанию',
++    backend: 'Шумоподавление',
++    backendNote: 'DPDFNet — экспериментальный бэкенд; при сбое автоматический откат на DFN3',
++  },
++  en: {
++    section: 'Sound',
++    title: 'Noise suppression level',
++    hint: '0 disables it, 60 is the default',
++    backend: 'Noise suppression',
++    backendNote: 'DPDFNet is experimental; failures fall back to DFN3 automatically',
++  },
++};
++
++function pickStrings(): typeof STRINGS['en' | 'ru'] {
++  const value = (document.documentElement.lang || navigator.language || '').toLowerCase();
++  if (!value) return STRINGS.ru;
++  return value.indexOf('ru') === 0 ? STRINGS.ru : STRINGS.en;
++}
++
++// Mirror of clampLevel() in logic.js: junk reads as the default, everything
++// else is rounded to an integer and clamped to 0..100.
++function clampLevel(value: string | null): number {
++  if (value === null || value === undefined || value === '') return DEFAULT_LEVEL;
++  const n = Number(value);
++  if (!Number.isFinite(n)) return DEFAULT_LEVEL;
++  return Math.max(LEVEL_MIN, Math.min(LEVEL_MAX, Math.round(n)));
++}
++
++// Mirror of normalizeBackend() in logic.js: anything unknown falls back to
++// the shipped default so a typo can never leave the call without a plan.
++function normalizeBackend(value: string | null): string {
++  if (typeof value !== 'string') return DEFAULT_BACKEND;
++  const v = value.trim().toLowerCase();
++  return BACKENDS.includes(v) ? v : DEFAULT_BACKEND;
++}
++
++function readLevel(): number {
++  try {
++    return clampLevel(localStorage.getItem(LEVEL_KEY));
++  } catch {
++    return DEFAULT_LEVEL;
++  }
++}
++
++function readBackend(): string {
++  try {
++    return normalizeBackend(localStorage.getItem(BACKEND_KEY));
++  } catch {
++    return DEFAULT_BACKEND;
++  }
++}
++
++function writeStored(key: string, value: string): void {
++  try {
++    localStorage.setItem(key, value);
++  } catch {
++    /* private mode */
++  }
++}
++
++type NoiseWrapper = {
++  setLevel?: (level: number) => void;
++  setBackend?: (backend: string) => void;
++};
++
++// The Cinny page itself never captures audio, so normally there is no
++// wrapper here and the "storage" event is the handover. If a call frame ever
++// shares this document, hand the value to its API directly as well.
++function notifyWrapper(apply: (wrapper: NoiseWrapper) => void): void {
++  try {
++    const wrapper = (globalThis as unknown as { __plotinaNoise?: NoiseWrapper }).__plotinaNoise;
++    if (wrapper) apply(wrapper);
++  } catch {
++    /* no wrapper on this page */
++  }
++}
++
++export function PlotinaNoise() {
++  const theme = useActiveTheme();
++  const [strings] = useState(pickStrings);
++  const [level, setLevel] = useState(readLevel);
++  const [backend, setBackend] = useState(readBackend);
++
++  // Reflect writes from another tab or from the call frame (boot.js keeps the
++  // source of truth in the same keys). key === null is a whole-store clear.
++  useEffect(() => {
++    const onStorage = (evt: StorageEvent) => {
++      if (evt.key === null || evt.key === LEVEL_KEY) setLevel(readLevel());
++      if (evt.key === null || evt.key === BACKEND_KEY) setBackend(readBackend());
++    };
++    window.addEventListener('storage', onStorage);
++    return () => window.removeEventListener('storage', onStorage);
++  }, []);
++
++  const handleLevel: ChangeEventHandler<HTMLInputElement> = (evt) => {
++    const next = clampLevel(evt.currentTarget.value);
++    writeStored(LEVEL_KEY, String(next));
++    setLevel(next);
++    // A call in progress can retune without redialling; boot.js reads the
++    // storage event too, but pass the value over when the frame is local.
++    notifyWrapper((wrapper) => {
++      if (typeof wrapper.setLevel === 'function') wrapper.setLevel(next);
++    });
++  };
++
++  const handleBackend: ChangeEventHandler<HTMLSelectElement> = (evt) => {
++    const next = normalizeBackend(evt.currentTarget.value);
++    writeStored(BACKEND_KEY, next);
++    setBackend(next);
++    notifyWrapper((wrapper) => {
++      if (typeof wrapper.setBackend === 'function') wrapper.setBackend(next);
++    });
++  };
++
++  return (
++    // data-testid survives minification; the CI jobs grep this marker to
++    // prove patch 0009 is baked into the dist.
++    <Box direction="Column" gap="100" data-testid="plotina-noise-settings">
++      <Text size="L400">{strings.section}</Text>
++
++      <SequenceCard
++        className={SequenceCardStyle}
++        variant="SurfaceVariant"
++        direction="Column"
++        gap="400"
++      >
++        <SettingTile
++          title={strings.title}
++          description={strings.hint}
++          after={
++            <Text size="T300" priority="300">
++              {level}
++            </Text>
++          }
++        >
++          {/* Native range on purpose — no appearance:none, no pseudo-element
++              CSS. Width is the only layout touch. */}
++          <input
++            type="range"
++            min={LEVEL_MIN}
++            max={LEVEL_MAX}
++            step={LEVEL_STEP}
++            value={level}
++            aria-label={strings.title}
++            style={{ width: '100%', accentColor: color.Primary.Main }}
++            onChange={handleLevel}
++          />
++        </SettingTile>
++      </SequenceCard>
++
++      <SequenceCard
++        className={SequenceCardStyle}
++        variant="SurfaceVariant"
++        direction="Column"
++        gap="400"
++      >
++        <SettingTile
++          title={strings.backend}
++          after={
++            <select aria-label={strings.backend} value={backend} onChange={handleBackend} style={{ font: 'inherit', minWidth: 160, padding: '6px 10px', borderRadius: 8, color: color.SurfaceVariant.OnContainer, background: color.SurfaceVariant.Container, border: '1px solid ' + color.SurfaceVariant.ContainerLine, outline: 'none', colorScheme: theme.kind === ThemeKind.Dark ? 'dark' : 'light' }}>
++              {BACKENDS.map((id) => (
++                <option key={id} value={id}>
++                  {BACKEND_LABELS[id]}
++                </option>
++              ))}
++            </select>
++          }
++        >
++          <Text size="T200" priority="300">
++            {strings.backendNote}
++          </Text>
++        </SettingTile>
++      </SequenceCard>
++    </Box>
++  );
++}

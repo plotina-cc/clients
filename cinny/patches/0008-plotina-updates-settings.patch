@@ -1,0 +1,479 @@
+diff --git a/src/app/features/settings/Settings.tsx b/src/app/features/settings/Settings.tsx
+index 5e1a20f..ca65a7e 100644
+--- a/src/app/features/settings/Settings.tsx
++++ b/src/app/features/settings/Settings.tsx
+@@ -30,6 +30,7 @@ import { Devices } from './devices';
+ import { EmojisStickers } from './emojis-stickers';
+ import { DeveloperTools } from './developer-tools';
+ import { About } from './about';
++import { Updates } from './updates';
+ import { UseStateProvider } from '../../components/UseStateProvider';
+ import { stopPropagation } from '../../utils/keyboard';
+ import { LogoutDialog } from '../../components/LogoutDialog';
+@@ -42,6 +43,9 @@ export enum SettingsPages {
+   EmojisStickersPage,
+   DeveloperToolsPage,
+   AboutPage,
++  // Plotina: appended last so the numeric values of existing pages (and any
++  // stored initialPage) never shift.
++  UpdatesPage,
+ }
+ 
+ type SettingsMenuItem = {
+@@ -83,6 +87,11 @@ const useSettingsMenuItems = (): SettingsMenuItem[] =>
+         name: 'Developer Tools',
+         icon: Icons.Terminal,
+       },
++      {
++        page: SettingsPages.UpdatesPage,
++        name: 'Обновления',
++        icon: Icons.Download,
++      },
+       {
+         page: SettingsPages.AboutPage,
+         name: 'About',
+@@ -229,6 +238,7 @@ export function Settings({ initialPage, requestClose }: SettingsProps) {
+         <DeveloperTools requestClose={handlePageRequestClose} />
+       )}
+       {activePage === SettingsPages.AboutPage && <About requestClose={handlePageRequestClose} />}
++      {activePage === SettingsPages.UpdatesPage && <Updates requestClose={handlePageRequestClose} />}
+     </PageRoot>
+   );
+ }
+diff --git a/src/app/features/settings/updates/Updates.tsx b/src/app/features/settings/updates/Updates.tsx
+new file mode 100644
+index 0000000..aa8152a
+--- /dev/null
++++ b/src/app/features/settings/updates/Updates.tsx
+@@ -0,0 +1,424 @@
++// Plotina Lite Desktop: Settings -> «Обновления».
++//
++// The renderer half of the update channel. All policy (dev acknowledgement,
++// downgrade rules, feed selection) lives in the Electron main process
++// (cinny-electron/src/update-channel.js + src/updater.js); this page only
++// reads state through the preload bridge (window.plotinaLite), renders it
++// and forwards the user's choices. On Cinny Web the bridge does not exist
++// and the page shows an explanatory notice instead.
++//
++// Labels mirror UI_TEXT in src/update-channel.js; when the bridge returns
++// `text` (structured-clone-safe strings only) those values win, so the page
++// can never drift from the strings the native menu shows.
++import React, { useEffect, useState } from 'react';
++import { Box, Button, Icon, IconButton, Icons, Scroll, Text, color, config } from 'folds';
++import { Page, PageContent, PageHeader } from '../../../components/page';
++import { SequenceCard } from '../../../components/sequence-card';
++import { SequenceCardStyle } from '../styles.css';
++import { ThemeKind, useActiveTheme } from '../../../hooks/useTheme';
++
++// ---------------------------------------------------------------- bridge API
++type BridgeText = Record<string, string | string[]>;
++
++type ChannelState = {
++  channel?: 'stable' | 'dev' | string;
++  installKind?: string;
++  selfUpdate?: boolean;
++  currentVersion?: string;
++  metadataFile?: string | null;
++  devFeedUrl?: string | null;
++  text?: BridgeText;
++};
++
++type UpdaterStatus = {
++  state?: string;
++  version?: string;
++  channel?: string;
++  offered?: string;
++  plan?: string;
++  downgrade?: boolean;
++  installKind?: string;
++  message?: string;
++};
++
++type ChannelSetResult = {
++  ok?: boolean;
++  needsConfirmation?: boolean;
++  channel?: string;
++  state?: ChannelState;
++  error?: string;
++};
++
++type PlotinaLiteBridge = {
++  appVersion?: () => Promise<string>;
++  updater?: {
++    checkForUpdates?: () => Promise<unknown>;
++    installUpdate?: () => Promise<unknown>;
++    onStatus?: (cb: (status: UpdaterStatus) => void) => () => void;
++    channel?: {
++      get: () => Promise<ChannelState>;
++      set: (
++        channel: string,
++        options?: { acknowledged?: boolean; manual?: boolean }
++      ) => Promise<ChannelSetResult>;
++      returnToStable: () => Promise<ChannelSetResult>;
++    };
++  };
++};
++
++const liteBridge = (): PlotinaLiteBridge | undefined =>
++  (globalThis as unknown as { plotinaLite?: PlotinaLiteBridge }).plotinaLite;
++
++// ------------------------------------------------------------------- strings
++const TEXT = {
++  pageTitle: 'Обновления',
++  versionLabel: 'Версия',
++  channelLabel: 'Канал обновлений',
++  stableLabel: 'Стабильный',
++  devLabel: 'Dev',
++  checkForUpdates: 'Проверить обновления…',
++  installRestart: 'Установить и перезапустить',
++  returnToStable: 'Вернуться на стабильный',
++  devWarningMessage: 'Включить Dev-канал обновлений?',
++  devWarningDetail:
++    'Dev-канал получает тестовые сборки (вида 4.12.8-plotina.N-dev.M) с GitHub-релиза dev-latest. ' +
++    'Они не проверяются так же строго, как стабильные, могут откатываться и меняться без предупреждения. ' +
++    'Когда стабильный релиз с тем же номером выходит, он считается более старым, чем dev-сборка: ' +
++    'возврат на стабильный выполняется отдельной командой и может установить версию ниже текущей.',
++  devWarningEnable: 'Включить Dev-канал',
++  devWarningCancel: 'Отмена',
++  manualKindsNote: 'Для этого типа установки обновления управляются вручную или пакетным менеджером.',
++  webOnlyNote:
++    'Управление обновлениями доступно в десктопной оболочке Plotina Lite Desktop. ' +
++    'В браузерной версии Cinny обновлениями занимается сам браузер.',
++};
++
++const str = (text: BridgeText | undefined, key: keyof typeof TEXT): string => {
++  const value = text && text[key];
++  return typeof value === 'string' && value ? value : TEXT[key];
++};
++
++const channelLabel = (text: BridgeText | undefined, channel: string): string =>
++  channel === 'dev' ? str(text, 'devLabel') : str(text, 'stableLabel');
++
++// Map an updater 'update-status' payload onto one user-facing line. Unknown
++// states are not rendered (the menu/dialogs own them).
++const statusLine = (st: UpdaterStatus, text: BridgeText | undefined): string | null => {
++  const ch = st.channel ? ` (${channelLabel(text, st.channel)})` : '';
++  switch (st.state) {
++    case 'available':
++      return st.version ? `Доступно обновление ${st.version}${ch}. Загружаем…` : null;
++    case 'downloaded':
++      return st.downgrade
++        ? `Стабильная версия ${st.version} загружена — это понижение версии. Нажмите «${str(
++            text,
++            'installRestart'
++          )}» или перезапустите приложение.`
++        : `Обновление ${st.version ?? ''}${ch} загружено. Нажмите «${str(
++            text,
++            'installRestart'
++          )}» или перезапустите приложение.`;
++    case 'up-to-date':
++      if (st.plan === 'foreign') {
++        return `Предложенная сборка ${st.offered ?? ''} относится к другому каналу и не установлена.`;
++      }
++      if (st.plan === 'blocked') {
++        return `Предложенная сборка ${st.offered ?? ''} ниже текущей — автоматическое понижение запрещено.`;
++      }
++      return `Обновлений нет — установлена ${st.version ?? 'текущая'} версия.`;
++    case 'manual-required':
++      return st.message ?? TEXT.manualKindsNote;
++    case 'no-feed':
++      return 'Лента обновлений недоступна.';
++    case 'not-packaged':
++      return 'Сборка запущена без упаковки — автообновление недоступно.';
++    case 'error':
++      return `Ошибка обновления: ${st.message ?? 'неизвестная ошибка'}`;
++    default:
++      return null;
++  }
++};
++
++// ------------------------------------------------------------------ component
++type UpdatesProps = {
++  requestClose: () => void;
++};
++
++export function Updates({ requestClose }: UpdatesProps) {
++  const [bridge] = useState<PlotinaLiteBridge | undefined>(liteBridge);
++  const [state, setState] = useState<ChannelState | undefined>(undefined);
++  const [version, setVersion] = useState<string>('');
++  const [status, setStatus] = useState<string>('');
++  const [checking, setChecking] = useState(false);
++  const [confirmDev, setConfirmDev] = useState(false);
++  const theme = useActiveTheme();
++
++  const channel = state?.channel === 'dev' ? 'dev' : 'stable';
++  const text = state?.text;
++  const selfUpdate = state?.selfUpdate !== false;
++
++  useEffect(() => {
++    if (!bridge) return;
++    let disposed = false;
++    // Real packaged version straight from the shell (4.12.8-plotina.N or a
++    // -plotina.N-dev.M dev build); never a string baked into the web bundle.
++    Promise.resolve(bridge.appVersion?.())
++      .then((v: string | undefined) => !disposed && typeof v === 'string' && setVersion(v))
++      .catch(() => undefined);
++    Promise.resolve(bridge.updater?.channel?.get())
++      .then((st: ChannelState | undefined) => !disposed && setState(st))
++      .catch((e: unknown) =>
++        !disposed && setStatus(`Ошибка: ${String((e as Error)?.message ?? e)}`)
++      );
++    const unsubscribe = bridge.updater?.onStatus?.((st: UpdaterStatus) => {
++      if (disposed) return;
++      if (st.state === 'channel') {
++        // channel change: the payload is a fresh channelState()
++        setState(st as ChannelState);
++        setConfirmDev(false);
++        setChecking(false);
++      }
++      const line = statusLine(st, text);
++      if (line) setStatus(line);
++      if (st.state === 'available' || st.state === 'downloaded') setChecking(false);
++    });
++    return () => {
++      disposed = true;
++      if (typeof unsubscribe === 'function') unsubscribe();
++    };
++    // text is derived from `state`; the subscription must refresh with it.
++  }, [bridge, text]);
++
++  if (!bridge?.updater?.channel) {
++    return (
++      // data-testid survives minification; stage-web.sh and the CI web job
++      // grep this marker to prove patch 0008 is baked into the dist.
++      <Page data-testid="plotina-updates-page">
++        <PageHeader outlined={false}>
++          <Box grow="Yes" gap="200">
++            <Box grow="Yes" alignItems="Center" gap="200">
++              <Icon src={Icons.Download} size="300" />
++              <Text size="H3" truncate>
++                {TEXT.pageTitle}
++              </Text>
++            </Box>
++            <Box shrink="No">
++              <IconButton onClick={requestClose} variant="Surface">
++                <Icon src={Icons.Cross} />
++              </IconButton>
++            </Box>
++          </Box>
++        </PageHeader>
++        <Box grow="Yes">
++          <Scroll hideTrack visibility="Hover">
++            <PageContent>
++              <Box direction="Column" gap="400">
++                <Text size="T300">{TEXT.webOnlyNote}</Text>
++              </Box>
++            </PageContent>
++          </Scroll>
++        </Box>
++      </Page>
++    );
++  }
++
++  const selectChannel = (next: string, confirmed = false) => {
++    const set = bridge.updater?.channel?.set;
++    if (!set) return;
++    if (next === 'dev' && channel !== 'dev' && !confirmed) {
++      // The bridge refuses an unacknowledged switch (needsConfirmation), so
++      // asking here is also enforced by the main process.
++      setConfirmDev(true);
++      return;
++    }
++    setConfirmDev(false);
++    set(next, { acknowledged: true, manual: true })
++      .then((res: ChannelSetResult) => {
++        if (res && res.state) setState(res.state);
++        setStatus(
++          res && res.ok
++            ? `${str(text, 'channelLabel')}: ${channelLabel(text, next)}`
++            : (res && res.error) || 'Не удалось изменить канал.'
++        );
++      })
++      .catch((e: unknown) => setStatus(`Ошибка: ${String((e as Error)?.message ?? e)}`));
++  };
++
++  const check = () => {
++    setChecking(true);
++    setStatus('Проверяю обновления…');
++    Promise.resolve(bridge.updater?.checkForUpdates?.())
++      .then(() => {
++        // The outcome itself arrives later via onStatus; the invoke only
++        // resolves with the install kind. Keep 'checking' until then,
++        // cleared by the first terminal status.
++      })
++      .catch((e: unknown) => {
++        setChecking(false);
++        setStatus(`Ошибка: ${String((e as Error)?.message ?? e)}`);
++      });
++  };
++
++  const install = () => {
++    Promise.resolve(bridge.updater?.installUpdate?.()).catch((e: unknown) =>
++      setStatus(`Ошибка: ${String((e as Error)?.message ?? e)}`)
++    );
++  };
++
++  const returnToStable = () => {
++    setConfirmDev(false);
++    bridge.updater?.channel
++      ?.returnToStable()
++      .then((res: ChannelSetResult) => {
++        if (res && res.state) setState(res.state);
++        setStatus(res && res.ok ? str(text, 'returnToStable') : (res && res.error) || '');
++      })
++      .catch((e: unknown) => setStatus(`Ошибка: ${String((e as Error)?.message ?? e)}`));
++  };
++
++  return (
++    <Page data-testid="plotina-updates-page">
++      <PageHeader outlined={false}>
++        <Box grow="Yes" gap="200">
++          <Box grow="Yes" alignItems="Center" gap="200">
++            <Icon src={Icons.Download} size="300" />
++            <Text size="H3" truncate>
++              {TEXT.pageTitle}
++            </Text>
++          </Box>
++          <Box shrink="No">
++            <IconButton onClick={requestClose} variant="Surface">
++              <Icon src={Icons.Cross} />
++            </IconButton>
++          </Box>
++        </Box>
++      </PageHeader>
++      <Box grow="Yes">
++        <Scroll hideTrack visibility="Hover">
++          <PageContent>
++            <Box direction="Column" gap="700">
++              <Box direction="Column" gap="100">
++                <Text size="L400">{TEXT.versionLabel}</Text>
++                {/* Full packaged version, dev suffix included when present. */}
++                <Text size="T400" bold>
++                  {version || state?.currentVersion || '—'}
++                </Text>
++              </Box>
++
++              <Box direction="Column" gap="100">
++                <Text size="L400">{str(text, 'channelLabel')}</Text>
++                <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" gap="400">
++                  <Box direction="Column" gap="300">
++                    <Box alignItems="Center" gap="200">
++                      {/* Native-looking select (same style as the noise
++                          backend picker): layout properties only. */}
++                      <select
++                        aria-label={str(text, 'channelLabel')}
++                        style={{ font: 'inherit', minWidth: 160, padding: '6px 10px', borderRadius: 8, color: color.SurfaceVariant.OnContainer, background: color.SurfaceVariant.Container, border: '1px solid ' + color.SurfaceVariant.ContainerLine, outline: 'none', colorScheme: theme.kind === ThemeKind.Dark ? 'dark' : 'light' }}
++                        value={channel}
++                        onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
++                          selectChannel(e.target.value)
++                        }
++                      >
++                        <option value="stable">{str(text, 'stableLabel')}</option>
++                        <option value="dev">{str(text, 'devLabel')}</option>
++                      </select>
++                      <Button
++                        variant="Primary"
++                        fill="Soft"
++                        size="300"
++                        radii="300"
++                        before={<Icon src={Icons.Search} size="100" />}
++                        disabled={checking}
++                        onClick={check}
++                      >
++                        <Text size="B300">{str(text, 'checkForUpdates')}</Text>
++                      </Button>
++                    </Box>
++                    {status && (
++                      <Text size="T200" color="Primary" truncate={false}>
++                        {status}
++                      </Text>
++                    )}
++                    {!selfUpdate && (
++                      <Text size="T200" bold>
++                        {str(text, 'manualKindsNote')}
++                      </Text>
++                    )}
++                  </Box>
++                </SequenceCard>
++
++                {confirmDev && (
++                  <SequenceCard
++                    className={SequenceCardStyle}
++                    variant="Critical"
++                    direction="Column"
++                    gap="400"
++                  >
++                    <Box direction="Column" gap="300">
++                      <Text size="T300" bold>
++                        {str(text, 'devWarningMessage')}
++                      </Text>
++                      <Text size="T200">{str(text, 'devWarningDetail')}</Text>
++                      <Box gap="200" wrap="Wrap">
++                        <Button
++                          variant="Critical"
++                          fill="Soft"
++                          size="300"
++                          radii="300"
++                          before={<Icon src={Icons.Warning} size="100" />}
++                          onClick={() => selectChannel('dev', true)}
++                        >
++                          <Text size="B300">{str(text, 'devWarningEnable')}</Text>
++                        </Button>
++                        <Button
++                          variant="Secondary"
++                          fill="Soft"
++                          size="300"
++                          radii="300"
++                          outlined
++                          onClick={() => setConfirmDev(false)}
++                        >
++                          <Text size="B300">{str(text, 'devWarningCancel')}</Text>
++                        </Button>
++                      </Box>
++                    </Box>
++                  </SequenceCard>
++                )}
++
++                {channel === 'dev' && (
++                  <Box gap="200" wrap="Wrap">
++                    <Button
++                      variant="Secondary"
++                      fill="Soft"
++                      size="300"
++                      radii="300"
++                      outlined
++                      onClick={returnToStable}
++                    >
++                      <Text size="B300">{str(text, 'returnToStable')}</Text>
++                    </Button>
++                  </Box>
++                )}
++
++                {status.toLowerCase().includes('загружено') && (
++                  <Box gap="200">
++                    <Button
++                      variant="Primary"
++                      size="300"
++                      radii="300"
++                      before={<Icon src={Icons.Power} size="100" />}
++                      onClick={install}
++                    >
++                      <Text size="B300">{str(text, 'installRestart')}</Text>
++                    </Button>
++                  </Box>
++                )}
++              </Box>
++            </Box>
++          </PageContent>
++        </Scroll>
++      </Box>
++    </Page>
++  );
++}
+diff --git a/src/app/features/settings/updates/index.ts b/src/app/features/settings/updates/index.ts
+new file mode 100644
+index 0000000..ec22c9f
+--- /dev/null
++++ b/src/app/features/settings/updates/index.ts
+@@ -0,0 +1 @@
++export * from './Updates';

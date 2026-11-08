@@ -1,0 +1,229 @@
+diff --git a/src/app/features/settings/PlotinaSelect.tsx b/src/app/features/settings/PlotinaSelect.tsx
+new file mode 100644
+index 0000000..2a97803
+--- /dev/null
++++ b/src/app/features/settings/PlotinaSelect.tsx
+@@ -0,0 +1,112 @@
++// Plotina: a select that looks like Cinny's own theme/layout menus.
++//
++// Native <select> controls are drawn by Chromium/GTK and cannot pick up the
++// Cinny palette; on a dark theme they show a white box with a blue system
++// highlight. This uses the same Button + Menu + MenuItem + PopOut recipe as
++// SelectTheme in General.tsx, so the closed control and the opened menu use
++// the theme's surfaces, radii and Primary highlight.
++import React, { MouseEventHandler, useState } from 'react';
++import FocusTrap from 'focus-trap-react';
++import {
++  Box,
++  Button,
++  config,
++  Icon,
++  Icons,
++  Menu,
++  MenuItem,
++  PopOut,
++  RectCords,
++  Text,
++} from 'folds';
++import { stopPropagation } from '../../utils/keyboard';
++
++export type PlotinaSelectOption = {
++  value: string;
++  label: string;
++};
++
++type PlotinaSelectProps = {
++  value: string;
++  options: PlotinaSelectOption[];
++  onChange: (value: string) => void;
++  ariaLabel?: string;
++  disabled?: boolean;
++  minWidth?: number;
++};
++
++export function PlotinaSelect({
++  value,
++  options,
++  onChange,
++  ariaLabel,
++  disabled = false,
++  minWidth = 160,
++}: PlotinaSelectProps) {
++  const [menuCords, setMenuCords] = useState<RectCords>();
++  const selected = options.find((option) => option.value === value) ?? options[0];
++
++  const handleOpen: MouseEventHandler<HTMLButtonElement> = (evt) => {
++    if (disabled) return;
++    setMenuCords(evt.currentTarget.getBoundingClientRect());
++  };
++
++  return (
++    <>
++      <Button
++        size="300"
++        variant="Primary"
++        outlined
++        fill="Soft"
++        radii="300"
++        after={<Icon size="300" src={Icons.ChevronBottom} />}
++        onClick={handleOpen}
++        aria-label={ariaLabel}
++        aria-disabled={disabled}
++        disabled={disabled}
++        style={{ minWidth, justifyContent: 'space-between' }}
++      >
++        <Text size="T300">{selected?.label ?? value}</Text>
++      </Button>
++      <PopOut
++        anchor={menuCords}
++        offset={5}
++        position="Bottom"
++        align="End"
++        content={
++          <FocusTrap
++            focusTrapOptions={{
++              initialFocus: false,
++              onDeactivate: () => setMenuCords(undefined),
++              clickOutsideDeactivates: true,
++              isKeyForward: (evt: KeyboardEvent) =>
++                evt.key === 'ArrowDown' || evt.key === 'ArrowRight',
++              isKeyBackward: (evt: KeyboardEvent) =>
++                evt.key === 'ArrowUp' || evt.key === 'ArrowLeft',
++              escapeDeactivates: stopPropagation,
++            }}
++          >
++            <Menu>
++              <Box direction="Column" gap="100" style={{ padding: config.space.S100 }}>
++                {options.map((option) => (
++                  <MenuItem
++                    key={option.value}
++                    size="300"
++                    variant={option.value === value ? 'Primary' : 'Surface'}
++                    radii="300"
++                    onClick={() => {
++                      onChange(option.value);
++                      setMenuCords(undefined);
++                    }}
++                  >
++                    <Text size="T300">{option.label}</Text>
++                  </MenuItem>
++                ))}
++              </Box>
++            </Menu>
++          </FocusTrap>
++        }
++      />
++    </>
++  );
++}
+diff --git a/src/app/features/settings/general/PlotinaNoise.tsx b/src/app/features/settings/general/PlotinaNoise.tsx
+index b8e0fa8..7360542 100644
+--- a/src/app/features/settings/general/PlotinaNoise.tsx
++++ b/src/app/features/settings/general/PlotinaNoise.tsx
+@@ -12,11 +12,11 @@
+ // running processors. Keys, defaults, clamping and wording mirror
+ // noise/logic.js — keep the two files in step.
+ import React, { ChangeEventHandler, useEffect, useState } from 'react';
+-import { Box, Text, color, config } from 'folds';
++import { Box, Text, color } from 'folds';
+ import { SequenceCard } from '../../../components/sequence-card';
+ import { SettingTile } from '../../../components/setting-tile';
+ import { SequenceCardStyle } from '../styles.css';
+-import { ThemeKind, useActiveTheme } from '../../../hooks/useTheme';
++import { PlotinaSelect } from '../PlotinaSelect';
+ 
+ const LEVEL_KEY = 'plotina.noise.level';
+ const DEFAULT_LEVEL = 60;
+@@ -114,7 +114,6 @@ function notifyWrapper(apply: (wrapper: NoiseWrapper) => void): void {
+ }
+ 
+ export function PlotinaNoise() {
+-  const theme = useActiveTheme();
+   const [strings] = useState(pickStrings);
+   const [level, setLevel] = useState(readLevel);
+   const [backend, setBackend] = useState(readBackend);
+@@ -141,8 +140,8 @@ export function PlotinaNoise() {
+     });
+   };
+ 
+-  const handleBackend: ChangeEventHandler<HTMLSelectElement> = (evt) => {
+-    const next = normalizeBackend(evt.currentTarget.value);
++  const handleBackend = (value: string) => {
++    const next = normalizeBackend(value);
+     writeStored(BACKEND_KEY, next);
+     setBackend(next);
+     notifyWrapper((wrapper) => {
+@@ -195,13 +194,12 @@ export function PlotinaNoise() {
+         <SettingTile
+           title={strings.backend}
+           after={
+-            <select aria-label={strings.backend} value={backend} onChange={handleBackend} style={{ font: 'inherit', minWidth: 160, padding: '6px 10px', borderRadius: 8, color: color.SurfaceVariant.OnContainer, background: color.SurfaceVariant.Container, border: '1px solid ' + color.SurfaceVariant.ContainerLine, outline: 'none', colorScheme: theme.kind === ThemeKind.Dark ? 'dark' : 'light' }}>
+-              {BACKENDS.map((id) => (
+-                <option key={id} value={id}>
+-                  {BACKEND_LABELS[id]}
+-                </option>
+-              ))}
+-            </select>
++            <PlotinaSelect
++              ariaLabel={strings.backend}
++              value={backend}
++              options={BACKENDS.map((id) => ({ value: id, label: BACKEND_LABELS[id] }))}
++              onChange={handleBackend}
++            />
+           }
+         >
+           <Text size="T200" priority="300">
+diff --git a/src/app/features/settings/updates/Updates.tsx b/src/app/features/settings/updates/Updates.tsx
+index 84311ab..4e08fa4 100644
+--- a/src/app/features/settings/updates/Updates.tsx
++++ b/src/app/features/settings/updates/Updates.tsx
+@@ -11,11 +11,11 @@
+ // `text` (structured-clone-safe strings only) those values win, so the page
+ // can never drift from the strings the native menu shows.
+ import React, { useEffect, useState } from 'react';
+-import { Box, Button, Icon, IconButton, Icons, Scroll, Text, color, config } from 'folds';
++import { Box, Button, Icon, IconButton, Icons, Scroll, Text } from 'folds';
+ import { Page, PageContent, PageHeader } from '../../../components/page';
+ import { SequenceCard } from '../../../components/sequence-card';
+ import { SequenceCardStyle } from '../styles.css';
+-import { ThemeKind, useActiveTheme } from '../../../hooks/useTheme';
++import { PlotinaSelect } from '../PlotinaSelect';
+ 
+ // ---------------------------------------------------------------- bridge API
+ type BridgeText = Record<string, string | string[]>;
+@@ -151,7 +151,6 @@ export function Updates({ requestClose }: UpdatesProps) {
+   const [status, setStatus] = useState<string>('');
+   const [checking, setChecking] = useState(false);
+   const [confirmDev, setConfirmDev] = useState(false);
+-  const theme = useActiveTheme();
+ 
+   const channel = state?.channel === 'dev' ? 'dev' : 'stable';
+   const text = state?.text;
+@@ -310,19 +309,15 @@ export function Updates({ requestClose }: UpdatesProps) {
+                 <SequenceCard className={SequenceCardStyle} variant="SurfaceVariant" gap="400">
+                   <Box direction="Column" gap="300">
+                     <Box alignItems="Center" gap="200">
+-                      {/* Native-looking select (same style as the noise
+-                          backend picker): layout properties only. */}
+-                      <select
+-                        aria-label={str(text, 'channelLabel')}
+-                        style={{ font: 'inherit', minWidth: 160, padding: '6px 10px', borderRadius: 8, color: color.SurfaceVariant.OnContainer, background: color.SurfaceVariant.Container, border: '1px solid ' + color.SurfaceVariant.ContainerLine, outline: 'none', colorScheme: theme.kind === ThemeKind.Dark ? 'dark' : 'light' }}
++                      <PlotinaSelect
++                        ariaLabel={str(text, 'channelLabel')}
+                         value={channel}
+-                        onChange={(e: React.ChangeEvent<HTMLSelectElement>) =>
+-                          selectChannel(e.target.value)
+-                        }
+-                      >
+-                        <option value="stable">{str(text, 'stableLabel')}</option>
+-                        <option value="dev">{str(text, 'devLabel')}</option>
+-                      </select>
++                        options={[
++                          { value: 'stable', label: str(text, 'stableLabel') },
++                          { value: 'dev', label: str(text, 'devLabel') },
++                        ]}
++                        onChange={selectChannel}
++                      />
+                       <Button
+                         variant="Primary"
+                         fill="Soft"
