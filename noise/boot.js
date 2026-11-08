@@ -475,6 +475,29 @@
     return null;
   }
 
+  function ensureRangeStyle() {
+    if (document.getElementById("plotina-noise-range-style")) return;
+    var style = document.createElement("style");
+    style.id = "plotina-noise-range-style";
+    style.textContent = [
+      "#plotina-noise-range{--plotina-range-pct:60%;-webkit-appearance:none;appearance:none;display:block;height:20px;margin:0;background:transparent;cursor:pointer;}",
+      "#plotina-noise-range::-webkit-slider-runnable-track{height:6px;border-radius:999px;background:linear-gradient(to right,var(--cpd-color-text-action-accent,#7ee2b8) 0 var(--plotina-range-pct),var(--cpd-color-bg-subtle-primary,#3c3f44) var(--plotina-range-pct) 100%);}",
+      "#plotina-noise-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:16px;height:16px;margin-top:-5px;border-radius:50%;background:var(--cpd-color-text-action-accent,#7ee2b8);border:2px solid var(--cpd-color-bg-canvas-default,#1b1d22);box-shadow:0 0 0 1px var(--cpd-color-border-interactive-secondary,#3c3f44);}",
+      "#plotina-noise-range::-moz-range-track{height:6px;border-radius:999px;background:var(--cpd-color-bg-subtle-primary,#3c3f44);}",
+      "#plotina-noise-range::-moz-range-progress{height:6px;border-radius:999px;background:var(--cpd-color-text-action-accent,#7ee2b8);}",
+      "#plotina-noise-range::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--cpd-color-text-action-accent,#7ee2b8);border:2px solid var(--cpd-color-bg-canvas-default,#1b1d22);}",
+      "#plotina-noise-range:focus-visible{outline:2px solid var(--cpd-color-text-action-accent,#7ee2b8);outline-offset:2px;border-radius:4px;}"
+    ].join("\n");
+    document.head.appendChild(style);
+  }
+
+  function syncRangeFill() {
+    var r = document.getElementById("plotina-noise-range");
+    if (!r) return;
+    var v = Number(r.value);
+    r.style.setProperty("--plotina-range-pct", (Number.isFinite(v) ? v : 0) + "%");
+  }
+
   function buildRow() {
     var s = L.strings(document.documentElement.lang || navigator.language);
     var row = document.createElement("div");
@@ -501,7 +524,9 @@
     range.max = "100";
     range.step = "5";
     range.value = String(level);
-    range.style.cssText = "flex:1 1 auto;accent-color:var(--cpd-color-text-action-accent,#17795a);";
+    range.style.cssText = "flex:1 1 auto;";
+    ensureRangeStyle();
+    range.style.setProperty("--plotina-range-pct", String(level) + "%");
 
     var value = document.createElement("span");
     value.id = "plotina-noise-value";
@@ -511,6 +536,7 @@
     range.addEventListener("input", function () {
       var v = L.clampLevel(range.value);
       value.textContent = String(v);
+      syncRangeFill();
       setLevel(v);
     });
 
