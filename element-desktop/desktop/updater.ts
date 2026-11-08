@@ -372,7 +372,10 @@ function sendUpdateDownloaded(update: ICachedUpdate): void {
     global.mainWindow?.webContents.send("update-downloaded", update);
 }
 
-export async function checkForUpdates(manual: boolean, opts: { allowDowngrade?: boolean } = {}): Promise<void> {
+export async function checkForUpdates(
+    manual: boolean,
+    opts: { allowDowngrade?: boolean; channelSwitch?: boolean } = {},
+): Promise<void> {
     if (UPDATE_MODE === "unsupported") {
         if (manual) sendUpdateStatus(false);
         return;
@@ -399,6 +402,13 @@ export async function checkForUpdates(manual: boolean, opts: { allowDowngrade?: 
         // A version reduction is only ever honoured for the explicit,
         // user-confirmed "return to stable" from a dev build.
         const allowDowngrade = opts.allowDowngrade === true && isDevVersion(app.getVersion());
+        // A user switching channels may move to the dev prerelease of the
+        // SAME build (stable .42 -> .42-dev.2). Semver ranks the stable release
+        // above its prerelease, so that is only allowed on the explicit switch
+        // and only within one build; an older build still needs the explicit
+        // "return to stable" confirmation.
+        const channelSwitch = opts.channelSwitch === true;
+        const currentBuild = parseVersion(app.getVersion())?.build;
         const channel = readUpdateChannel();
         if (channel === "dev") {
             await checkDevFeed(feed, allowDowngrade, manual);
@@ -430,7 +440,10 @@ export async function checkForUpdates(manual: boolean, opts: { allowDowngrade?: 
             // Belt and braces: even inside a Desktop-tagged release, never
             // accept another product's artifact.
             if (!yml.fileName.startsWith("Plotina-Desktop")) continue;
-            if (!acceptCandidate(yml.version, app.getVersion(), allowDowngrade)) continue;
+            const candidateBuild = parseVersion(yml.version)?.build;
+            const sameBuildSwitch =
+                channelSwitch && currentBuild !== undefined && candidateBuild === currentBuild;
+            if (!acceptCandidate(yml.version, app.getVersion(), allowDowngrade || sameBuildSwitch)) continue;
             if (!best || isVersionNewer(yml.version, best.yml.version)) {
                 best = { release, yml };
             }
@@ -518,7 +531,10 @@ export function setUpdateChannel(rawChannel: string, allowDowngrade = false): Up
         lastNotifiedKey = null;
         console.log(`Plotina updater: update channel ${previous} -> ${rawChannel}`);
     }
-    void checkForUpdates(true, { allowDowngrade: rawChannel === "stable" && allowDowngrade === true });
+    void checkForUpdates(true, {
+        allowDowngrade: rawChannel === "stable" && allowDowngrade === true,
+        channelSwitch: previous !== rawChannel,
+    });
     return rawChannel;
 }
 
