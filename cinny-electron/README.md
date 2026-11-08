@@ -39,7 +39,7 @@ cinny-electron/
   scripts/fix-deb.sh        # restore hyphenated dpkg-sortable Version
   scripts/stage-release-assets.mjs  # stable aliases + SHA256SUMS (+latest*.yml fallback)
   scripts/verify-release-assets.mjs # release gate: verify version+hashes+metadata, assemble upload dir
-  scripts/install-lite-electron.sh  # silent curl|bash installer (deb/AppImage paths)
+  scripts/install-lite-electron.sh  # silent curl|bash installer (apt-repo deb / AppImage paths)
   scripts/qa-linux-package.sh       # packaged smoke: xprop identity + full qa.mjs
   scripts/test-updater.mjs  # updater unit tests (feed parsing, version ordering)
   scripts/typecheck.mjs     # node --check over src/, scripts/, tests/

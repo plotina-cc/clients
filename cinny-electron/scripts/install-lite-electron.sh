@@ -9,10 +9,20 @@
 # output goes to a temp log that is read only on the error path.
 #
 # Modes:
-#   auto (default): deb via apt/dpkg when this is a Debian system AND sudo
-#     works; otherwise the AppImage into ${PREFIX:-$HOME/.local}.
-#   --deb / --appimage force one path; a positional arg is a file or URL.
-#   PLOTINA_LITE_DEB_URL / PLOTINA_LITE_APPIMAGE_URL override the sources.
+#   auto (default): on a Debian-like system (apt-get + dpkg) with working
+#     sudo, subscribe the machine to the signed Plotina apt repo (keyring at
+#     /usr/share/keyrings/plotina.gpg + /etc/apt/sources.list.d/plotina.list)
+#     and install plotina-lite-desktop from it, so future builds arrive with
+#     the regular apt upgrade. Otherwise fall back to the AppImage into
+#     ${PREFIX:-$HOME/.local}.
+#   --deb forces the apt-repo install; it never installs a local file (a
+#     positional .deb with --deb is rejected). --appimage forces the AppImage.
+#   A positional .deb path/URL is kept as a DEPRECATED direct-file install:
+#     the file is installed as-is via apt-get/dpkg and the machine is NOT
+#     subscribed to the repo, so apt will not track new builds for it.
+#   PLOTINA_LITE_DEB_URL is deprecated: when set it is treated as a
+#     positional .deb source. PLOTINA_LITE_APPIMAGE_URL overrides the
+#     AppImage download source.
 #
 # What the AppImage path installs (matching the deb):
 #   $PREFIX/bin/plotina-lite-desktop          (the image itself)
@@ -26,8 +36,17 @@
 # the AppImage path — that would register the temporary mount point.
 set -euo pipefail
 
-DEB_URL="${PLOTINA_LITE_DEB_URL:-https://plotina.cc/dl/Plotina-Lite-Desktop.deb}"
 APPIMAGE_URL="${PLOTINA_LITE_APPIMAGE_URL:-https://plotina.cc/dl/Plotina-Lite-Desktop.AppImage}"
+
+# Signed flat apt repo for Plotina (https://plotina.cc/apt). The sources
+# line is copied verbatim from /apt/README.md; the keyring/list paths are
+# env-overridable for tests only — production writes the system files and
+# never rewrites an existing one (admin decisions win over re-runs).
+APT_PACKAGE="plotina-lite-desktop"
+APT_SOURCES_LINE='deb [signed-by=/usr/share/keyrings/plotina.gpg] https://plotina.cc/apt ./'
+APT_KEYRING="${PLOTINA_LITE_APT_KEYRING:-/usr/share/keyrings/plotina.gpg}"
+APT_LIST="${PLOTINA_LITE_APT_LIST:-/etc/apt/sources.list.d/plotina.list}"
+APT_KEY_URL="${PLOTINA_LITE_APT_KEY_URL:-https://plotina.cc/apt/key.gpg}"
 
 BIN_NAME="plotina-lite-desktop"            # executableName in electron-builder config
 DESKTOP_NAME="plotina-lite-desktop.desktop"
@@ -47,8 +66,15 @@ die()  { echo "ERROR: $*" >&2; exit 1; }   # the ONLY output on failure
 usage() {
     cat <<'EOF'
 Usage: install-lite-electron.sh [--deb|--appimage] [PATH_or_URL]
-  PLOTINA_LITE_DEB_URL / PLOTINA_LITE_APPIMAGE_URL override download sources
-  PREFIX=... (default ~/.local) for the AppImage path
+  default: Debian/Ubuntu with sudo -> subscribe to the signed Plotina apt
+           repo (https://plotina.cc/apt) and install plotina-lite-desktop
+           from it; otherwise the AppImage into ${PREFIX:-$HOME/.local}
+  --deb      apt-repo install only (never a local .deb file)
+  --appimage AppImage only (override: PREFIX=...)
+  PATH_or_URL  .AppImage source; a .deb file/URL is the DEPRECATED
+               direct-file install (no repo subscription)
+  PLOTINA_LITE_APPIMAGE_URL  override the AppImage download source
+  PLOTINA_LITE_DEB_URL       deprecated: treated as a positional .deb source
 EOF
 }
 
@@ -62,6 +88,21 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+if [ -n "${PLOTINA_LITE_DEB_URL:-}" ] && [ -z "$DEB_SOURCE" ]; then
+    # Default no longer downloads a .deb; keep the old variable as an
+    # explicit-file override so existing scripted invocations still work.
+    warn "PLOTINA_LITE_DEB_URL is deprecated (packages install from the Plotina apt repo now); treated as an explicit .deb file/URL."
+    DEB_SOURCE="$PLOTINA_LITE_DEB_URL"
+fi
+if [ "$MODE" = "deb" ] && [ -n "$DEB_SOURCE" ]; then
+    die "--deb means the apt-repo install; a positional .deb ($DEB_SOURCE) is the deprecated file install — drop --deb to install that file"
+fi
+if [ "$MODE" = "deb" ] && [ -n "$APP_SOURCE" ]; then
+    die "argument '$APP_SOURCE' is not a .deb; --deb installs plotina-lite-desktop from the apt repo"
+fi
+if [ "$MODE" = "appimage" ] && [ -n "$DEB_SOURCE" ]; then
+    die "got a .deb ($DEB_SOURCE) but --appimage was chosen"
+fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -129,14 +170,73 @@ deb_env_available() {
     return 1
 }
 
-install_deb() {
+# Atomic system-file write: stage next to the target and rename in place, so
+# apt sees either the old file or the complete new one, never a torn write.
+apt_install_file() {
+    local tmp="$1" dst="$2" mode="$3"
+    # shellcheck disable=SC2016  # $1..$3/$$ are expanded by the inner sh, not here
+    "${SUDO_CMD[@]}" sh -c '
+        set -eu
+        install -d -m 755 "$(dirname "$2")"
+        cp "$1" "$2.plotina-new.$$"
+        chmod "$3" "$2.plotina-new.$$"
+        mv -f "$2.plotina-new.$$" "$2"
+    ' _ "$tmp" "$dst" "$mode" >>"$TMP/install.log" 2>&1
+}
+
+apt_repo_configure() {
+    if [ ! -f "$APT_KEYRING" ]; then
+        download "$APT_KEY_URL" "$TMP/plotina.gpg" || { warn "cannot download $APT_KEY_URL"; return 1; }
+        [ -s "$TMP/plotina.gpg" ] || { warn "empty key file: $APT_KEY_URL"; return 1; }
+        # If gpg exists, verify we fetched a parseable public key (not an
+        # HTML error page). The fingerprint is deliberately not pinned: a
+        # key rotation on the server must not brick shipped installers.
+        if command -v gpg >/dev/null 2>&1; then
+            if ! gpg --batch --no-tty --show-keys --with-colons "$TMP/plotina.gpg" 2>/dev/null | grep -q '^pub:'; then
+                warn "downloaded file is not a parseable public key; refusing to write it"
+                return 1
+            fi
+        fi
+        apt_install_file "$TMP/plotina.gpg" "$APT_KEYRING" 644 || {
+            warn "cannot install keyring: $APT_KEYRING"; return 1; }
+    fi
+    if [ ! -f "$APT_LIST" ]; then
+        printf '%s\n' "$APT_SOURCES_LINE" > "$TMP/plotina.list"
+        apt_install_file "$TMP/plotina.list" "$APT_LIST" 644 || {
+            warn "cannot install sources list: $APT_LIST"; return 1; }
+    fi
+    # A full update may fail on someone else's broken third-party repo; that
+    # is not fatal — apt-get install below is the real gate.
+    DEBIAN_FRONTEND=noninteractive "${SUDO_CMD[@]}" apt-get update >>"$TMP/install.log" 2>&1 \
+        || warn "apt-get update returned non-zero; trying the install anyway"
+    return 0
+}
+
+install_from_repo() {
+    apt_repo_configure || return 1
+    if ! DEBIAN_FRONTEND=noninteractive "${SUDO_CMD[@]}" apt-get install -y "$APT_PACKAGE" >>"$TMP/install.log" 2>&1; then
+        warn "apt-get install -y $APT_PACKAGE failed"
+        return 1
+    fi
+    info "plotina-lite-desktop installed from the Plotina apt repo"
+    if [ ! -f "/usr/share/applications/$DESKTOP_NAME" ]; then
+        warn "no $DESKTOP_NAME in /usr/share/applications after repo install"
+    fi
+    refresh_desktop_db "/usr/share/applications"
+    register_schemes "$DESKTOP_NAME"
+    return 0
+}
+
+# DEPRECATED path: install one specific .deb file (positional argument or
+# PLOTINA_LITE_DEB_URL). No repo subscription happens on this path.
+install_deb_file() {
     local deb
-    obtain "$DEB_SOURCE" "$DEB_URL" "Plotina-Lite-Desktop.deb"
+    obtain "$DEB_SOURCE" "" "Plotina-Lite-Desktop.deb"
     deb="$RESOLVED"
-    if "${SUDO_CMD[@]}" apt-get install -y "$deb" >>"$TMP/install.log" 2>&1; then
+    if DEBIAN_FRONTEND=noninteractive "${SUDO_CMD[@]}" apt-get install -y "$deb" >>"$TMP/install.log" 2>&1; then
         info "deb installed via apt-get"
     elif "${SUDO_CMD[@]}" dpkg -i "$deb" >>"$TMP/install.log" 2>&1 \
-      && "${SUDO_CMD[@]}" apt-get -f install -y >>"$TMP/install.log" 2>&1; then
+      && DEBIAN_FRONTEND=noninteractive "${SUDO_CMD[@]}" apt-get -f install -y >>"$TMP/install.log" 2>&1; then
         warn "apt-get install failed; installed with dpkg -i + apt-get -f install"
     else
         warn "cannot install $deb"
@@ -151,7 +251,7 @@ install_deb() {
 }
 
 install_appimage() {
-    local appimage bin desktop icon_dir extract src_png size found src_desktop
+    local appimage bin desktop icon_dir extract src_png size
     PREFIX="${PREFIX:-$HOME/.local}"
     bin="$PREFIX/bin/$BIN_NAME"
     desktop="$PREFIX/share/applications/$DESKTOP_NAME"
@@ -167,7 +267,6 @@ install_appimage() {
     # runtime, no FUSE needed for --appimage-extract).
     extract="$TMP/extract"
     mkdir -p "$extract"
-    found=0
     if ( cd "$extract" && "$bin" --appimage-extract >>"$TMP/install.log" 2>&1 ); then
         root="$extract/squashfs-root"
         for src_png in "$root"/usr/share/icons/hicolor/*/apps/"$BIN_NAME".png "$root"/icons/*/"$BIN_NAME".png "$root"/*.png; do
@@ -178,17 +277,12 @@ install_appimage() {
                 *)         size="256x256" ;;
             esac
             install -Dm 644 "$src_png" "$icon_dir/$size/apps/$BIN_NAME.png"
-            found=1
         done
     fi
 
     # Write our own desktop entry pointing at the installed image (the copy
     # inside the image still Exec()s a mount path; electron-builder names the
     # file after executableName, matching deb/rpm).
-    src_desktop=""
-    for d in "$extract/squashfs-root/$DESKTOP_NAME" "$extract/squashfs-root"/*.desktop; do
-        [ -f "$d" ] && src_desktop="$d" && break
-    done
     cat > "$desktop" <<EOF
 [Desktop Entry]
 Name=$APP_NAME
@@ -210,10 +304,15 @@ EOF
 case "$MODE" in
     appimage) install_appimage ;;
     deb)  deb_env_available || die "--deb chosen but no apt/dpkg + sudo here"
-          install_deb || die "--deb install failed (see the apt/dpkg attempt)" ;;
+          install_from_repo || die "--deb repo install of $APT_PACKAGE failed (see the apt attempt)" ;;
     auto) if deb_env_available; then
-              install_deb || install_appimage
+              if [ -n "$DEB_SOURCE" ]; then
+                  install_deb_file || install_appimage
+              else
+                  install_from_repo || install_appimage
+              fi
           else
+              [ -n "$DEB_SOURCE" ] && die "got a .deb file ($DEB_SOURCE) but no apt/dpkg + sudo here"
               install_appimage
           fi ;;
     *) die "internal error: mode $MODE" ;;
