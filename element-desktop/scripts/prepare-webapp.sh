@@ -98,6 +98,28 @@ echo "==> overlay"
 echo "==> branding"
 "$PYTHON" "$ROOT/branding.py" --webapp "$DEST" --icons "$REPO_ROOT/branding/icons"
 
+# The opt-in Dev update channel UI (Settings -> Help & About). Desktop-only:
+# the file no-ops without window.electron, but it still ships solely here.
+# Insertion is literal-counted below; a moved </head> fails the build.
+echo "==> update channel overlay"
+install -m 0644 "$ROOT/desktop/web-overlay/update-channel.js" "$DEST/plotina-update-channel.js"
+"$PYTHON" - "$DEST/index.html" <<'PY'
+import sys
+from pathlib import Path
+
+p = Path(sys.argv[1])
+text = p.read_text(encoding="utf-8")
+TAG = '<script src="plotina-update-channel.js" defer></script>'
+if "plotina-update-channel.js" not in text:
+    if "</head>" not in text:
+        sys.exit("update-channel overlay: no </head> in index.html; upstream layout changed")
+    text = text.replace("</head>", TAG + "</head>", 1)
+    p.write_text(text, encoding="utf-8")
+    print("update-channel overlay: patched index.html")
+else:
+    print("update-channel overlay: already patched")
+PY
+
 # The webapp directory becomes webapp.asar inside the installer; the licence
 # text and the modification notice have to travel with it. Byte-identical to
 # ../LICENSE and ../NOTICE.
@@ -118,6 +140,10 @@ fi
 test ! -e "$DEST/mobile_guide"
 test -s "$DEST/LICENSE-AGPL-3.0"
 test -s "$DEST/NOTICE"
+# The Dev update channel overlay must be in the bundle exactly once.
+test -s "$DEST/plotina-update-channel.js"
+uc="$( { grep -oF -e 'src="plotina-update-channel.js"' "$DEST/index.html" || true; } | wc -l )"
+[ "$uc" -eq 1 ] || { echo "prepare-webapp: the update-channel script tag appears $uc times" >&2; exit 1; }
 test -f "$DEST/noise/vendor/dfn.esm.js"
 test -f "$DEST/noise/dfn/v3/pkg/df_bg.wasm"
 test -f "$DEST/noise/dfn/v3/models/DeepFilterNet3_onnx.tar.gz"

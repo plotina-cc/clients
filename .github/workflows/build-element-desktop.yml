@@ -77,7 +77,10 @@ jobs:
         # path argument differs between Node majors; the file form is stable.
         # update-feed.test.mjs guards the Settings "Check for updates" feed
         # (ipc.ts is patched to call getUpdateFeedUrl from our updater).
-        run: node --test tests/linux-updater.test.mjs tests/update-feed.test.mjs
+        # update-channel.test.mjs guards the opt-in Dev channel: feed selection,
+        # dev version comparison, metadata parsing, and the confirmed
+        # "return to stable" behaviour.
+        run: node --test tests/linux-updater.test.mjs tests/update-feed.test.mjs tests/update-channel.test.mjs
 
   # One webapp for both platforms: the desktop shell embeds a fixed asar, so the
   # overlay has to be applied once and handed to the packaging jobs.
@@ -253,8 +256,14 @@ jobs:
           # format: electron-builder sanitizes a 4-segment "1.12.32.30" into the
           # nonsense "1.12.3-2.30" inside latest.yml (probe), while the prerelease
           # form passes through byte-identical.
-          if [[ "${{ github.ref_name }}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-plotina-desktop\.([0-9]+)$ ]]; then
+          # Stable and dev tags share this workflow: v...-plotina-desktop.N
+          # and v...-plotina-desktop.N-dev.M. Keep the -dev.M suffix in the
+          # app version so the dev updater compares it as newer than stable N.
+          if [[ "${{ github.ref_name }}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-plotina-desktop\.([0-9]+)(-dev\.([0-9]+))?$ ]]; then
             export VERSION="${BASH_REMATCH[1]}-plotina.${BASH_REMATCH[2]}"
+            if [ -n "${BASH_REMATCH[3]}" ]; then
+              export VERSION="${VERSION}-dev.${BASH_REMATCH[4]}"
+            fi
           fi
           APPVER="${VERSION:-$(node -p 'require("./package.json").version')}"
           echo "app VERSION=$APPVER"
@@ -555,6 +564,10 @@ jobs:
           # Human-facing title only: never the tag, which carries the upstream
           # client name and the plotina release counter.
           name: ${{ steps.release_title.outputs.name }}
+          # Dev tags are previews. Marking them prerelease keeps them out of
+          # the stable updater's release listing; only dev-latest is rolling.
+          prerelease: ${{ contains(github.ref_name, '-dev.') }}
+          make_latest: ${{ !contains(github.ref_name, '-dev.') }}
           files: dist/*
           # Releases here share a tag namespace with the other clients, so the
           # generated changelog would compare against an unrelated product.
@@ -569,3 +582,23 @@ jobs:
 
             Исходники этой сборки — в этом репозитории (AGPL-3.0): upstream-тег element-web из element-desktop/UPSTREAM_TAG плюс оверлей element-desktop/.
             Полный набор: https://github.com/plotina-cc/clients/blob/main/SOURCE.md
+
+      # A dev tag must also refresh the rolling feed that Desktop's Dev
+      # channel reads. The stable release itself is published above; these
+      # assets are the direct-download metadata (latest-linux-dev.yml /
+      # latest-dev.yml) plus the exact artifacts they name.
+      - name: Publish the rolling dev feed
+        if: contains(github.ref_name, '-dev.')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [ -f dist/latest-linux.yml ] && cp dist/latest-linux.yml dist/latest-linux-dev.yml
+          [ -f dist/latest.yml ] && cp dist/latest.yml dist/latest-dev.yml
+          assets=(dist/latest-linux-dev.yml dist/latest-dev.yml)
+          for f in dist/Plotina-Desktop-*.AppImage dist/Plotina-Desktop-*-setup.exe dist/Plotina-Desktop-*-setup.exe.blockmap; do
+            [ -e "$f" ] && assets+=("$f")
+          done
+          [ "${#assets[@]}" -gt 1 ] || { echo "no dev metadata/assets in dist" >&2; exit 1; }
+          gh release upload dev-latest "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"

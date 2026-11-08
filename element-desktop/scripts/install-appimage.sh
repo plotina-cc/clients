@@ -7,13 +7,27 @@
 # Выбор пакета:
 #   * по умолчанию (auto): если это Debian-подобная система (apt-get + dpkg)
 #     и есть доступ к sudo (root, беспарольный sudo или интерактивный ввод
-#     пароля) — скачивается и ставится .deb через sudo apt-get install;
-#   * если .deb поставить нельзя (не Debian, нет sudo, пользователь отказал,
-#     apt не смог) — ставится AppImage в ${PREFIX:-$HOME/.local};
-#   * --deb / --appimage — принудительный выбор способа;
-#   * позиционный аргумент — путь к файлу или URL (.deb или .AppImage);
-#     файл по пути берётся как есть, без перекачивания;
-#   * URL переопределяются окружением: PLOTINA_DEB_URL, PLOTINA_APPIMAGE_URL.
+#     пароля) — система подписывается на подписанный apt-репозиторий Plotina
+#     (ключ в keyring + /etc/apt/sources.list.d/plotina.list) и
+#     plotina-desktop ставится из него через apt-get: дальше обновления
+#     приходят с обычным apt-get update && apt-get upgrade;
+#   * если репозиторий недоступен (не Debian, нет sudo, пользователь отказал,
+#     apt или сеть подвели) — ставится AppImage в ${PREFIX:-$HOME/.local};
+#   * --deb — ТОЛЬКО установка из apt-репозитория (никакого локального .deb:
+#     позиционный .deb с --deb запрещён);
+#   * --appimage — только AppImage в ~/.local (override: PREFIX=...);
+#   * --dev — AppImage в ~/.local, но из DEV-канала: скачивается
+#     latest-linux-dev.yml с /dl/dev/desktop, берётся первый files: вход,
+#     артефакт проверяется по sha512 И size и только затем ставится тем же
+#     AppImage-путём (desktop-файл/иконки/бинарь). Без apt и без GitHub;
+#     с --deb несовместим, позиционный файл и PLOTINA_APPIMAGE_URL с --dev
+#     запрещены — источник задаёт yml;
+#   * позиционный аргумент — путь или URL: .AppImage для AppImage-пути,
+#     .deb — устаревшая явная установка конкретного файла через apt-get/dpkg
+#     (файл ставится как есть, но система НЕ подписывается на репозиторий,
+#     и apt не будет обновлять такой пакет как пакет из репозитория);
+#   * PLOTINA_DEB_URL устарела: если задана, трактуется как позиционный .deb;
+#   * PLOTINA_APPIMAGE_URL переопределяет URL скачивания AppImage.
 #
 # AppImage сам не регистрирует .desktop, поэтому установщик закрепляет за
 # Plotina Desktop схему SSO-колбэка io.element.desktop — без этого шага
@@ -21,23 +35,36 @@
 set -euo pipefail
 
 # =================== откуда берём сборку ====================================
-# Стабильные имена на нашем зеркале, а не тег релиза: /srv/dl обновляется
-# scripts/pull-release.py из самого свежего релиза, поэтому скрипт никогда не
-# отстаёт от выпуска и не требует правки на каждый тег. Переопределяется
-# окружением:
-#   PLOTINA_DEB_URL=... PLOTINA_APPIMAGE_URL=... install-appimage.sh
-DEFAULT_DEB_URL="https://plotina.cc/dl/Plotina-Desktop.deb"
+# AppImage-фолбэк отдаётся стабильным именем с нашего зеркала /dl (его
+# обновляет pull-release.py), а не тегом релиза. Сам .deb по умолчанию
+# больше НЕ скачивается: на Debian/Ubuntu пакет ставится из подписанного
+# apt-репозитория https://plotina.cc/apt — подпиской на него установщик и
+# занимается (строки репозитория — ровно из /apt/README.md). Пути keyring и
+# sources-list переопределяются только ради тестов; в проде это системные
+# файлы, и их содержимое (включая signed-by) не меняется.
+#   PLOTINA_APPIMAGE_URL=... install-appimage.sh
 DEFAULT_APPIMAGE_URL="https://plotina.cc/dl/Plotina-Desktop.AppImage"
-# ============================================================================
-
-DEB_URL="${PLOTINA_DEB_URL:-$DEFAULT_DEB_URL}"
 APPIMAGE_URL="${PLOTINA_APPIMAGE_URL:-$DEFAULT_APPIMAGE_URL}"
+# Dev-канал: electron-builder yml с нашего зеркала /dl/dev/desktop (его
+# обновляет CI dev-сборки). --dev скачивает этот yml, берёт ПЕРВЫЙ вход
+# files: (url/sha512/size), проверяет артефакт по ОБОИМ значениям и ставит
+# его AppImage-путём. yml-адрес переопределяется только ради тестов.
+DEFAULT_DEV_YAML_URL="https://plotina.cc/dl/dev/desktop/latest-linux-dev.yml"
+DEV_YAML_URL="${PLOTINA_DEV_YAML_URL:-$DEFAULT_DEV_YAML_URL}"
+
+APT_PACKAGE="plotina-desktop"
+APT_SOURCES_LINE='deb [signed-by=/usr/share/keyrings/plotina.gpg] https://plotina.cc/apt ./'
+APT_KEYRING="${PLOTINA_APT_KEYRING:-/usr/share/keyrings/plotina.gpg}"
+APT_LIST="${PLOTINA_APT_LIST:-/etc/apt/sources.list.d/plotina.list}"
+APT_KEY_URL="${PLOTINA_APT_KEY_URL:-https://plotina.cc/apt/key.gpg}"
+# ============================================================================
 
 SCHEME="io.element.desktop"
 DESKTOP_NAME="plotina-desktop.desktop"
 
-MODE="auto"          # auto | deb | appimage
-DEB_SOURCE=""        # явный путь/URL для .deb
+MODE="auto"          # auto | deb (apt-репозиторий) | appimage
+DEV_MODE=0           # 1 = --dev: AppImage из dev-канала (latest-linux-dev.yml)
+DEB_SOURCE=""        # устаревшее: явный путь/URL для .deb-файла
 APP_SOURCE=""        # явный путь/URL для AppImage
 SUDO_CMD=()          # (sudo) или пусто, если прав root хватает
 
@@ -47,13 +74,25 @@ die()  { echo "ОШИБКА: $*" >&2; exit 1; }
 
 usage() {
     cat <<'EOF'
-Использование: install-appimage.sh [--deb|--appimage] [ПУТЬ_или_URL]
+Использование: install-appimage.sh [--deb|--appimage|--dev] [ПУТЬ_или_URL]
 
-  без аргументов       выбрать способ автоматически (сначала .deb, иначе AppImage)
-  --deb                ставить только .deb (через apt-get/dpkg + sudo)
+  без аргументов       на Debian/Ubuntu с sudo — подписка на apt-репозиторий
+                       Plotina и установка plotina-desktop из него;
+                       иначе AppImage в ${PREFIX:-$HOME/.local}
+  --deb                только установка из apt-репозитория (ключ +
+                       /etc/apt/sources.list.d/plotina.list + apt-get install;
+                       позиционный .deb с --deb запрещён)
   --appimage           ставить только AppImage в ~/.local (override: PREFIX=...)
-  ПУТЬ_или_URL         конкретный пакет (.deb или .AppImage) вместо скачивания
-  PLOTINA_DEB_URL / PLOTINA_APPIMAGE_URL   переопределить URL скачивания
+  --dev                AppImage в ~/.local из DEV-канала: первый files: вход
+                       latest-linux-dev.yml (url/sha512/size), артефакт
+                       проверяется по sha512 и размеру; без apt и без GitHub.
+                       Несовместимо с --deb, позиционным файлом и
+                       PLOTINA_APPIMAGE_URL
+  ПУТЬ_или_URL         .AppImage для AppImage-пути; .deb — устаревшая явная
+                       установка конкретного файла (без подписки на репозиторий)
+  PLOTINA_APPIMAGE_URL                    переопределить URL AppImage
+  PLOTINA_DEV_YAML_URL                    переопределить yml dev-канала для --dev
+  PLOTINA_DEB_URL                         устарело: трактуется как позиционный .deb
 EOF
 }
 
@@ -61,12 +100,18 @@ EOF
 while [ $# -gt 0 ]; do
     case "$1" in
         --deb)
+            [ "$DEV_MODE" = 1 ] && die "--dev и --deb вместе нельзя: --dev ставит AppImage из dev-канала без apt"
             [ "$MODE" = "appimage" ] && die "нельзя одновременно --deb и --appimage"
             MODE="deb"
             ;;
         --appimage)
             [ "$MODE" = "deb" ] && die "нельзя одновременно --deb и --appimage"
             MODE="appimage"
+            ;;
+        --dev)
+            [ "$MODE" = "deb" ] && die "--dev и --deb вместе нельзя: --dev ставит AppImage из dev-канала без apt"
+            MODE="appimage"
+            DEV_MODE=1
             ;;
         -h|--help)  usage; exit 0 ;;
         --*)        die "неизвестный флаг: $1" ;;
@@ -79,8 +124,23 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+if [ "$DEV_MODE" = 1 ] && [ -n "$APP_SOURCE" ]; then
+    die "--dev берёт AppImage из $DEV_YAML_URL; позиционный файл ($APP_SOURCE) с ним запрещён"
+fi
+if [ "$DEV_MODE" = 1 ] && [ -n "${PLOTINA_APPIMAGE_URL:-}" ]; then
+    die "--dev берёт AppImage из $DEV_YAML_URL; снимите PLOTINA_APPIMAGE_URL"
+fi
+if [ -n "${PLOTINA_DEB_URL:-}" ] && [ -z "$DEB_SOURCE" ]; then
+    # Устаревшее поведение (дефолт ставил .deb скачиванием) убран; переменная
+    # сохранена как явный файл-оверрайд для старых вызовов.
+    warn "PLOTINA_DEB_URL устарела: по умолчанию пакет ставится из apt-репозитория Plotina; переменная трактуется как явный .deb-файл/URL."
+    DEB_SOURCE="$PLOTINA_DEB_URL"
+fi
 if [ "$MODE" = "deb" ] && [ -n "$APP_SOURCE" ]; then
-    die "аргумент '$APP_SOURCE' не .deb; для AppImage уберите --deb"
+    die "аргумент '$APP_SOURCE' не .deb; --deb — это установка из apt-репозитория"
+fi
+if [ "$MODE" = "deb" ] && [ -n "$DEB_SOURCE" ]; then
+    die "--deb означает установку из apt-репозитория; позиционный .deb ($DEB_SOURCE) задан ради устаревшей файловой установки — уберите --deb"
 fi
 if [ "$MODE" = "appimage" ] && [ -n "$DEB_SOURCE" ]; then
     die "передан .deb, но выбран режим --appimage"
@@ -125,6 +185,122 @@ obtain() {
     fi
 }
 
+# --------- dev-канал: разбор latest-linux-dev.yml и проверка артефакта ------
+# electron-builder пишет yml сам; первый вход files: — актуальная dev-сборка.
+# url в yml абсолютный, но умеем и относительный (resolved от папки yml).
+# sha512 — base64 от сырого дайджеста (электрон-builder именно так и делает);
+# hex-форма тоже принимается. size — байты.
+parse_dev_yml() {
+    # $1: yml-файл. Заполняет DEV_URL/DEV_SHA512/DEV_SIZE; 0, если нашёлся
+    # полный ПЕРВЫЙ вход files:, иначе 1.
+    local yml="$1" line t in_files=0
+    DEV_URL=""; DEV_SHA512=""; DEV_SIZE=""
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        t="${line#"${line%%[![:space:]]*}"}"   # leading whitespace strip
+        if [ "$in_files" -eq 0 ]; then
+            [ "$t" = "files:" ] && in_files=1
+            continue
+        fi
+        # неотступленный ключ нулевого уровня закрывает список files:
+        if [ -n "$t" ] && [ "$line" = "$t" ]; then
+            break
+        fi
+        case "$t" in
+            "- url:"*)  [ -n "$DEV_URL" ]    || DEV_URL="${t#*- url:}" ;;
+            "sha512:"*) [ -n "$DEV_SHA512" ] || DEV_SHA512="${t#sha512:}" ;;
+            "size:"*)   [ -n "$DEV_SIZE" ]   || DEV_SIZE="${t#size:}" ;;
+        esac
+        # ведущие пробелы значений (case-метки схлопнуты руками выше)
+        DEV_URL="${DEV_URL#"${DEV_URL%%[![:space:]]*}"}"
+        DEV_SHA512="${DEV_SHA512#"${DEV_SHA512%%[![:space:]]*}"}"
+        DEV_SIZE="${DEV_SIZE#"${DEV_SIZE%%[![:space:]]*}"}"
+    done < "$yml"
+    case "$DEV_URL" in
+        http://*|https://*) ;;
+        "") return 1 ;;
+        /*) local scheme host
+            scheme="${DEV_YAML_URL%%://*}"; host="${DEV_YAML_URL#*://}"; host="${host%%/*}"
+            DEV_URL="$scheme://$host$DEV_URL" ;;
+        *)  DEV_URL="${DEV_YAML_URL%/*}/$DEV_URL" ;;
+    esac
+    [ -n "$DEV_URL" ] && [ -n "$DEV_SHA512" ] && [ -n "$DEV_SIZE" ] || return 1
+    case "$DEV_SIZE" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    return 0
+}
+
+sha512_hex_to_b64() {
+    # hex-дайджест -> стандартный base64 чистим bash'ом (внешний base64 не
+    # обязателен на машине пользователя).
+    local hex="$1"
+    local chars='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+    local -a v=()
+    local i n out="" b0 b1 b2 triple o1 o2 o3 o4
+    for ((i = 0; i < ${#hex}; i += 2)); do
+        v+=( "$(( 16#${hex:i:2} ))" )
+    done
+    n=${#v[@]}
+    for ((i = 0; i < n; i += 3)); do
+        b0=${v[i]}; b1=${v[i + 1]:-0}; b2=${v[i + 2]:-0}
+        triple=$(( (b0 << 16) | (b1 << 8) | b2 ))
+        o1=$(( (triple >> 18) & 63 )); o2=$(( (triple >> 12) & 63 ))
+        o3=$(( (triple >> 6) & 63 ));  o4=$(( triple & 63 ))
+        out+="${chars:o1:1}${chars:o2:1}"
+        if (( i + 1 < n )); then out+="${chars:o3:1}"; else out+="="; fi
+        if (( i + 2 < n )); then out+="${chars:o4:1}"; else out+="="; fi
+    done
+    printf '%s' "$out"
+}
+
+verify_dev_artifact() {
+    # $1: файл, $2: ожидаемый sha512 (base64 или hex), $3: ожидаемый размер.
+    # 0 — совпало и sha512, и size; 1 — отказ, причина в DEV_VERIFY_REASON.
+    local file="$1" want="$2" want_size="$3"
+    DEV_VERIFY_REASON=""
+    command -v sha512sum >/dev/null 2>&1 || { DEV_VERIFY_REASON="нет sha512sum в PATH"; return 1; }
+    local size actual_hex want_cmp actual_cmp
+    size="$(wc -c < "$file")"
+    size="${size//[[:space:]]/}"
+    if [ "$size" != "$want_size" ]; then
+        DEV_VERIFY_REASON="размер $size != ${want_size} из yml"
+        return 1
+    fi
+    actual_hex="$(sha512sum -- "$file")"
+    actual_hex="${actual_hex%% *}"
+    actual_hex="${actual_hex,,}"
+    if [[ "$want" =~ ^[0-9a-fA-F]{128}$ ]]; then
+        want_cmp="${want,,}"; actual_cmp="$actual_hex"
+    elif [[ "$want" =~ ^[A-Za-z0-9+/]+={0,2}$ ]]; then
+        want_cmp="$want"; actual_cmp="$(sha512_hex_to_b64 "$actual_hex")"
+    else
+        DEV_VERIFY_REASON="sha512 в yml не похож на base64/hex: $want"
+        return 1
+    fi
+    if [ "$want_cmp" != "$actual_cmp" ]; then
+        DEV_VERIFY_REASON="sha512 не совпал (ожидался $want)"
+        return 1
+    fi
+    return 0
+}
+
+dev_resolve_appimage() {
+    # --dev: yml -> первый files: вход -> скачивание -> sha512+size -> RESOLVED.
+    # Отказ (die) на любой нестыковке: dev-артефакт НЕ заменяется стабильным.
+    info "Dev-метаданные: $DEV_YAML_URL"
+    download "$DEV_YAML_URL" "$TMP/latest-linux-dev.yml" \
+        || die "не удалось скачать dev-метаданные: $DEV_YAML_URL"
+    parse_dev_yml "$TMP/latest-linux-dev.yml" \
+        || die "в $DEV_YAML_URL нет полного первого входа files: (url/sha512/size)"
+    info "Dev-сборка: $DEV_URL (size=$DEV_SIZE)"
+    download "$DEV_URL" "$TMP/dev-Plotina-Desktop.AppImage" \
+        || die "не удалось скачать dev-артефакт: $DEV_URL"
+    verify_dev_artifact "$TMP/dev-Plotina-Desktop.AppImage" "$DEV_SHA512" "$DEV_SIZE" \
+        || die "dev-артефакт не прошёл проверку: $DEV_URL — $DEV_VERIFY_REASON; ничего не установлено"
+    RESOLVED="$TMP/dev-Plotina-Desktop.AppImage"
+}
+
 # --------- регистрация схемы и .desktop-кэша: warn-but-continue --------------
 # never die: в headless-сессии (curl | bash) xdg-settings может отсутствовать
 # или падать — это предупреждение, а не ошибка установки.
@@ -160,7 +336,7 @@ register_handler() {
     fi
 }
 
-# --------- доступность .deb-пути: Debian-окружение + sudo --------------------
+# --------- доступность apt-пути: Debian-окружение + sudo --------------------
 DEB_REASON=""
 deb_env_available() {
     DEB_REASON=""
@@ -181,7 +357,7 @@ deb_env_available() {
         return 0
     fi
     if [ -t 0 ]; then
-        info "Для установки .deb нужен sudo — введите пароль (или прервите, чтобы поставить AppImage)."
+        info "Для установки из apt-репозитория нужен sudo — введите пароль (или прервите, чтобы поставить AppImage)."
         if sudo -v; then
             SUDO_CMD=(sudo)
             return 0
@@ -193,14 +369,81 @@ deb_env_available() {
     return 1
 }
 
-# --------- путь 1: .deb через apt-get/dpkg -----------------------------------
-install_deb() {
+# --------- путь 1: apt-репозиторий Plotina -----------------------------------
+# Атомарная запись системного файла: копируем готовый temp рядом с целью и
+# переименовываем на месте (mv в пределах ФС атомарен); назначение видит или
+# старый файл, или полностью новый, никогда — полускечь.
+apt_install_file() {
+    local tmp="$1" dst="$2" mode="$3"
+    # shellcheck disable=SC2016  # $1..$3/$$ раскрывает inner sh, не outer bash
+    "${SUDO_CMD[@]}" sh -c '
+        set -eu
+        install -d -m 755 "$(dirname "$2")"
+        cp "$1" "$2.plotina-new.$$"
+        chmod "$3" "$2.plotina-new.$$"
+        mv -f "$2.plotina-new.$$" "$2"
+    ' _ "$tmp" "$dst" "$mode" >>"$TMP/install.log" 2>&1
+}
+
+apt_repo_configure() {
+    if [ ! -f "$APT_KEYRING" ]; then
+        info "Скачиваю ключ репозитория: $APT_KEY_URL"
+        if ! download "$APT_KEY_URL" "$TMP/plotina.gpg"; then
+            warn "не удалось скачать $APT_KEY_URL"
+            return 1
+        fi
+        [ -s "$TMP/plotina.gpg" ] || { warn "пустой файл ключа: $APT_KEY_URL"; return 1; }
+        # Если gpg есть — убеждаемся, что скачали разбираемый публичный ключ,
+        # а не HTML-заглушку; отпечаток не пинним, чтобы ротация ключа на
+        # сервере не ломала уже распространённые установщики.
+        if command -v gpg >/dev/null 2>&1; then
+            if ! gpg --batch --no-tty --show-keys --with-colons "$TMP/plotina.gpg" 2>/dev/null | grep -q '^pub:'; then
+                warn "скачанный файл не разбирается как публичный ключ — ничего не записываю"
+                return 1
+            fi
+        fi
+        apt_install_file "$TMP/plotina.gpg" "$APT_KEYRING" 644 || {
+            warn "не удалось установить keyring: $APT_KEYRING"
+            return 1
+        }
+    fi
+    if [ ! -f "$APT_LIST" ]; then
+        printf '%s\n' "$APT_SOURCES_LINE" > "$TMP/plotina.list"
+        apt_install_file "$TMP/plotina.list" "$APT_LIST" 644 || {
+            warn "не удалось установить sources-list: $APT_LIST"
+            return 1
+        }
+    fi
+    # Полный update может упасть из-за чужих сломанных репозиториев — это не
+    # повод сдаваться: настоящим решением будет apt-get install ниже.
+    DEBIAN_FRONTEND=noninteractive "${SUDO_CMD[@]}" apt-get update >>"$TMP/install.log" 2>&1 \
+        || warn "apt-get update завершился с ошибкой (чужие репозитории?) — пробую установку пакета"
+    return 0
+}
+
+install_from_repo() {
+    apt_repo_configure || return 1
+    if ! DEBIAN_FRONTEND=noninteractive "${SUDO_CMD[@]}" apt-get install -y "$APT_PACKAGE" >>"$TMP/install.log" 2>&1; then
+        warn "apt-get install -y $APT_PACKAGE не прошёл"
+        return 1
+    fi
+    info "$APT_PACKAGE установлен из apt-репозитория https://plotina.cc/apt."
+    if [ ! -f "/usr/share/applications/$DESKTOP_NAME" ]; then
+        warn "После установки из репозитория не найден /usr/share/applications/$DESKTOP_NAME — проверьте имя .desktop в пакете."
+    fi
+    register_handler "/usr/share"
+}
+
+# --------- устаревший путь: конкретный .deb-файл (позиционный аргумент) ------
+# Сохранён для совместимости со старыми вызовами. НЕ подписывает систему на
+# репозиторий, и дальше такой пакет apt обновляет как локально поставленный.
+install_deb_file() {
     local deb
-    obtain "$DEB_SOURCE" "$DEB_URL" "Plotina-Desktop.deb"
+    obtain "$DEB_SOURCE" "" "Plotina-Desktop.deb"
     deb="$RESOLVED"
-    if "${SUDO_CMD[@]}" apt-get install -y "$deb" >>"$TMP/install.log" 2>&1; then
+    if DEBIAN_FRONTEND=noninteractive "${SUDO_CMD[@]}" apt-get install -y "$deb" >>"$TMP/install.log" 2>&1; then
         info "Пакет .deb установлен через apt-get."
-    elif "${SUDO_CMD[@]}" dpkg -i "$deb" >>"$TMP/install.log" 2>&1 && "${SUDO_CMD[@]}" apt-get -f install -y >>"$TMP/install.log" 2>&1; then
+    elif "${SUDO_CMD[@]}" dpkg -i "$deb" >>"$TMP/install.log" 2>&1 && DEBIAN_FRONTEND=noninteractive "${SUDO_CMD[@]}" apt-get -f install -y >>"$TMP/install.log" 2>&1; then
         warn "apt-get install не прошёл (зависимости?) — установил через dpkg -i + apt-get -f install."
     else
         warn "apt-get и dpkg не смогли установить $deb."
@@ -220,7 +463,14 @@ install_appimage() {
     desktop="$PREFIX/share/applications/$DESKTOP_NAME"
     icon_dir="$PREFIX/share/icons/hicolor"
 
-    obtain "$APP_SOURCE" "$APPIMAGE_URL" "Plotina-Desktop.AppImage"
+    # --dev: берём dev-артефакт из latest-linux-dev.yml с проверкой sha512 и
+    # размера; стабильный URL/позиционный файл здесь не участвуют (позиционный
+    # с --dev запрещён на разборе аргументов).
+    if [ "$DEV_MODE" = 1 ]; then
+        dev_resolve_appimage
+    else
+        obtain "$APP_SOURCE" "$APPIMAGE_URL" "Plotina-Desktop.AppImage"
+    fi
     appimage="$RESOLVED"
 
     install -d "$PREFIX/bin" "$(dirname "$desktop")"
@@ -302,16 +552,24 @@ case "$MODE" in
         ;;
     deb)
         deb_env_available || die "выбран --deb, но: $DEB_REASON"
-        install_deb || die "выбран --deb, но установка пакета не удалась"
+        install_from_repo || die "выбран --deb, но установка $APT_PACKAGE из https://plotina.cc/apt не удалась"
         ;;
     auto)
         if deb_env_available; then
-            if ! install_deb; then
-                warn "не удалось поставить .deb — перехожу на AppImage"
+            if [ -n "$DEB_SOURCE" ]; then
+                if ! install_deb_file; then
+                    warn "не удалось поставить $DEB_SOURCE — перехожу на AppImage"
+                    install_appimage
+                fi
+            elif ! install_from_repo; then
+                warn "не удалось установить из apt-репозитория Plotina — перехожу на AppImage"
                 install_appimage
             fi
         else
-            warn "не ставлю .deb: $DEB_REASON — ставлю AppImage в ${PREFIX:-$HOME/.local}"
+            if [ -n "$DEB_SOURCE" ]; then
+                die "передан .deb ($DEB_SOURCE), но: $DEB_REASON"
+            fi
+            warn "не ставлю из apt-репозитория: $DEB_REASON — ставлю AppImage в ${PREFIX:-$HOME/.local}"
             install_appimage
         fi
         ;;
@@ -319,4 +577,3 @@ case "$MODE" in
         die "внутренняя ошибка: неизвестный режим $MODE"
         ;;
 esac
-

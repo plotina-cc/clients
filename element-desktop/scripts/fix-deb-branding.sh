@@ -17,7 +17,7 @@ PRODUCT_NAME="${PRODUCT_NAME:-Plotina Desktop}"
 # Build counter appended to the Debian revision so successive builds are
 # distinct versions (an apt repository cannot hold two packages that share a
 # Version, and rollback needs the previous one).
-PLOTINA_REVISION="${PLOTINA_REVISION##*.}"
+PLOTINA_REVISION="${PLOTINA_REVISION:-local}"
 [ -f "$DEB" ] || { echo "fix-deb-branding: $DEB not found" >&2; exit 1; }
 command -v dpkg-deb >/dev/null 2>&1 || {
   echo "fix-deb-branding: dpkg-deb missing; cannot rewrite $DEB" >&2

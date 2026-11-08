@@ -3,7 +3,7 @@
 
     desktop/patch-shell.py [path/to/apps/desktop/src]
 
-Two edits, both pinned with unique-context asserts so an upstream drift fails
+Three edits, all pinned with unique-context asserts so an upstream drift fails
 the build loudly instead of silently shipping the old behaviour:
 
 1. electron-main.ts — the main window's `icon` option goes through
@@ -16,6 +16,14 @@ the build loudly instead of silently shipping the old behaviour:
    on Linux. The webapp hides Settings -> Help & About's "Check for updates"
    whenever that IPC has no answer (canSelfUpdate() never resolves), even
    though our AppImage/NSIS updater works fine.
+
+3. ipc.ts — `getUpdateChannel` / `setUpdateChannel` ipcCalls back our updater,
+   so the webapp overlay (desktop/web-overlay/update-channel.js, shipped as
+   plotina-update-channel.js) can show and switch the opt-in Dev update
+   channel (Settings -> Help & About). Unknown channels return null; the
+   second setUpdateChannel argument is the user-confirmed "return to stable"
+   downgrade flag (desktop/updater.ts enforces that it is a running -dev
+   build before honouring it).
 """
 import sys
 from pathlib import Path
@@ -48,11 +56,22 @@ patch(main, [
 ipc = SRC / "ipc.ts"
 patch(ipc, [
     ('import { getConfig } from "./config.js";',
-     'import { getConfig } from "./config.js";\nimport { getUpdateFeedUrl } from "./updater.js";  // PLOTINA-SHELL-PATCH', 1),
+     'import { getConfig } from "./config.js";\n'
+     'import { getUpdateChannel, getUpdateFeedUrl, setUpdateChannel } from "./updater.js";  // PLOTINA-SHELL-PATCH', 1),
     ('case "getUpdateFeedUrl":\n            ret = autoUpdater.getFeedURL();',
      'case "getUpdateFeedUrl":\n            // PLOTINA-SHELL-PATCH: autoUpdater is Squirrel/macOS only; our NSIS +\n'
      '            // AppImage updater has a real feed, so the webapp can show its\n'
      '            // "Check for updates" button on Linux too (upstream\'s call throws\n'
      '            // there, which hid the button even though updates worked).\n'
-     '            ret = getUpdateFeedUrl();', 1),
+     '            ret = getUpdateFeedUrl();\n            break;\n\n'
+     '        case "getUpdateChannel":\n'
+     '            // PLOTINA-SHELL-PATCH: opt-in Dev update channel, answered by\n'
+     '            // desktop/updater.ts; the webapp overlay wires it to Settings\n'
+     '            // -> Help & About (default "stable").\n'
+     '            ret = getUpdateChannel();\n            break;\n\n'
+     '        case "setUpdateChannel":\n'
+     '            // PLOTINA-SHELL-PATCH: args [channel, allowDowngrade];\n'
+     '            // allowDowngrade is the user-confirmed "Вернуться на стабильный"\n'
+     '            // and only applies to a running -dev build (see updater.ts).\n'
+     '            ret = setUpdateChannel(String(args[0]), args[1] === true);', 1),
 ])

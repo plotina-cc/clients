@@ -6,8 +6,9 @@
 // ../updater.ts is imported directly thanks to Node >= 22 type-stripping.
 // Everything runs under $TMPDIR (or /tmp): fake AppImages are ordinary files
 // — the updater never opens them, it only downloads, hashes, chmods and
-// renames. The last test downloads the REAL AppImage named by the live
-// latest-linux.yml feed and proves verification + atomic swap end to end.
+// renames. No test touches the network: the stable feed is served through a
+// fetch stub from LOCAL FIXTURES (a captured real latest-linux.yml), the way
+// the live edge serves it.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { registerHooks } from "node:module";
@@ -108,17 +109,49 @@ test("isVersionNewer compares Plotina versions", () => {
     assert.equal(updater.isVersionNewer("1.13.0", "1.12.32-plotina.34"), true);
 });
 
-test("parseLatestYml reads the real latest-linux.yml feed", async () => {
-    const res = await fetch(
-        "https://github.com/plotina-cc/clients/releases/download/v1.12.32-plotina-desktop.33/latest-linux.yml",
-        { headers: { "User-Agent": "Plotina-Desktop-test" } },
-    );
-    assert.equal(res.status, 200);
-    const yml = updater.parseLatestYml(await res.text());
+// Real latest-linux.yml captured from the public release
+// v1.12.32-plotina-desktop.33 (AppImage first, deb second, blockMapSize —
+// exactly the shape electron-builder 26.x publishes). Fixture, not live: the
+// parser contract must be pinned without network.
+const REAL_LINUX_YML = `version: 1.12.32-plotina.33
+files:
+  - url: Plotina-Desktop-1.12.32-plotina.33.AppImage
+    sha512: OYFtYvFf1zBaJMzIIX6j4Ic9wE7hsENCtqT6FEM3CmY8X7LenwT/IkH04hG3h0yFYpAQtJFW/BHc2CBXt2oTiA==
+    size: 218159324
+    blockMapSize: 227568
+  - url: plotina-desktop_1.12.32-plotina.33_amd64.deb
+    sha512: /g1CwBDyEzxeV+I1SvkTDCMWeJsIf2PyeWVeXsz4ZIpKNCJwjxrcw0f/lL2C4aBW566HBqTXcuN8Dgs34ftdZg==
+    size: 159194620
+path: Plotina-Desktop-1.12.32-plotina.33.AppImage
+sha512: OYFtYvFf1zBaJMzIIX6j4Ic9wE7hsENCtqT6FEM3CmY8X7LenwT/IkH04hG3h0yFYpAQtJFW/BHc2CBXt2oTiA==
+releaseDate: '2026-11-05T20:38:54.068Z'
+`;
+
+test("parseLatestYml reads the real latest-linux.yml shape", () => {
+    const yml = updater.parseLatestYml(REAL_LINUX_YML);
     assert.ok(yml, "latest-linux.yml must parse");
     assert.equal(yml.version, "1.12.32-plotina.33");
     assert.equal(yml.fileName, "Plotina-Desktop-1.12.32-plotina.33.AppImage", "must name the AppImage, not the deb");
     assert.match(yml.sha512, /^[\w+/]{86}==$/);
+    assert.equal(yml.size, 218159324, "top-level size describes the AppImage");
+    assert.equal(yml.releaseDate, "2026-11-05T20:38:54.068Z");
+});
+
+test("stable direct URLs: metadata on /dl, artifact alias, never api.github.com", () => {
+    assert.equal(
+        updater.stableMetadataUrl("linux", { APPIMAGE: "/x/Plotina.AppImage" }),
+        "https://plotina.cc/dl/latest-linux.yml",
+    );
+    assert.equal(updater.stableMetadataUrl("win32", {}), "https://plotina.cc/dl/latest.yml");
+    assert.equal(updater.stableMetadataUrl("linux", {}), null, "deb installs have no direct self-update feed");
+    assert.equal(updater.stableMetadataUrl("darwin", {}), null);
+    assert.equal(
+        updater.stableArtifactUrl("linux", { APPIMAGE: "/x/Plotina.AppImage" }),
+        "https://plotina.cc/dl/Plotina-Desktop.AppImage",
+    );
+    assert.equal(updater.stableArtifactUrl("win32", {}), "https://plotina.cc/dl/Plotina-Desktop-setup.exe");
+    assert.equal(updater.stableArtifactUrl("linux", {}), null);
+    assert.equal(updater.stableArtifactUrl("freebsd", {}), null);
 });
 
 test("stageAppImage refuses a sha512 mismatch and keeps the running image", async () => {
@@ -234,70 +267,96 @@ test("deb install: manual check replies with apt guidance, no network", async ()
 });
 
 // =========================================================================
-// The real thing: full check on this machine against the live GitHub feed.
-// Downloads the AppImage the published latest-linux.yml names (~200 MB),
-// verifies it against the published sha512 and swaps it over the fake .31.
+// The real thing, from fixtures: a full stable check served by a fetch stub
+// that behaves like https://plotina.cc/dl — the metadata names the VERSIONED
+// AppImage while the alias URL holds the same bytes. Proves direct URL
+// selection, sha512+size verification and the atomic swap end to end without
+// touching GitHub (API or otherwise).
 // =========================================================================
-test(
-    "e2e: live feed downloads the real AppImage, verifies sha512, swaps, prompts restart",
-    { timeout: 20 * 60 * 1000 },
-    async () => {
-        // What does the feed claim right now?
-        const relRes = await fetch("https://api.github.com/repos/plotina-cc/clients/releases?per_page=100", {
-            headers: { Accept: "application/vnd.github+json", "User-Agent": "Plotina-Desktop-test" },
-        });
-        assert.equal(relRes.status, 200, "GitHub API reachable");
-        const releases = await relRes.json();
-        const rel = releases.find((r) => !r.draft && !r.prerelease && r.assets.some((a) => a.name === "latest-linux.yml"));
-        assert.ok(rel, "a release with latest-linux.yml exists");
-        const ymlText = await (await fetch(rel.assets.find((a) => a.name === "latest-linux.yml").browser_download_url, { headers: { "User-Agent": "Plotina-Desktop-test" } })).text();
-        const yml = updater.parseLatestYml(ymlText);
-        assert.ok(yml);
-        console.log(`e2e feed: ${rel.tag_name} -> ${yml.fileName} (sha512 ${yml.sha512.slice(0, 16)}...)`);
+test("e2e: direct /dl feed downloads the alias AppImage, verifies sha512+size, swaps, prompts restart", async () => {
+    const layout = await makeLayout();
+    resetStubs(layout);
+    process.env.APPIMAGE = layout.current; // UPDATE_MODE stays linux-appimage; path is re-read per call
 
-        const layout = await makeLayout();
-        resetStubs(layout);
-        process.env.APPIMAGE = layout.current; // UPDATE_MODE stays linux-appimage; path is re-read per call
-
+    const payload = Buffer.concat([Buffer.from([0x7f, 0x45, 0x4c, 0x46]), Buffer.from("NEW-APPIMAGE-BYTES".repeat(4096))]); // ELF header + ~90 KB
+    const sha = sha512B64(payload);
+    // The feed names the versioned artifact; /dl only ever serves the alias.
+    const ymlText = [
+        "version: 1.12.32-plotina.33",
+        "files:",
+        "  - url: Plotina-Desktop-1.12.32-plotina.33.AppImage",
+        `    sha512: ${sha}`,
+        `    size: ${payload.length}`,
+        "path: Plotina-Desktop-1.12.32-plotina.33.AppImage",
+        `sha512: ${sha}`,
+        `size: ${payload.length}`,
+        "releaseDate: '2026-11-05T20:38:54.068Z'",
+        "",
+    ].join("\n");
+    const calls = [];
+    const real = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+        const u = String(url);
+        calls.push(u);
+        if (u === "https://plotina.cc/dl/latest-linux.yml") return new Response(ymlText, { status: 200 });
+        if (u === "https://plotina.cc/dl/Plotina-Desktop.AppImage") {
+            return new Response(Buffer.from(payload), { status: 200, headers: { "content-length": String(payload.length) } });
+        }
+        return new Response("unstubbed: " + u, { status: 404 });
+    };
+    try {
         await updater.checkForUpdates(true);
+    } finally {
+        globalThis.fetch = real;
+    }
 
-        // 1. UI flow mirrors Windows: status update-available, then update-downloaded.
-        const channels = state.sent.map((s) => s.channel);
-        assert.ok(channels.includes("check_updates"), "renderer got check_updates");
-        assert.ok(channels.includes("update-downloaded"), "renderer got update-downloaded");
-        const dl = state.sent.find((s) => s.channel === "update-downloaded");
-        assert.equal(dl.payload.releaseName, yml.version);
+    // 1. The whole check used the direct edge URLs and NOTHING else:
+    //    no api.github.com listing, no github.com asset download.
+    assert.deepEqual(calls, [
+        "https://plotina.cc/dl/latest-linux.yml",
+        "https://plotina.cc/dl/Plotina-Desktop.AppImage",
+    ], `exactly the two direct /dl GETs: ${JSON.stringify(calls)}`);
+    assert.ok(!calls.some((u) => u.includes("api.github.com") || u.includes("github.com")), "no GitHub API usage");
 
-        // 2. The restart dialog fired against the swapped image.
-        const dlg = state.dialogs.at(-1);
-        assert.ok(dlg && dlg.buttons.includes("Restart now"), "restart dialog shown");
-        assert.match(dlg.message, new RegExp(yml.version.replaceAll(".", "\\.")));
+    // 2. UI flow mirrors Windows: status update-available, then update-downloaded.
+    const channels = state.sent.map((s) => s.channel);
+    assert.ok(channels.includes("check_updates"), "renderer got check_updates");
+    assert.ok(channels.includes("update-downloaded"), "renderer got update-downloaded");
+    const dl = state.sent.find((s) => s.channel === "update-downloaded");
+    assert.equal(dl.payload.releaseName, "1.12.32-plotina.33");
+    assert.equal(dl.payload.updateURL, "https://plotina.cc/dl/Plotina-Desktop.AppImage");
 
-        // 3. The old file is gone, replaced by the verified image, executable, nothing left behind.
-        const dirEntries = await fs.readdir(layout.appDir);
-        assert.deepEqual(dirEntries, [path.basename(layout.current)], "no .part/.plotina-new leftovers");
-        const swappedBytes = await fs.readFile(layout.current);
-        assert.equal(sha512B64(swappedBytes), yml.sha512, "swapped-in bytes match the published sha512");
-        assert.ok(swappedBytes.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])), "swapped file is an ELF AppImage");
-        assert.ok((await fs.stat(layout.current)).mode & 0o111, "swapped file is executable");
+    // 3. The old file is gone, replaced by the verified image, executable, nothing left behind.
+    const dirEntries = await fs.readdir(layout.appDir);
+    assert.deepEqual(dirEntries, [path.basename(layout.current)], "no .part/.plotina-new leftovers");
+    const swappedBytes = await fs.readFile(layout.current);
+    assert.equal(sha512B64(swappedBytes), sha, "swapped-in bytes match the published sha512");
+    assert.equal(swappedBytes.length, payload.length, "swapped-in bytes match the published size");
+    assert.ok(swappedBytes.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])), "swapped file is an ELF AppImage");
+    assert.ok((await fs.stat(layout.current)).mode & 0o111, "swapped file is executable");
 
-        // 4. "Restart" re-launches the same path (now the new image) detached and quits.
-        const spawns = [];
-        const fakeSpawn = (target, args, opts) => {
-            spawns.push({ target, args, opts });
-            return { on: () => {}, unref: () => {} };
-        };
-        updater.installUpdate(fakeSpawn);
-        assert.equal(spawns.length, 1);
-        assert.equal(spawns[0].target, layout.current);
-        assert.deepEqual(spawns[0].args, []);
-        assert.equal(spawns[0].opts.detached, true);
-        assert.equal(state.quitCount, 1, "app.quit called for the restart");
-        assert.equal(globalThis.appQuitting, true);
+    // 4. The restart dialog fired against the swapped image.
+    const dlg = state.dialogs.at(-1);
+    assert.ok(dlg && dlg.buttons.includes("Restart now"), "restart dialog shown");
 
-        // 5. Re-check short-circuits to the cached update, like Windows does.
-        const before = state.sent.length;
-        await updater.checkForUpdates(true);
-        assert.ok(state.sent.slice(before).some((s) => s.channel === "update-downloaded"), "pending update re-shown");
-    },
-);
+    // 5. "Restart" re-launches the same path (now the new image) detached and quits.
+    const spawns = [];
+    const fakeSpawn = (target, args, opts) => {
+        spawns.push({ target, args, opts });
+        return { on: () => {}, unref: () => {} };
+    };
+    updater.installUpdate(fakeSpawn);
+    assert.equal(spawns.length, 1);
+    assert.equal(spawns[0].target, layout.current);
+    assert.deepEqual(spawns[0].args, []);
+    assert.equal(spawns[0].opts.detached, true);
+    assert.equal(state.quitCount, 1, "app.quit called for the restart");
+    assert.equal(globalThis.appQuitting, true);
+
+    // 6. Re-check short-circuits to the cached update, like Windows does.
+    const before = state.sent.length;
+    const callsBefore = calls.length;
+    await updater.checkForUpdates(true);
+    assert.ok(state.sent.slice(before).some((s) => s.channel === "update-downloaded"), "pending update re-shown");
+    assert.equal(calls.length, callsBefore, "a pending update re-fetches nothing");
+});

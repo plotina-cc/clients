@@ -6,11 +6,14 @@
     PLOTINA_APPIMAGE_URL, идемпотентность, содержимое .desktop, регистрация
     схемы (xdg-settings есть-ok / падает-ok / отсутствует-ok), скачивание с
     двумя попытками, скип иконок когда --appimage-extract падает;
-  * .deb: выбор auto при наличии apt-get/dpkg/sudo, fallback dpkg -i +
-    apt-get -f install, откат на AppImage без sudo / не-Debian / отказ,
-    флаги --deb/--appimage, PLOTINA_DEB_URL. Реальный apt не вызывается —
-    все системные команды это мок в PATH; тестируется разбор аргументов и
-    выбор пути, а не работа пакетного менеджера.
+  * apt-репозиторий: auto/--deb на Debian с sudo подписывают систему на
+    signed apt-репозиторий Plotina (keyring + /etc/apt/sources.list.d,
+    apt-get update + install plotina-desktop); при отказе ключа/apt/sudo —
+    откат на AppImage. keyring, sources-list и URL ключа в тестах
+    перенаправлены в tmp/локальный сервер; реальный apt не вызывается —
+    apt/dpkg/sudo/gpg это моки в PATH. Позиционный .deb и PLOTINA_DEB_URL —
+    устаревшая установка конкретного файла (apt-get, fallback dpkg -i +
+    apt-get -f install) БЕЗ подписки на репозиторий.
 
 Реальный AppImage скачивается один раз в фикстуру (кэш
 /tmp/plotina-appimage-fixture, переопределяется PLOTINA_TEST_APPIMAGE /
@@ -20,6 +23,8 @@ PLOTINA_TEST_FIXTURE_DIR); если сети нет — эти тесты про
 
     cd element-desktop && python3 -m unittest discover -s tests -v
 """
+import base64
+import hashlib
 import os
 import shutil
 import struct
@@ -36,10 +41,15 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE.parent / "scripts" / "install-appimage.sh"
 
-# Stable mirror names: /srv/dl is refreshed by pull-release.py, so the script
-# must not pin a release tag.
-DEFAULT_DEB_URL = "https://plotina.cc/dl/Plotina-Desktop.deb"
+# Stable mirror name for the AppImage fallback: /srv/dl is refreshed by
+# pull-release.py, so the script must not pin a release tag. The .deb is no
+# longer downloaded from /dl by default — apt-repo install replaced it.
 DEFAULT_APPIMAGE_URL = "https://plotina.cc/dl/Plotina-Desktop.AppImage"
+
+# Exact source line from https://plotina.cc/apt/README.md
+APT_SOURCES_LINE = "deb [signed-by=/usr/share/keyrings/plotina.gpg] https://plotina.cc/apt ./"
+
+FAKE_APT_KEY = b"FAKE-PLOTINA-APT-KEY-BYTES\n"
 
 FIXTURE_DIR = Path(os.environ.get("PLOTINA_TEST_FIXTURE_DIR", "/tmp/plotina-appimage-fixture"))
 
@@ -201,7 +211,7 @@ if [ "$1" = "-n" ]; then
 fi
 if [ "$1" = "-v" ]; then echo "sudo -v" >> "$MOCK_LOG"; exit "${SUDO_V_FAIL:-1}"; fi
 echo "sudo $*" >> "$MOCK_LOG"
-exec "$@"
+exec env "$@"
 """
 MOCK_APT_GET = """#!/bin/sh
 echo "apt-get $*" >> "$MOCK_LOG"
@@ -224,8 +234,19 @@ echo "update-desktop-database $*" >> "$MOCK_LOG"
 [ "${UDB_FAIL:-0}" = 1 ] && exit 5
 exit 0
 """
+MOCK_GPG_OK = """#!/bin/sh
+echo "gpg $*" >> "$MOCK_LOG"
+echo 'pub:-:4096:1:148192C8CB33A1BA:20240101T000000::::::'
+exit 0
+"""
+MOCK_GPG_BAD = """#!/bin/sh
+echo "gpg $*" >> "$MOCK_LOG"
+echo 'no public key found'
+exit 0
+"""
 
-CORE_TOOLS = ["bash", "sh", "cat", "curl", "id", "install", "mkdir", "mktemp", "rm", "dirname", "python3"]
+CORE_TOOLS = ["bash", "sh", "cat", "chmod", "cp", "curl", "env", "grep", "id", "install",
+              "mkdir", "mktemp", "mv", "rm", "dirname", "python3", "sha512sum", "wc"]
 
 
 def make_core_bin(directory: Path) -> Path:
@@ -253,6 +274,7 @@ FULL_MOCKS = {
     "sudo": MOCK_SUDO,
     "apt-get": MOCK_APT_GET,
     "dpkg": MOCK_DPKG,
+    "gpg": MOCK_GPG_OK,
     "xdg-settings": MOCK_XDG_SETTINGS,
     "update-desktop-database": MOCK_UPDATE_DESKTOP_DB,
 }
@@ -402,14 +424,38 @@ class TestScriptContract(InstallerCase):
 
     def test_release_url_constants(self):
         text = SCRIPT.read_text()
-        self.assertIn(f'DEFAULT_DEB_URL="{DEFAULT_DEB_URL}"', text)
         self.assertIn(f'DEFAULT_APPIMAGE_URL="{DEFAULT_APPIMAGE_URL}"', text)
         self.assertIn("curl -fsSL https://plotina.cc/dl/Plotina-Desktop-install.sh | bash", text)
+        self.assertNotIn("DEFAULT_DEB_URL", text,
+                         "deb-download default removed: apt-repo install replaced it")
+
+    def test_apt_repo_constants_match_readme(self):
+        """Подписка на репозиторий ровно по /apt/README.md: ключ, список,
+        строка sources и имя пакета не должны уплыть в другие значения."""
+        text = SCRIPT.read_text()
+        self.assertIn(f"APT_SOURCES_LINE='{APT_SOURCES_LINE}'", text)
+        self.assertIn('APT_KEYRING="${PLOTINA_APT_KEYRING:-/usr/share/keyrings/plotina.gpg}"', text)
+        self.assertIn('APT_LIST="${PLOTINA_APT_LIST:-/etc/apt/sources.list.d/plotina.list}"', text)
+        self.assertIn('APT_KEY_URL="${PLOTINA_APT_KEY_URL:-https://plotina.cc/apt/key.gpg}"', text)
+        self.assertIn('APT_PACKAGE="plotina-desktop"', text)
 
     def test_env_overrides_supported(self):
         text = SCRIPT.read_text()
-        self.assertIn("PLOTINA_DEB_URL", text)
+        self.assertIn("PLOTINA_DEB_URL", text)   # deprecated, but still honoured
         self.assertIn("PLOTINA_APPIMAGE_URL", text)
+        self.assertIn("PLOTINA_APT_KEYRING", text)
+        self.assertIn("PLOTINA_APT_LIST", text)
+        self.assertIn("PLOTINA_APT_KEY_URL", text)
+        self.assertIn("PLOTINA_DEV_YAML_URL", text)
+
+    def test_dev_channel_constants_and_no_github(self):
+        """--dev: фиксированный yml нашего зеркала; установщик не ходит на GitHub."""
+        text = SCRIPT.read_text()
+        self.assertIn('DEFAULT_DEV_YAML_URL="https://plotina.cc/dl/dev/desktop/latest-linux-dev.yml"', text)
+        self.assertIn('DEV_YAML_URL="${PLOTINA_DEV_YAML_URL:-$DEFAULT_DEV_YAML_URL}"', text)
+        self.assertIn("--dev)", text, "флаг --dev должен разбираться")
+        self.assertNotIn("github.com", text.lower(),
+                         "installer must not touch GitHub (apt repo + /dl mirror only)")
 
 
 class TestAppImagePath(InstallerCase):
@@ -523,57 +569,118 @@ class TestAppImagePath(InstallerCase):
 
 @unittest.skipIf(os.geteuid() == 0, "нужен non-root, чтобы мок-sudo имел значение")
 class TestDebPath(InstallerCase):
-    """deb-путь: только разбор аргументов и выбор пути на моках apt/dpkg/sudo."""
+    """apt-путь: auto и --deb ставят plotina-desktop из подписанного
+    apt-репозитория Plotina (keyring + sources-list + apt-get update/
+    install), а НЕ из скачанного .deb. Keyring/sources-list/URL ключа
+    перенаправлены в tmp и локальный сервер, поэтому настоящие /etc и
+    /usr/share не трогаются; apt/dpkg/sudo/gpg в PATH — моки, тестируется
+    разбор аргументов и выбор пути, а не работа пакетного менеджера.
+    Позиционный .deb и PLOTINA_DEB_URL — устаревшая установка конкретного
+    файла (без подписки на репозиторий)."""
 
     def setUp(self):
         super().setUp()
         self.deb = make_fake_deb(self.tmp)
         self.fake = make_fake_appimage(self.tmp)
-        base = self.serve(self.tmp)
+        (self.tmp / "key.gpg").write_bytes(FAKE_APT_KEY)
+        self.base = self.serve(self.tmp)
+        self.keyring = self.tmp / "keyrings" / "plotina.gpg"
+        self.list_file = self.tmp / "sources.list.d" / "plotina.list"
         self.env = {
-            "PLOTINA_DEB_URL": f"{base}/Plotina-Desktop.deb",
-            "PLOTINA_APPIMAGE_URL": f"{base}/Plotina-Desktop.AppImage",
+            "PLOTINA_APPIMAGE_URL": f"{self.base}/Plotina-Desktop.AppImage",
+            "PLOTINA_APT_KEY_URL": f"{self.base}/key.gpg",
+            "PLOTINA_APT_KEYRING": str(self.keyring),
+            "PLOTINA_APT_LIST": str(self.list_file),
         }
 
-    def test_auto_installs_deb_when_apt_and_sudo_available(self):
+    def repo_install_attempted(self):
+        return any(l == "apt-get install -y plotina-desktop" for l in self.mock_log_lines())
+
+    # ----- подписка на репозиторий (default для auto и --deb) -----
+
+    def test_auto_subscribes_repo_and_installs_package(self):
         proc = self.run_installer(mocks=FULL_MOCKS, extra_env=self.env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         lines = self.mock_log_lines()
-        self.assertTrue(any(l.startswith("sudo apt-get install -y ") and l.endswith("Plotina-Desktop.deb")
-                             for l in lines), lines)
-        self.assertTrue(any(l.endswith("set default-url-scheme-handler io.element.desktop "
-                                        "plotina-desktop.desktop") for l in lines), lines)
+        self.assertIn("apt-get update", lines)
+        self.assertIn("apt-get install -y plotina-desktop", lines)
+        self.assertEqual(self.keyring.read_bytes(), FAKE_APT_KEY)
+        self.assertEqual(self.list_file.read_text(), APT_SOURCES_LINE + "\n")
         self.assertFalse((self.prefix / "bin" / "plotina-desktop").exists(),
-                         "deb-путь не должен катать AppImage")
+                         "apt-путь не должен катать AppImage")
         self.assert_sso_footer(proc)
 
-    def test_apt_dep_failure_falls_back_to_dpkg(self):
+    def test_repo_existing_keyring_and_list_are_not_touched(self):
+        self.keyring.parent.mkdir(parents=True, exist_ok=True)
+        self.keyring.write_bytes(b"ADMIN-KEY")
+        self.list_file.parent.mkdir(parents=True, exist_ok=True)
+        self.list_file.write_text("deb http://internal-mirror/apt ./\n")
+        proc = self.run_installer(mocks=FULL_MOCKS, extra_env=self.env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(self.keyring.read_bytes(), b"ADMIN-KEY")
+        self.assertEqual(self.list_file.read_text(), "deb http://internal-mirror/apt ./\n")
+        self.assertIn("apt-get install -y plotina-desktop", self.mock_log_lines())
+
+    def test_repo_idempotent_second_run(self):
+        first = self.run_installer(mocks=FULL_MOCKS, extra_env=self.env)
+        second = self.run_installer(mocks=FULL_MOCKS, extra_env=self.env)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(self.list_file.read_text(), APT_SOURCES_LINE + "\n")
+        self.assert_sso_footer(second)
+
+    def test_repo_bad_key_is_not_written_and_falls_back(self):
+        mocks = {**FULL_MOCKS, "gpg": MOCK_GPG_BAD}
+        proc = self.run_installer(mocks=mocks, extra_env=self.env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(self.keyring.exists(), "неразбираемый ключ не должен попасть в keyring")
+        self.assertFalse(self.repo_install_attempted())
+        self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
+
+    def test_repo_key_download_failure_falls_back_to_appimage(self):
+        env = {**self.env, "PLOTINA_APT_KEY_URL": "http://127.0.0.1:1/key.gpg"}
+        proc = self.run_installer(mocks=FULL_MOCKS, extra_env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(self.keyring.exists())
+        self.assertFalse(self.repo_install_attempted())
+        self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
+
+    def test_repo_unwritable_target_falls_back_to_appimage(self):
+        ro = self.tmp / "ro"
+        ro.mkdir()
+        ro.chmod(0o500)  # каталог внутри создать нельзя — apt-путь обязан отвалиться чисто
+        env = {**self.env, "PLOTINA_APT_KEYRING": str(ro / "keyrings" / "plotina.gpg")}
+        proc = self.run_installer(mocks=FULL_MOCKS, extra_env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(any(l == "apt-get update" for l in self.mock_log_lines()))
+        self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
+
+    def test_repo_apt_install_failure_falls_back_to_appimage(self):
         proc = self.run_installer(mocks=FULL_MOCKS,
                                   extra_env={**self.env, "APT_INSTALL_FAIL": "1"})
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        lines = self.mock_log_lines()
-        i_apt = next(i for i, l in enumerate(lines) if l.startswith("apt-get install -y"))
-        i_dpkg = next(i for i, l in enumerate(lines) if l.startswith("dpkg -i"))
-        i_fix = next(i for i, l in enumerate(lines) if l.startswith("apt-get -f install -y"))
-        self.assertLess(i_apt, i_dpkg)
-        self.assertLess(i_dpkg, i_fix)
-        self.assertNotIn("dpkg -i", proc.stderr)
-
-    def test_deb_install_total_failure_falls_back_to_appimage(self):
-        proc = self.run_installer(
-            mocks=FULL_MOCKS,
-            extra_env={**self.env, "APT_ALWAYS_FAIL": "1", "DPKG_FAIL": "1"})
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertNotIn("перехожу на AppImage", proc.stderr)
+        self.assertTrue(self.repo_install_attempted())
         self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
-        self.assert_sso_footer(proc)
 
-    def test_no_sudo_falls_back_to_appimage_with_warning(self):
+    def test_repo_apt_total_failure_falls_back_to_appimage(self):
+        proc = self.run_installer(mocks=FULL_MOCKS,
+                                  extra_env={**self.env, "APT_ALWAYS_FAIL": "1"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
+
+    def test_scheme_registered_in_repo_path(self):
+        proc = self.run_installer(mocks=FULL_MOCKS, extra_env=self.env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        lines = self.mock_log_lines()
+        self.assertTrue(any(l.endswith("set default-url-scheme-handler io.element.desktop "
+                                        "plotina-desktop.desktop") for l in lines), lines)
+        self.assertTrue(any(l.startswith("update-desktop-database /usr/share/applications")
+                            for l in lines), lines)
+
+    def test_no_sudo_falls_back_to_appimage(self):
         mocks = {k: v for k, v in FULL_MOCKS.items() if k != "sudo"}
         proc = self.run_installer(mocks=mocks, extra_env=self.env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertNotIn("не ставлю .deb", proc.stderr)
-        self.assertNotIn("нужен sudo", proc.stderr)
         self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
         self.assertFalse(any("apt-get install" in l for l in self.mock_log_lines()))
 
@@ -581,15 +688,28 @@ class TestDebPath(InstallerCase):
         proc = self.run_installer(mocks=FULL_MOCKS,
                                   extra_env={**self.env, "SUDO_N_FAIL": "1"})
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertNotIn("не ставлю .deb", proc.stderr)
         self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
 
     def test_not_debian_falls_back_to_appimage(self):
         mocks = {k: v for k, v in FULL_MOCKS.items() if k not in ("apt-get", "dpkg")}
         proc = self.run_installer(mocks=mocks, extra_env=self.env)
         self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertNotIn("apt-get/dpkg не найдены", proc.stderr)
         self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
+
+    # ----- флаг --deb: только репозиторий -----
+
+    def test_force_deb_flag_installs_from_repo(self):
+        proc = self.run_installer(["--deb"], mocks=FULL_MOCKS, extra_env=self.env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(self.repo_install_attempted())
+        self.assertFalse((self.prefix / "bin" / "plotina-desktop").exists())
+
+    def test_force_deb_install_failure_dies(self):
+        proc = self.run_installer(["--deb"], mocks=FULL_MOCKS,
+                                  extra_env={**self.env, "APT_INSTALL_FAIL": "1"})
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("выбран --deb", proc.stderr)
+        self.assertFalse((self.prefix / "bin" / "plotina-desktop").exists())
 
     def test_force_deb_without_env_fails(self):
         proc = self.run_installer(["--deb"], mocks={k: v for k, v in FULL_MOCKS.items()
@@ -599,16 +719,10 @@ class TestDebPath(InstallerCase):
         self.assertIn("выбран --deb", proc.stderr)
         self.assertFalse((self.prefix / "bin" / "plotina-desktop").exists())
 
-    def test_deb_path_arg_used_as_is(self):
+    def test_force_deb_with_positional_deb_rejected(self):
         proc = self.run_installer(["--deb", str(self.deb)], mocks=FULL_MOCKS, extra_env=self.env)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn(f"sudo apt-get install -y {self.deb}", self.mock_log_lines())
-        self.assertNotIn(f"Скачиваю: {self.env['PLOTINA_DEB_URL']}", proc.stdout)
-
-    def test_dotdeb_argument_routes_to_deb_in_auto_mode(self):
-        proc = self.run_installer([str(self.deb)], mocks=FULL_MOCKS, extra_env=self.env)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn(f"sudo apt-get install -y {self.deb}", self.mock_log_lines())
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("--deb означает установку из apt-репозитория", proc.stderr)
 
     def test_conflicting_flags_fail(self):
         proc = self.run_installer(["--deb", "--appimage"], mocks=FULL_MOCKS, extra_env=self.env)
@@ -618,14 +732,211 @@ class TestDebPath(InstallerCase):
         proc = self.run_installer(["--appimage", str(self.deb)], mocks=FULL_MOCKS, extra_env=self.env)
         self.assertNotEqual(proc.returncode, 0)
 
-    def test_scheme_registered_in_deb_path(self):
-        proc = self.run_installer(mocks=FULL_MOCKS, extra_env=self.env)
+    # ----- устаревшая файловая установка (позиционный .deb / PLOTINA_DEB_URL) -----
+
+    def test_deprecated_deb_file_arg_installs_without_repo(self):
+        proc = self.run_installer([str(self.deb)], mocks=FULL_MOCKS, extra_env=self.env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        lines = "\n".join(self.mock_log_lines())
+        self.assertIn(f"apt-get install -y {self.deb}", lines)
+        self.assertNotIn("apt-get update", lines)
+        self.assertFalse(self.keyring.exists() or self.list_file.exists(),
+                         "файловая установка не подписывает систему на репозиторий")
+        self.assertFalse((self.prefix / "bin" / "plotina-desktop").exists())
+
+    def test_deb_file_apt_failure_falls_back_to_dpkg(self):
+        proc = self.run_installer([str(self.deb)], mocks=FULL_MOCKS,
+                                  extra_env={**self.env, "APT_INSTALL_FAIL": "1"})
         self.assertEqual(proc.returncode, 0, proc.stderr)
         lines = self.mock_log_lines()
-        self.assertTrue(any(l.endswith("set default-url-scheme-handler io.element.desktop "
-                                        "plotina-desktop.desktop") for l in lines), lines)
-        self.assertTrue(any(l.startswith("update-desktop-database /usr/share/applications")
-                            or l.startswith("sudo update-desktop-database") for l in lines), lines)
+        i_apt = next(i for i, l in enumerate(lines) if l.startswith("apt-get install -y"))
+        i_dpkg = next(i for i, l in enumerate(lines) if l.startswith("dpkg -i"))
+        i_fix = next(i for i, l in enumerate(lines) if l.startswith("apt-get -f install -y"))
+        self.assertLess(i_apt, i_dpkg)
+        self.assertLess(i_dpkg, i_fix)
+
+    def test_deb_file_total_failure_falls_back_to_appimage(self):
+        proc = self.run_installer([str(self.deb)], mocks=FULL_MOCKS,
+                                  extra_env={**self.env, "APT_ALWAYS_FAIL": "1", "DPKG_FAIL": "1"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
+
+    def test_deprecated_deb_url_env_is_file_override(self):
+        env = dict(self.env)
+        env["PLOTINA_DEB_URL"] = f"{self.base}/Plotina-Desktop.deb"
+        proc = self.run_installer(mocks=FULL_MOCKS, extra_env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        lines = "\n".join(self.mock_log_lines())
+        self.assertIn("apt-get install -y ", lines)
+        self.assertIn("Plotina-Desktop.deb", lines)
+        self.assertNotIn("apt-get install -y plotina-desktop", lines)
+        self.assertFalse(self.keyring.exists() or self.list_file.exists())
+        self.assertFalse((self.prefix / "bin" / "plotina-desktop").exists())
+
+
+def dev_b64_sha512(data: bytes) -> str:
+    """sha512 в формате electron-builder yml: base64 от сырого дайджеста."""
+    return base64.b64encode(hashlib.sha512(data).digest()).decode()
+
+
+def dev_yml_text(url: str, sha: str, size: int) -> str:
+    """yml ровно формы latest-linux-dev.yml: файлы-входы + top-level дубликаты,
+    которые парсер обязан не схлопнуть с первым входом files:."""
+    return (
+        "version: 1.12.32-plotina.43-dev.42\n"
+        "files:\n"
+        f"  - url: {url}\n"
+        f"    sha512: {sha}\n"
+        f"    size: {size}\n"
+        "    blockMapSize: 233482\n"
+        f"path: {url}\n"
+        f"sha512: {sha}\n"
+        "releaseDate: '2026-11-08T09:48:24.900Z'\n"
+    )
+
+
+class TestDevChannel(InstallerCase):
+    """--dev: AppImage из dev-канала по latest-linux-dev.yml с проверкой
+    sha512 И размера, без apt и без GitHub. Фикстуры — локальный HTTP-сервер:
+    yml и артефакт-заглушки лежат в tmp; настоящие 200 МБ не качаются."""
+
+    def setUp(self):
+        super().setUp()
+        self.artifact = self.tmp / "Plotina-Desktop-1.12.32-plotina.43-dev.42.AppImage"
+        self.artifact.write_text(FAKE_EXTRACT_APPIMAGE)
+        self.artifact.chmod(0o755)
+        self.base = self.serve(self.tmp)
+        self.xdg_mocks = {
+            "xdg-settings": MOCK_XDG_SETTINGS,
+            "update-desktop-database": MOCK_UPDATE_DESKTOP_DB,
+        }
+
+    def write_yml(self, url=None, sha=None, size=None, artifact=None):
+        data = (artifact or self.artifact).read_bytes()
+        y = dev_yml_text(
+            url if url is not None else f"{self.base}/{self.artifact.name}",
+            sha if sha is not None else dev_b64_sha512(data),
+            size if size is not None else len(data),
+        )
+        p = self.tmp / "latest-linux-dev.yml"
+        p.write_text(y)
+        return f"{self.base}/{p.name}"
+
+    # ----- успех: dev-артефакт ставится существующим AppImage-путём -----
+
+    def test_dev_flag_installs_verified_artifact_from_yml(self):
+        yml = self.write_yml()
+        proc = self.run_installer(["--dev"], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": yml, "ICON_SIZES": "16 512"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assert_sso_footer(proc)
+        binp = self.prefix / "bin" / "plotina-desktop"
+        self.assertTrue(binp.is_file() and os.access(binp, os.X_OK))
+        desktop = (self.prefix / "share" / "applications" / "plotina-desktop.desktop").read_text()
+        self.assertIn(f'Exec="{binp}"', desktop)
+        self.assertIn("Icon=plotina-desktop", desktop)
+        for size in ("16x16", "512x512"):
+            self.assertTrue((self.prefix / "share" / "icons" / "hicolor" / size
+                             / "apps" / "plotina-desktop.png").is_file(), size)
+
+    def test_dev_never_touches_apt_even_when_repo_is_available(self):
+        # sudo/apt/dpkg/gpg в PATH и PLOTINA_APPIMAGE_URL выставлен — --dev всё
+        # равно обязан взять yml и поставить AppImage.
+        yml = self.write_yml()
+        proc = self.run_installer(["--dev"], mocks=FULL_MOCKS,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": yml})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
+        for line in self.mock_log_lines():
+            self.assertNotIn("apt-get", line)
+            self.assertNotIn("dpkg", line)
+
+    def test_dev_hex_sha512_and_relative_url_accepted(self):
+        yml = self.write_yml(url=self.artifact.name,  # относительный — от папки yml
+                             sha=hashlib.sha512(self.artifact.read_bytes()).hexdigest())
+        proc = self.run_installer(["--dev"], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": yml})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
+
+    def test_dev_with_appimage_flag_combined(self):
+        # --appimage + --dev: оба про AppImage, dev берёт источник из yml.
+        yml = self.write_yml()
+        proc = self.run_installer(["--appimage", "--dev"], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": yml})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
+
+    # ----- отказ: нестыковка sha512/size ничего не устанавливает -----
+
+    def _assert_refused(self, proc, needle):
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("ОШИБКА", proc.stderr)
+        self.assertIn(needle, proc.stderr)
+        self.assertFalse((self.prefix / "bin" / "plotina-desktop").exists(),
+                         "отказанный dev-артефакт не должен ни ставиться, ни откатываться на stable")
+
+    def test_dev_sha512_mismatch_refused(self):
+        yml = self.write_yml(sha=dev_b64_sha512(b"tampered-bytes"))
+        proc = self.run_installer(["--dev"], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": yml})
+        self._assert_refused(proc, "sha512")
+
+    def test_dev_size_mismatch_refused(self):
+        yml = self.write_yml(size=self.artifact.stat().st_size + 1)
+        proc = self.run_installer(["--dev"], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": yml})
+        self._assert_refused(proc, "размер")
+
+    def test_dev_yml_without_complete_entry_refused(self):
+        p = self.tmp / "broken.yml"
+        p.write_text("version: 1.0\npath: x.AppImage\n")
+        proc = self.run_installer(["--dev"], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": f"{self.base}/{p.name}"})
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("files:", proc.stderr)
+
+    def test_dev_metadata_download_failure_refused(self):
+        proc = self.run_installer(["--dev"], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": "http://127.0.0.1:1/latest-linux-dev.yml"})
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("не удалось скачать dev-метаданные", proc.stderr)
+
+    # ----- конфликты флагов -----
+
+    def test_dev_and_deb_rejected_in_both_orders(self):
+        yml = self.write_yml()
+        for args in (["--dev", "--deb"], ["--deb", "--dev"]):
+            proc = self.run_installer(args, mocks=FULL_MOCKS,
+                                      extra_env={"PLOTINA_DEV_YAML_URL": yml})
+            self.assertNotEqual(proc.returncode, 0, args)
+            self.assertIn("--dev", proc.stderr)
+            self.assertIn("--deb", proc.stderr)
+
+    def test_dev_with_positional_file_rejected(self):
+        yml = self.write_yml()
+        proc = self.run_installer(["--dev", str(self.artifact)], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": yml})
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("позиционный", proc.stderr)
+
+    def test_dev_with_plotina_appimage_url_rejected(self):
+        yml = self.write_yml()
+        proc = self.run_installer(["--dev"], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": yml,
+                                             "PLOTINA_APPIMAGE_URL": f"{self.base}/{self.artifact.name}"})
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("PLOTINA_APPIMAGE_URL", proc.stderr)
+
+    # ----- стабильный путь не затронут: без --dev yml не скачивается -----
+
+    def test_stable_appimage_ignores_dev_yml_entirely(self):
+        fake = make_fake_appimage(self.tmp)
+        proc = self.run_installer(
+            ["--appimage", str(fake)], mocks=FULL_MOCKS,
+            extra_env={"PLOTINA_DEV_YAML_URL": "http://127.0.0.1:1/never-fetched.yml"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
 
 
 class TestRealAppImage(InstallerCase):
