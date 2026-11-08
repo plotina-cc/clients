@@ -455,7 +455,14 @@ export async function checkForUpdates(
         if (manual) sendUpdateStatus(false);
         return;
     }
-    if (checking) return;
+    if (checking) {
+        // A manual click can land while the boot-time automatic check is
+        // already waiting on the dev feed. Returning silently leaves the
+        // renderer on «Проверяю…» until its 60 s timeout; acknowledge the
+        // collision and let the in-flight check's terminal status update it.
+        if (manual) sendUpdateStatus("Проверка уже выполняется. Дождитесь результата.");
+        return;
+    }
     checking = true;
     try {
         if (pendingUpdate) {
