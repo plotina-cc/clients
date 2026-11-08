@@ -215,16 +215,18 @@ jobs:
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0012-plotina-about-minimal.patch"
           # 0013: no PostHog analytics and no Sentry reporting.
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0013-plotina-analytics-off.patch"
-          # 0014: the in-app updater. The Settings root grows a "Проверить обновления" row right
-          # above About, and MainActivity runs a
-          # silent once-a-day check; both open PlotinaUpdateActivity, which fetches
+          # 0014: the in-app updater. The Settings root grows one «Обновления» row right
+          # above About, opening PlotinaUpdatesActivity: «Проверить обновления» as
+          # the top action, the Stable/Dev channel section beneath it. The action starts
+          # PlotinaUpdateActivity, which fetches
           # https://plotina.cc/dl/update-x.json, downloads the APK with DownloadManager, verifies
-          # sha256 and size, and hands it to the system PackageInstaller. The same patch derives the
+          # sha256 and size, and hands it to the system PackageInstaller; MainActivity's silent
+          # once-a-day check opens that same page. The same patch derives the
           # versionCode from the release tag: with -PplotinaBuildNumber=N, tag vYY.MM.p-plotina-x.N
           # gets base (2000+YY)*100000 + MM*1000 + N (26.10.1 .25 -> 202610025). The same patch
           # carries the dev channel: -PplotinaDevBuild=M only grows the versionName `-dev.M` part
-          # (the base code stays that of the stable M is based on), Settings grows the «Канал
-          # обновлений» row opening PlotinaUpdateChannelActivity, and a dev install reads
+          # (the base code stays that of the stable M is based on), the «Обновления» page's channel
+          # section lets a dev install opt in, and it reads
           # update-x-dev.json from the GitHub `dev-latest` release instead of the edge host.
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0014-plotina-self-updater.patch"
 

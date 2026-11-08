@@ -65,7 +65,7 @@ index 50847073..f88e15b7 100644
      testImplementation(projects.services.toolbox.test)
  }
 diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
-index e5872e54..87f29632 100644
+index e5872e54..bbcef1e3 100644
 --- a/app/src/main/AndroidManifest.xml
 +++ b/app/src/main/AndroidManifest.xml
 @@ -8,6 +8,9 @@
@@ -78,7 +78,7 @@ index e5872e54..87f29632 100644
      <application
          android:name=".ElementXApplication"
          android:allowBackup="false"
-@@ -57,6 +60,28 @@
+@@ -57,6 +60,29 @@
          https://github.com/element-hq/element-x-android/issues/4074) and for opening
          the application from a mobile.element.io link.
          -->
@@ -95,11 +95,12 @@ index e5872e54..87f29632 100644
 +            android:theme="@style/Theme.ElementX" />
 +
 +        <!--
-+        Plotina: the «Канал обновлений» picker (Стабильный / Dev) behind a Settings row. Same
-+        opaque full-screen treatment; nothing external may start it.
++        Plotina: the «Обновления» page behind the Settings row: «Проверить обновления» on top,
++        the Stable/Dev channel choice beneath. Same opaque full-screen treatment; nothing
++        external may start it.
 +        -->
 +        <activity
-+            android:name=".updater.PlotinaUpdateChannelActivity"
++            android:name=".updater.PlotinaUpdatesActivity"
 +            android:excludeFromRecents="true"
 +            android:exported="false"
 +            android:theme="@style/Theme.ElementX" />
@@ -132,10 +133,10 @@ index cc058d0f..eab5ab90 100644
      /**
 diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt
 new file mode 100644
-index 00000000..86383b14
+index 00000000..00a0b576
 --- /dev/null
 +++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt
-@@ -0,0 +1,309 @@
+@@ -0,0 +1,310 @@
 +/*
 + * Plotina: the in-app updater's manifest side.
 + *
@@ -283,8 +284,8 @@ index 00000000..86383b14
 +    /** The updater screen, named from other modules too - they cannot see the app module. */
 +    const val ACTIVITY_CLASS = "io.element.android.x.updater.PlotinaUpdateActivity"
 +
-+    /** The channel picker row's page, named the same way for the Settings module. */
-+    const val CHANNEL_ACTIVITY_CLASS = "io.element.android.x.updater.PlotinaUpdateChannelActivity"
++    /** The «Обновления» page (check action + channel section), named the same way for Settings. */
++    const val UPDATES_ACTIVITY_CLASS = "io.element.android.x.updater.PlotinaUpdatesActivity"
 +
 +    /** A already-fetched manifest, passed as JSON by the daily check. */
 +    const val EXTRA_MANIFEST = "plotina_update_manifest"
@@ -300,8 +301,9 @@ index 00000000..86383b14
 +    fun activityIntent(context: Context): Intent =
 +        Intent().setClassName(context.packageName, ACTIVITY_CLASS)
 +
-+    fun channelActivityIntent(context: Context): Intent =
-+        Intent().setClassName(context.packageName, CHANNEL_ACTIVITY_CLASS)
++    /** The Settings entry: the «Обновления» page. */
++    fun updatesActivityIntent(context: Context): Intent =
++        Intent().setClassName(context.packageName, UPDATES_ACTIVITY_CLASS)
 +
 +    /** The user's channel. Anything unrecognised reads as STABLE: the safe default, twice over. */
 +    fun channel(context: Context): UpdateChannel =
@@ -447,7 +449,7 @@ index 00000000..86383b14
 +}
 diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt
 new file mode 100644
-index 00000000..20997e65
+index 00000000..a5c36300
 --- /dev/null
 +++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt
 @@ -0,0 +1,427 @@
@@ -508,11 +510,11 @@ index 00000000..20997e65
 +private data class DownloadRow(val status: Int, val done: Long, val total: Long)
 +
 +/**
-+ * Reached two ways: the «Проверить обновления» row at the root of Settings (always shows a result),
-+ * and the silent once-a-day check in [PlotinaUpdate.onAppStart], which only starts this Activity
-+ * when the manifest really is newer and hands over its own copy through
-+ * [PlotinaUpdate.EXTRA_MANIFEST]. A debug build can point it at a local manifest with
-+ * [PlotinaUpdate.EXTRA_MANIFEST_URL] (see PlotinaUpdate.kt).
++ * Reached two ways: the «Проверить обновления» action on the Settings › «Обновления» page
++ * [PlotinaUpdatesActivity] (always shows a result), and the silent once-a-day check in
++ * [PlotinaUpdate.onAppStart], which only starts this Activity when the manifest really is newer
++ * and hands over its own copy through [PlotinaUpdate.EXTRA_MANIFEST]. A debug build can point it
++ * at a local manifest with [PlotinaUpdate.EXTRA_MANIFEST_URL] (see PlotinaUpdate.kt).
 + *
 + * The page lives on its own: opening the updater navigates the user away from Settings, the same
 + * way Plotina Mobile pushes its updater route.
@@ -875,223 +877,6 @@ index 00000000..20997e65
 +                }
 +            }
 +            return digest.digest().joinToString("") { "%02x".format(it) }
-+        }
-+    }
-+}
-diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateChannelActivity.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateChannelActivity.kt
-new file mode 100644
-index 00000000..c0050c75
---- /dev/null
-+++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateChannelActivity.kt
-@@ -0,0 +1,211 @@
-+/*
-+ * Plotina: the «Канал обновлений» picker behind the Settings row.
-+ *
-+ * The updater's two feeds are fixed constants (patch 0014, PlotinaUpdate.MANIFEST_URL /
-+ * DEV_MANIFEST_URL); this page only moves the preference the daily check and the updater page
-+ * read. STABLE is the default and survives any nonsense in the stored value. Picking Dev warns
-+ * that dev builds ride on the newest published stable revision and may break; the way back is
-+ * always the same page - and the stable feed only takes a dev install once a real stable release
-+ * outranks its versionCode (then it is an ordinary update, data intact).
-+ *
-+ * Copyright (C) 2026 Plotina
-+ *
-+ * This program is free software: you can redistribute it and/or modify it under the terms of the
-+ * GNU Affero General Public License as published by the Free Software Foundation, version 3.
-+ */
-+
-+package io.element.android.x.updater
-+
-+import android.os.Bundle
-+import androidx.activity.ComponentActivity
-+import androidx.activity.compose.setContent
-+import androidx.activity.enableEdgeToEdge
-+import androidx.compose.foundation.clickable
-+import androidx.compose.foundation.layout.Column
-+import androidx.compose.foundation.layout.Row
-+import androidx.compose.foundation.layout.Spacer
-+import androidx.compose.foundation.layout.fillMaxSize
-+import androidx.compose.foundation.layout.fillMaxWidth
-+import androidx.compose.foundation.layout.height
-+import androidx.compose.foundation.layout.padding
-+import androidx.compose.foundation.layout.widthIn
-+import androidx.compose.foundation.rememberScrollState
-+import androidx.compose.foundation.shape.RoundedCornerShape
-+import androidx.compose.foundation.verticalScroll
-+import androidx.compose.material3.Card
-+import androidx.compose.material3.CardDefaults
-+import androidx.compose.material3.Icon
-+import androidx.compose.material3.IconButton
-+import androidx.compose.material3.MaterialTheme
-+import androidx.compose.material3.RadioButton
-+import androidx.compose.material3.Scaffold
-+import androidx.compose.material3.Text
-+import androidx.compose.material3.TopAppBar
-+import androidx.compose.material3.TopAppBarDefaults
-+import androidx.compose.runtime.Composable
-+import androidx.compose.runtime.collectAsState
-+import androidx.compose.runtime.getValue
-+import androidx.compose.runtime.mutableStateOf
-+import androidx.compose.runtime.remember
-+import androidx.compose.runtime.setValue
-+import androidx.compose.ui.Alignment
-+import androidx.compose.ui.Modifier
-+import androidx.compose.ui.res.stringResource
-+import androidx.compose.ui.text.style.TextAlign
-+import androidx.compose.ui.unit.dp
-+import io.element.android.compound.colors.SemanticColorsLightDark
-+import io.element.android.compound.tokens.generated.CompoundIcons
-+import io.element.android.libraries.architecture.bindings
-+import io.element.android.libraries.designsystem.theme.ElementThemeApp
-+import io.element.android.x.R
-+import io.element.android.x.di.AppBindings
-+
-+class PlotinaUpdateChannelActivity : ComponentActivity() {
-+    private lateinit var appBindings: AppBindings
-+
-+    override fun onCreate(savedInstanceState: Bundle?) {
-+        super.onCreate(savedInstanceState)
-+        // Same host wiring as PlotinaUpdateActivity: edge-to-edge, the app's own theme graph, so
-+        // this page looks like the rest of Settings in light and dark alike.
-+        enableEdgeToEdge()
-+        appBindings = bindings()
-+        val selected = PlotinaUpdate.channel(this)
-+        setContent {
-+            ChannelTheme {
-+                var channel by remember { mutableStateOf(selected) }
-+                PlotinaUpdateChannelScreen(
-+                    channel = channel,
-+                    onBackClick = ::finish,
-+                    onChannelSelected = {
-+                        channel = it
-+                        PlotinaUpdate.setChannel(this, it)
-+                    },
-+                )
-+            }
-+        }
-+    }
-+
-+    /** The app's own theme wrapper, exactly as PlotinaUpdateActivity and MainActivity use it. */
-+    @Composable
-+    private fun ChannelTheme(content: @Composable () -> Unit) {
-+        val colors by remember {
-+            appBindings.enterpriseService().semanticColorsFlow(sessionId = null)
-+        }.collectAsState(SemanticColorsLightDark.default)
-+        ElementThemeApp(
-+            appPreferencesStore = appBindings.preferencesStore(),
-+            featureFlagService = appBindings.featureFlagService(),
-+            compoundLight = colors.light,
-+            compoundDark = colors.dark,
-+            buildMeta = appBindings.buildMeta(),
-+            content = content,
-+        )
-+    }
-+}
-+
-+@Composable
-+internal fun PlotinaUpdateChannelScreen(
-+    channel: PlotinaUpdate.UpdateChannel,
-+    onBackClick: () -> Unit,
-+    onChannelSelected: (PlotinaUpdate.UpdateChannel) -> Unit,
-+    modifier: Modifier = Modifier,
-+) {
-+    Scaffold(
-+        modifier = modifier,
-+        topBar = {
-+            TopAppBar(
-+                title = { Text(stringResource(R.string.plotina_update_channel_title)) },
-+                navigationIcon = {
-+                    IconButton(onClick = onBackClick) {
-+                        Icon(
-+                            imageVector = CompoundIcons.Close(),
-+                            contentDescription = stringResource(R.string.plotina_update_back),
-+                        )
-+                    }
-+                },
-+                colors = TopAppBarDefaults.topAppBarColors(
-+                    containerColor = MaterialTheme.colorScheme.surface,
-+                    titleContentColor = MaterialTheme.colorScheme.onSurface,
-+                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
-+                ),
-+            )
-+        },
-+        containerColor = MaterialTheme.colorScheme.surface,
-+    ) { contentPadding ->
-+        Column(
-+            modifier = Modifier
-+                .fillMaxSize()
-+                .padding(contentPadding)
-+                .verticalScroll(rememberScrollState())
-+                .padding(24.dp),
-+            horizontalAlignment = Alignment.Start,
-+        ) {
-+            Column(
-+                modifier = Modifier
-+                    .widthIn(max = 480.dp)
-+                    .fillMaxWidth(),
-+            ) {
-+                ChannelRow(
-+                    title = stringResource(R.string.plotina_update_channel_stable),
-+                    description = stringResource(R.string.plotina_update_channel_stable_desc),
-+                    selected = channel == PlotinaUpdate.UpdateChannel.STABLE,
-+                    onClick = { onChannelSelected(PlotinaUpdate.UpdateChannel.STABLE) },
-+                )
-+                ChannelRow(
-+                    title = stringResource(R.string.plotina_update_channel_dev),
-+                    description = stringResource(R.string.plotina_update_channel_dev_desc),
-+                    selected = channel == PlotinaUpdate.UpdateChannel.DEV,
-+                    onClick = { onChannelSelected(PlotinaUpdate.UpdateChannel.DEV) },
-+                )
-+                if (channel == PlotinaUpdate.UpdateChannel.DEV) {
-+                    Spacer(modifier = Modifier.height(16.dp))
-+                    Card(
-+                        modifier = Modifier.fillMaxWidth(),
-+                        shape = RoundedCornerShape(16.dp),
-+                        colors = CardDefaults.cardColors(
-+                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-+                            contentColor = MaterialTheme.colorScheme.onSurface,
-+                        ),
-+                    ) {
-+                        Text(
-+                            text = stringResource(R.string.plotina_update_channel_dev_warning),
-+                            modifier = Modifier.padding(16.dp),
-+                            style = MaterialTheme.typography.bodyMedium,
-+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-+                        )
-+                    }
-+                }
-+            }
-+        }
-+    }
-+}
-+
-+@Composable
-+private fun ChannelRow(
-+    title: String,
-+    description: String,
-+    selected: Boolean,
-+    onClick: () -> Unit,
-+) {
-+    Row(
-+        modifier = Modifier
-+            .fillMaxWidth()
-+            .clickable(onClick = onClick)
-+            .padding(vertical = 12.dp),
-+        verticalAlignment = Alignment.CenterVertically,
-+    ) {
-+        RadioButton(selected = selected, onClick = onClick)
-+        Column(modifier = Modifier.padding(start = 8.dp)) {
-+            Text(
-+                text = title,
-+                style = MaterialTheme.typography.bodyLarge,
-+                color = MaterialTheme.colorScheme.onSurface,
-+                textAlign = TextAlign.Start,
-+            )
-+            Text(
-+                text = description,
-+                style = MaterialTheme.typography.bodySmall,
-+                color = MaterialTheme.colorScheme.onSurfaceVariant,
-+            )
 +        }
 +    }
 +}
@@ -1568,12 +1353,304 @@ index 00000000..30337759
 +    size = 137_608_493L,
 +    notes = "Исправления и улучшения.",
 +)
+diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdatesActivity.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdatesActivity.kt
+new file mode 100644
+index 00000000..0b4d20b7
+--- /dev/null
++++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdatesActivity.kt
+@@ -0,0 +1,286 @@
++/*
++ * Plotina: the «Обновления» page behind the single Settings row.
++ *
++ * One screen for everything update-related, mirroring Plotina Mobile's Updates tab: the primary
++ * action «Проверить обновления» on top, and beneath it the channel choice (Стабильный / Dev)
++ * that decides which feed both this check and the daily silent check read. The updater's engine
++ * is untouched: the check action opens PlotinaUpdateActivity, the page that owns every stage
++ * from Checking to Installing. The channel picker used to be its own Settings row and its own
++ * Activity (PlotinaUpdateChannelActivity); consolidating them removed both.
++ *
++ * Copyright (C) 2026 Plotina
++ *
++ * This program is free software: you can redistribute it and/or modify it under the terms of the
++ * GNU Affero General Public License as published by the Free Software Foundation, version 3.
++ */
++
++package io.element.android.x.updater
++
++import android.os.Bundle
++import androidx.activity.ComponentActivity
++import androidx.activity.compose.setContent
++import androidx.activity.enableEdgeToEdge
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.layout.widthIn
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.foundation.verticalScroll
++import androidx.compose.material3.Button
++import androidx.compose.material3.Card
++import androidx.compose.material3.CardDefaults
++import androidx.compose.material3.Icon
++import androidx.compose.material3.IconButton
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.RadioButton
++import androidx.compose.material3.Scaffold
++import androidx.compose.material3.Text
++import androidx.compose.material3.TopAppBar
++import androidx.compose.material3.TopAppBarDefaults
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.collectAsState
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.res.stringResource
++import androidx.compose.ui.text.style.TextAlign
++import androidx.compose.ui.unit.dp
++import io.element.android.compound.colors.SemanticColorsLightDark
++import io.element.android.compound.tokens.generated.CompoundIcons
++import io.element.android.libraries.architecture.bindings
++import io.element.android.libraries.designsystem.preview.ElementPreview
++import io.element.android.libraries.designsystem.preview.PreviewsDayNight
++import io.element.android.libraries.designsystem.theme.ElementThemeApp
++import io.element.android.x.R
++import io.element.android.x.di.AppBindings
++
++/**
++ * The entry point Settings actually opens: one row, one page. The check action hands over to
++ * [PlotinaUpdateActivity] (singleTop, so a running download is brought forward, not restarted);
++ * the channel radios persist immediately through [PlotinaUpdate.setChannel], the same store the
++ * daily silent check reads.
++ */
++class PlotinaUpdatesActivity : ComponentActivity() {
++    private lateinit var appBindings: AppBindings
++
++    override fun onCreate(savedInstanceState: Bundle?) {
++        super.onCreate(savedInstanceState)
++        // Same host wiring as the other updater pages: edge-to-edge, the app's own theme graph,
++        // so this page looks like the rest of Settings in light and dark alike.
++        enableEdgeToEdge()
++        appBindings = bindings()
++        setContent {
++            UpdatesTheme {
++                var channel by remember { mutableStateOf(PlotinaUpdate.channel(this)) }
++                PlotinaUpdatesScreen(
++                    channel = channel,
++                    installedVersion = PlotinaUpdate.installedVersionName(this),
++                    onBackClick = ::finish,
++                    onCheckClick = { startActivity(PlotinaUpdate.activityIntent(this)) },
++                    onChannelSelected = {
++                        channel = it
++                        PlotinaUpdate.setChannel(this, it)
++                    },
++                )
++            }
++        }
++    }
++
++    /** The app's own theme wrapper, exactly as PlotinaUpdateActivity and MainActivity use it. */
++    @Composable
++    private fun UpdatesTheme(content: @Composable () -> Unit) {
++        val colors by remember {
++            appBindings.enterpriseService().semanticColorsFlow(sessionId = null)
++        }.collectAsState(SemanticColorsLightDark.default)
++        ElementThemeApp(
++            appPreferencesStore = appBindings.preferencesStore(),
++            featureFlagService = appBindings.featureFlagService(),
++            compoundLight = colors.light,
++            compoundDark = colors.dark,
++            buildMeta = appBindings.buildMeta(),
++            content = content,
++        )
++    }
++}
++
++/**
++ * The page itself, stateless: the Activity decides the channel store and the navigation. The
++ * layout follows the other updater pages - Scaffold, TopAppBar, one column no wider than 480 dp
++ * over 24 dp of padding - with the primary check action above the channel section.
++ */
++@Composable
++internal fun PlotinaUpdatesScreen(
++    channel: PlotinaUpdate.UpdateChannel,
++    installedVersion: String,
++    onBackClick: () -> Unit,
++    onCheckClick: () -> Unit,
++    onChannelSelected: (PlotinaUpdate.UpdateChannel) -> Unit,
++    modifier: Modifier = Modifier,
++) {
++    Scaffold(
++        modifier = modifier,
++        topBar = {
++            TopAppBar(
++                title = { Text(stringResource(R.string.plotina_updates_title)) },
++                navigationIcon = {
++                    IconButton(onClick = onBackClick) {
++                        Icon(
++                            imageVector = CompoundIcons.Close(),
++                            contentDescription = stringResource(R.string.plotina_update_back),
++                        )
++                    }
++                },
++                colors = TopAppBarDefaults.topAppBarColors(
++                    containerColor = MaterialTheme.colorScheme.surface,
++                    titleContentColor = MaterialTheme.colorScheme.onSurface,
++                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
++                ),
++            )
++        },
++        containerColor = MaterialTheme.colorScheme.surface,
++    ) { contentPadding ->
++        Column(
++            modifier = Modifier
++                .fillMaxSize()
++                .padding(contentPadding)
++                .verticalScroll(rememberScrollState())
++                .padding(24.dp),
++            horizontalAlignment = Alignment.Start,
++        ) {
++            Column(
++                modifier = Modifier
++                    .widthIn(max = 480.dp)
++                    .fillMaxWidth(),
++            ) {
++                // Top: the primary action, like Mobile's Updates tab. The flow itself runs on
++                // the updater page, so this button only ever opens it.
++                Button(
++                    onClick = onCheckClick,
++                    modifier = Modifier.fillMaxWidth(),
++                ) {
++                    Icon(
++                        imageVector = CompoundIcons.Download(),
++                        contentDescription = null,
++                        modifier = Modifier.size(18.dp),
++                    )
++                    Spacer(modifier = Modifier.width(8.dp))
++                    Text(stringResource(R.string.plotina_updates_check))
++                }
++                Spacer(modifier = Modifier.height(8.dp))
++                Text(
++                    text = stringResource(R.string.plotina_updates_current_version, installedVersion),
++                    modifier = Modifier.fillMaxWidth(),
++                    textAlign = TextAlign.Center,
++                    style = MaterialTheme.typography.bodySmall,
++                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                )
++                // Below: which feed to follow. The rows and the dev warning are the former
++                // channel page's content, now a section of this page.
++                Spacer(modifier = Modifier.height(24.dp))
++                Text(
++                    text = stringResource(R.string.plotina_update_channel_title),
++                    style = MaterialTheme.typography.titleSmall,
++                    color = MaterialTheme.colorScheme.onSurface,
++                )
++                Spacer(modifier = Modifier.height(8.dp))
++                ChannelRow(
++                    title = stringResource(R.string.plotina_update_channel_stable),
++                    description = stringResource(R.string.plotina_update_channel_stable_desc),
++                    selected = channel == PlotinaUpdate.UpdateChannel.STABLE,
++                    onClick = { onChannelSelected(PlotinaUpdate.UpdateChannel.STABLE) },
++                )
++                ChannelRow(
++                    title = stringResource(R.string.plotina_update_channel_dev),
++                    description = stringResource(R.string.plotina_update_channel_dev_desc),
++                    selected = channel == PlotinaUpdate.UpdateChannel.DEV,
++                    onClick = { onChannelSelected(PlotinaUpdate.UpdateChannel.DEV) },
++                )
++                if (channel == PlotinaUpdate.UpdateChannel.DEV) {
++                    Spacer(modifier = Modifier.height(16.dp))
++                    Card(
++                        modifier = Modifier.fillMaxWidth(),
++                        shape = RoundedCornerShape(16.dp),
++                        colors = CardDefaults.cardColors(
++                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
++                            contentColor = MaterialTheme.colorScheme.onSurface,
++                        ),
++                    ) {
++                        Text(
++                            text = stringResource(R.string.plotina_update_channel_dev_warning),
++                            modifier = Modifier.padding(16.dp),
++                            style = MaterialTheme.typography.bodyMedium,
++                            color = MaterialTheme.colorScheme.onSurfaceVariant,
++                        )
++                    }
++                }
++            }
++        }
++    }
++}
++
++/** One channel option: radio, title, description. Moved over from the old channel page. */
++@Composable
++private fun ChannelRow(
++    title: String,
++    description: String,
++    selected: Boolean,
++    onClick: () -> Unit,
++) {
++    Row(
++        modifier = Modifier
++            .fillMaxWidth()
++            .clickable(onClick = onClick)
++            .padding(vertical = 12.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        RadioButton(selected = selected, onClick = onClick)
++        Column(modifier = Modifier.padding(start = 8.dp)) {
++            Text(
++                text = title,
++                style = MaterialTheme.typography.bodyLarge,
++                color = MaterialTheme.colorScheme.onSurface,
++                textAlign = TextAlign.Start,
++            )
++            Text(
++                text = description,
++                style = MaterialTheme.typography.bodySmall,
++                color = MaterialTheme.colorScheme.onSurfaceVariant,
++            )
++        }
++    }
++}
++
++@PreviewsDayNight
++@Composable
++internal fun PlotinaUpdatesStablePreview() = ElementPreview {
++    PlotinaUpdatesScreen(
++        channel = PlotinaUpdate.UpdateChannel.STABLE,
++        installedVersion = "26.10.1",
++        onBackClick = {},
++        onCheckClick = {},
++        onChannelSelected = {},
++    )
++}
++
++@PreviewsDayNight
++@Composable
++internal fun PlotinaUpdatesDevPreview() = ElementPreview {
++    PlotinaUpdatesScreen(
++        channel = PlotinaUpdate.UpdateChannel.DEV,
++        installedVersion = "26.10.1-dev.1",
++        onBackClick = {},
++        onCheckClick = {},
++        onChannelSelected = {},
++    )
++}
 diff --git a/app/src/main/res/values-ru/plotina_updater.xml b/app/src/main/res/values-ru/plotina_updater.xml
 new file mode 100644
-index 00000000..3fb2ee66
+index 00000000..3905ac1f
 --- /dev/null
 +++ b/app/src/main/res/values-ru/plotina_updater.xml
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,40 @@
 +<?xml version="1.0" encoding="utf-8"?>
 +<!--
 +  ~ Plotina: строки встроенного обновителя (io.element.android.x.updater).
@@ -1604,6 +1681,9 @@ index 00000000..3fb2ee66
 +    <string name="plotina_update_close">"Закрыть"</string>
 +    <string name="plotina_update_passive_stable">"Пока dev-сборка, ждём стабильный релиз для перехода"</string>
 +    <string name="plotina_update_passive_stable_version">"Установлена dev-версия %1$s. Как только выйдет стабильный релиз новее, он предложится обычным обновлением — данные сохранятся."</string>
++    <string name="plotina_updates_title">"Обновления"</string>
++    <string name="plotina_updates_check">"Проверить обновления"</string>
++    <string name="plotina_updates_current_version">"Установленная версия: %1$s"</string>
 +    <string name="plotina_update_channel_title">"Канал обновлений"</string>
 +    <string name="plotina_update_channel_stable">"Стабильный"</string>
 +    <string name="plotina_update_channel_stable_desc">"Официальные релизы с plotina.cc"</string>
@@ -1613,10 +1693,10 @@ index 00000000..3fb2ee66
 +</resources>
 diff --git a/app/src/main/res/values/plotina_updater.xml b/app/src/main/res/values/plotina_updater.xml
 new file mode 100644
-index 00000000..e1ab590b
+index 00000000..0f4c3c9e
 --- /dev/null
 +++ b/app/src/main/res/values/plotina_updater.xml
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,40 @@
 +<?xml version="1.0" encoding="utf-8"?>
 +<!--
 +  ~ Plotina: strings for the in-app updater (io.element.android.x.updater).
@@ -1647,6 +1727,9 @@ index 00000000..e1ab590b
 +    <string name="plotina_update_close">"Close"</string>
 +    <string name="plotina_update_passive_stable">"Still a dev build — waiting for a stable release to switch back"</string>
 +    <string name="plotina_update_passive_stable_version">"Dev version %1$s is installed. As soon as a newer stable release appears, it will be offered the normal way — your data stays."</string>
++    <string name="plotina_updates_title">"Updates"</string>
++    <string name="plotina_updates_check">"Check for updates"</string>
++    <string name="plotina_updates_current_version">"Installed version: %1$s"</string>
 +    <string name="plotina_update_channel_title">"Update channel"</string>
 +    <string name="plotina_update_channel_stable">"Stable"</string>
 +    <string name="plotina_update_channel_stable_desc">"Official releases from plotina.cc"</string>
@@ -2165,8 +2248,118 @@ index 00000000..04d2731d
 +    size = 137_608_493L,
 +    notes = "Fixes and improvements.",
 +)
+diff --git a/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdatesScreenTest.kt b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdatesScreenTest.kt
+new file mode 100644
+index 00000000..f5166ce4
+--- /dev/null
++++ b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdatesScreenTest.kt
+@@ -0,0 +1,104 @@
++/*
++ * Plotina: the consolidated «Обновления» page — check action on top, channel selection beneath,
++ * like Plotina Mobile's Updates tab. Stateless screen, so the test feeds channel values and
++ * captures callbacks instead of driving the store. Assertions use the English string values:
++ * Robolectric runs in the default locale and the screen renders
++ * app/src/main/res/values/plotina_updater.xml.
++ *
++ * Copyright (C) 2026 Plotina
++ *
++ * This program is free software: you can redistribute it and/or modify it under the terms of the
++ * GNU Affero General Public License as published by the Free Software Foundation, version 3.
++ */
++
++@file:OptIn(ExperimentalTestApi::class)
++
++package io.element.android.x.updater
++
++import android.app.Application
++import androidx.activity.ComponentActivity
++import androidx.compose.ui.test.AndroidComposeUiTest
++import androidx.compose.ui.test.ExperimentalTestApi
++import androidx.compose.ui.test.assertIsDisplayed
++import androidx.compose.ui.test.onNodeWithText
++import androidx.compose.ui.test.performClick
++import androidx.compose.ui.test.v2.runAndroidComposeUiTest
++import com.google.common.truth.Truth.assertThat
++import io.element.android.tests.testutils.EnsureNeverCalled
++import io.element.android.tests.testutils.EnsureNeverCalledWithParam
++import io.element.android.tests.testutils.robolectric.RobolectricTest
++import org.junit.Test
++import org.robolectric.annotation.Config
++
++// application = plain Application: as in PlotinaUpdaterScreenTest, the test only needs a blank
++// Compose host, not the ElementXApplication DI graph.
++@Config(application = Application::class)
++class PlotinaUpdatesScreenTest : RobolectricTest() {
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `the page shows the check action above the channel section`() = runAndroidComposeUiTest {
++        setScreen(channel = PlotinaUpdate.UpdateChannel.STABLE)
++        onNodeWithText("Updates").assertIsDisplayed() // AppBar title
++        onNodeWithText("Check for updates").assertIsDisplayed()
++        onNodeWithText("Installed version: 26.10.1").assertIsDisplayed()
++        onNodeWithText("Update channel").assertIsDisplayed()
++        onNodeWithText("Stable").assertIsDisplayed()
++        onNodeWithText("Dev").assertIsDisplayed()
++        // Stable by default: the dev warning belongs to the dev choice only.
++        onNodeWithText("Dev builds test the next version early", substring = true).assertDoesNotExist()
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `the check action opens the updater flow`() = runAndroidComposeUiTest {
++        var checked = false
++        setScreen(channel = PlotinaUpdate.UpdateChannel.STABLE, onCheckClick = { checked = true })
++        onNodeWithText("Check for updates").performClick()
++        assertThat(checked).isTrue()
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `choosing Dev is called back with the dev channel`() = runAndroidComposeUiTest {
++        var selected: PlotinaUpdate.UpdateChannel? = null
++        setScreen(channel = PlotinaUpdate.UpdateChannel.STABLE, onChannelSelected = { selected = it })
++        onNodeWithText("Dev").performClick()
++        assertThat(selected).isEqualTo(PlotinaUpdate.UpdateChannel.DEV)
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `choosing Stable is called back with the stable channel`() = runAndroidComposeUiTest {
++        var selected: PlotinaUpdate.UpdateChannel? = null
++        setScreen(channel = PlotinaUpdate.UpdateChannel.DEV, onChannelSelected = { selected = it })
++        onNodeWithText("Stable").performClick()
++        assertThat(selected).isEqualTo(PlotinaUpdate.UpdateChannel.STABLE)
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `the dev channel warns on the page itself`() = runAndroidComposeUiTest {
++        setScreen(channel = PlotinaUpdate.UpdateChannel.DEV)
++        // The warning renders exactly for the stored channel: this is what the Activity shows
++        // right after a tap, the radios and the card share the same `channel` argument.
++        onNodeWithText("Dev builds test the next version early", substring = true).assertIsDisplayed()
++        onNodeWithText("Early builds from GitHub (dev-latest release)").assertIsDisplayed()
++    }
++}
++
++private fun AndroidComposeUiTest<ComponentActivity>.setScreen(
++    channel: PlotinaUpdate.UpdateChannel,
++    onBackClick: () -> Unit = EnsureNeverCalled(),
++    onCheckClick: () -> Unit = EnsureNeverCalled(),
++    onChannelSelected: (PlotinaUpdate.UpdateChannel) -> Unit = EnsureNeverCalledWithParam(),
++) {
++    setContent {
++        PlotinaUpdatesScreen(
++            channel = channel,
++            installedVersion = "26.10.1",
++            onBackClick = onBackClick,
++            onCheckClick = onCheckClick,
++            onChannelSelected = onChannelSelected,
++        )
++    }
++}
 diff --git a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootNode.kt b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootNode.kt
-index 93d6d25c..986427b2 100644
+index 93d6d25c..cfcc5384 100644
 --- a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootNode.kt
 +++ b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootNode.kt
 @@ -9,6 +9,7 @@
@@ -2177,28 +2370,19 @@ index 93d6d25c..986427b2 100644
  import androidx.activity.compose.LocalActivity
  import androidx.compose.runtime.Composable
  import androidx.compose.ui.Modifier
-@@ -77,6 +78,27 @@ class PreferencesRootNode(
+@@ -77,6 +78,18 @@ class PreferencesRootNode(
              onSwitchToSession = callback::navigateToSession,
              onOpenAnalytics = callback::navigateToAnalyticsSettings,
              onOpenAbout = callback::navigateToAbout,
-+            // Plotina: opens the app module's updater page. It cannot be referenced by class from
-+            // here (the feature module does not depend on the app module), so the component is
-+            // named; see io.element.android.x.updater.PlotinaUpdateActivity.
-+            onCheckUpdatesClick = {
++            // Plotina: opens the app module's «Обновления» page: «Проверить обновления» on top,
++            // the Stable/Dev channel choice beneath. It cannot be referenced by class from here
++            // (the feature module does not depend on the app module), so the component is named;
++            // see io.element.android.x.updater.PlotinaUpdatesActivity.
++            onUpdatesClick = {
 +                activity.startActivity(
 +                    Intent().setClassName(
 +                        activity.packageName,
-+                        "io.element.android.x.updater.PlotinaUpdateActivity",
-+                    ),
-+                )
-+            },
-+            // Plotina: same trick for the «Канал обновлений» picker (Стабильный / Dev); see
-+            // io.element.android.x.updater.PlotinaUpdateChannelActivity.
-+            onUpdateChannelClick = {
-+                activity.startActivity(
-+                    Intent().setClassName(
-+                        activity.packageName,
-+                        "io.element.android.x.updater.PlotinaUpdateChannelActivity",
++                        "io.element.android.x.updater.PlotinaUpdatesActivity",
 +                    ),
 +                )
 +            },
@@ -2206,78 +2390,68 @@ index 93d6d25c..986427b2 100644
              onOpenMediaSettings = callback::navigateToMediaSettings,
              onOpenLocationSettings = callback::navigateToLocationSettings,
 diff --git a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootView.kt b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootView.kt
-index 79aabeea..f82d38c6 100644
+index 79aabeea..5fbde590 100644
 --- a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootView.kt
 +++ b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootView.kt
-@@ -85,6 +85,11 @@ fun PreferencesRootView(
+@@ -85,6 +85,10 @@ fun PreferencesRootView(
      onOpenAnalytics: () -> Unit,
      onOpenLockScreenSettings: () -> Unit,
      onOpenAbout: () -> Unit,
-+    // Plotina: opens the app module's updater page. Defaulted so upstream's PreferencesRootViewTest
-+    // keeps compiling untouched; the node always passes a real handler.
-+    onCheckUpdatesClick: () -> Unit = {},
-+    // Plotina: opens the app module's «Канал обновлений» picker (Стабильный / Dev). Same reason.
-+    onUpdateChannelClick: () -> Unit = {},
++    // Plotina: opens the app module's «Обновления» page - «Проверить обновления» on top, the
++    // Stable/Dev channel choice beneath, like Plotina Mobile's Updates tab. Defaulted so
++    // upstream's PreferencesRootViewTest keeps compiling untouched; the node passes a real handler.
++    onUpdatesClick: () -> Unit = {},
      onOpenDeveloperSettings: () -> Unit,
      onOpenMediaSettings: () -> Unit,
      onOpenLocationSettings: () -> Unit,
-@@ -157,6 +162,8 @@ fun PreferencesRootView(
+@@ -157,6 +161,7 @@ fun PreferencesRootView(
              GeneralSection(
                  state = state,
                  onOpenAbout = onOpenAbout,
-+                onCheckUpdatesClick = onCheckUpdatesClick,
-+                onUpdateChannelClick = onUpdateChannelClick,
++                onUpdatesClick = onUpdatesClick,
                  onOpenAnalytics = onOpenAnalytics,
                  onOpenDeveloperSettings = onOpenDeveloperSettings,
                  onOpenLabs = onOpenLabs,
-@@ -354,6 +361,8 @@ private fun AppSettingsSection(
+@@ -354,6 +359,7 @@ private fun AppSettingsSection(
  private fun ColumnScope.GeneralSection(
      state: PreferencesRootState,
      onOpenAbout: () -> Unit,
-+    onCheckUpdatesClick: () -> Unit,
-+    onUpdateChannelClick: () -> Unit,
++    onUpdatesClick: () -> Unit,
      onOpenAnalytics: () -> Unit,
      onOpenLabs: () -> Unit,
      onOpenDeveloperSettings: () -> Unit,
-@@ -376,6 +385,19 @@ private fun ColumnScope.GeneralSection(
+@@ -376,6 +382,14 @@ private fun ColumnScope.GeneralSection(
              onClick = onOpenLabs,
          )
      }
-+    // Plotina: self-update entry right above 'About' - there is no Play channel here, so the
-+    // updater lives one tap from the settings root instead of inside About. The channel picker
-+    // sits above it: which feed to follow is the decision that precedes checking it.
++    // Plotina: one «Обновления» entry right above 'About' - there is no Play channel here, so the
++    // updater lives one tap from the settings root instead of inside About. The page behind it
++    // carries both actions: «Проверить обновления» on top, the Stable/Dev channel beneath.
 +    ListItem(
-+        content = { Text(stringResource(id = R.string.plotina_update_channel)) },
-+        leadingContent = ListItemContent.Icon(IconSource.Vector(CompoundIcons.Admin())),
-+        onClick = onUpdateChannelClick,
-+    )
-+    ListItem(
-+        content = { Text(stringResource(id = R.string.plotina_check_updates)) },
++        content = { Text(stringResource(id = R.string.plotina_updates)) },
 +        leadingContent = ListItemContent.Icon(IconSource.Vector(CompoundIcons.Download())),
-+        onClick = onCheckUpdatesClick,
++        onClick = onUpdatesClick,
 +    )
      ListItem(
          content = { Text(stringResource(id = CommonStrings.common_about)) },
          leadingContent = ListItemContent.Icon(IconSource.Vector(CompoundIcons.Info())),
 diff --git a/features/preferences/impl/src/main/res/values-ru/translations.xml b/features/preferences/impl/src/main/res/values-ru/translations.xml
-index 96430521..4bafd871 100644
+index 96430521..e68ae358 100644
 --- a/features/preferences/impl/src/main/res/values-ru/translations.xml
 +++ b/features/preferences/impl/src/main/res/values-ru/translations.xml
-@@ -124,4 +124,6 @@
+@@ -124,4 +124,5 @@
    <string name="troubleshoot_notifications_entry_point_push_history_title">"История уведомлений"</string>
    <string name="troubleshoot_notifications_entry_point_section">"Устранение неполадок"</string>
    <string name="troubleshoot_notifications_entry_point_title">"Устранение неполадок с уведомлениями"</string>
-+  <string name="plotina_check_updates">"Проверить обновления"</string>
-+  <string name="plotina_update_channel">"Канал обновлений"</string>
++  <string name="plotina_updates">"Обновления"</string>
  </resources>
 diff --git a/features/preferences/impl/src/main/res/values/localazy.xml b/features/preferences/impl/src/main/res/values/localazy.xml
-index d02257c2..4fd1df0a 100644
+index d02257c2..566f375c 100644
 --- a/features/preferences/impl/src/main/res/values/localazy.xml
 +++ b/features/preferences/impl/src/main/res/values/localazy.xml
-@@ -127,4 +127,6 @@ If you proceed, some of your settings may change."</string>
+@@ -127,4 +127,5 @@ If you proceed, some of your settings may change."</string>
    <string name="troubleshoot_notifications_entry_point_push_history_title">"Push history"</string>
    <string name="troubleshoot_notifications_entry_point_section">"Troubleshoot"</string>
    <string name="troubleshoot_notifications_entry_point_title">"Troubleshoot notifications"</string>
-+  <string name="plotina_check_updates">"Check for updates"</string>
-+  <string name="plotina_update_channel">"Update channel"</string>
++  <string name="plotina_updates">"Updates"</string>
  </resources>

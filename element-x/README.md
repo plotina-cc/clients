@@ -60,10 +60,12 @@ There is no Play channel here, so Plotina X ships its own updater: platform APIs
 `HttpURLConnection` for the manifest, `DownloadManager` for the APK, `PackageInstaller` for the
 install, no third-party update SDK.
 
-- **«Проверить обновления» lives at the root of Settings, right above «О приложении»**, and opens
-  the full-screen updater page; a **silent check runs at most once a day** when the app starts and
-  opens that page only when the manifest really is newer. The page mirrors the Plotina Mobile
-  updater route: AppBar «Проверка обновлений», one centred 480 dp column, a stage per state
+- **«Обновления» lives at the root of Settings, right above «О приложении»**, as one row over one
+  page (mirroring Plotina Mobile's Updates tab): **«Проверить обновления» is the primary action on
+  top** and it opens the full-screen updater page; **the update channel is selected below it**. A
+  **silent check runs at most once a day** when the app starts and opens that updater page only
+  when the manifest really is newer. The updater page mirrors the Plotina Mobile updater route:
+  AppBar «Проверка обновлений», one centred 480 dp column, a stage per state
   (checking / available / up to date / permission / downloading / error + retry), all colours from
   the app theme.
 - Manifest: `https://plotina.cc/dl/update-x.json` with exactly
@@ -80,9 +82,10 @@ install, no third-party update SDK.
 
 ### The dev update channel (opt-in)
 
-- **Settings grows a «Канал обновлений» row** just above «Проверить обновления». It opens a small
-  page (a second Activity in the same patch) with two choices: **Стабильный** (default, the edge
-  host feed above) and **Dev**. The choice persists in the app's `plotina-updater` SharedPreferences
+- **The «Обновления» page selects the channel** in its lower section, beneath «Проверить
+  обновления», with two radios: **Стабильный** (default, the edge host feed above) and **Dev**.
+  (It used to be its own Settings row and Activity; consolidating them into the one page made the
+  updater match Mobile's Updates tab.) The choice persists in the app's `plotina-updater` SharedPreferences
   and decides which feed both the manual check and the daily silent check read. Dev states in
   warning text that dev builds ride ahead of the newest stable and may break, and that switching
   back keeps the data.
