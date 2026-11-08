@@ -466,7 +466,12 @@ function configurePermissions(session) {
       window: BrowserWindow.getAllWindows()[0],
     });
     if (!sources.length) return callback({});
-    callback({ video: sources[0], audio: params.mediaTypes?.includes('audio') ? sources[0] : undefined });
+    // Do not return a screen source as `audio`: Electron rejects
+    // getDisplayMedia({video:true, audio:{...}}) with AbortError "Invalid
+    // capture constraints". Element Call always requests screen audio, so
+    // passing the screen source there broke screen sharing on Linux and
+    // Windows. Video-only screen capture is accepted for the same request.
+    callback({ video: sources[0] });
   }, { useSystemPicker: false });
 }
 
