@@ -32,7 +32,10 @@ it is unpacked:
 - `apply-noise.py` copies `../noise/` into the webapp and adds
   `<script src="noise/logic.js"></script><script src="noise/boot.js" defer></script>`
   to `index.html` — the same two files the web image loads, the wrapper on
-  `getUserMedia` plus the level slider in Settings → Voice and Video.
+  `getUserMedia` plus the level slider in Settings → Voice and Video. The same
+  pair is added to `widgets/element-call/index.html` (with `../../noise/...`),
+  because Element Call asks for the microphone from that iframe; without it the
+  desktop call uses Chromium's weaker built-in suppressor.
 - `branding.py` turns the Element shell into the Plotina one: title,
   application-name and theme-color (#17795A) in `index.html`, our favicon and
   apple-touch-icon instead of the `vector-icons` links, a local `og:image`,

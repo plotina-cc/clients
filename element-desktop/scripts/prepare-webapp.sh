@@ -129,6 +129,7 @@ install -m 0644 "$REPO_ROOT/NOTICE" "$DEST/NOTICE"
 
 echo "==> verify"
 grep -q 'noise/boot.js' "$DEST/index.html"
+grep -q 'noise/boot.js' "$DEST/widgets/element-call/index.html"
 grep -q 'noise/logic.js' "$DEST/index.html"
 grep -q 'Plotina Desktop' "$DEST/index.html"
 if grep -q '>Element</title>' "$DEST/index.html"; then

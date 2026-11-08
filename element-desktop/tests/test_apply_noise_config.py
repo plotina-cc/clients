@@ -22,6 +22,26 @@ apply_noise = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(apply_noise)
 
 
+class WidgetNoisePatchTest(unittest.TestCase):
+    def test_widget_gets_relative_noise_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            widget = Path(tmp) / "index.html"
+            widget.write_text("<html><head></head><body></body></html>", encoding="utf-8")
+            apply_noise.patch_html(widget, apply_noise.WIDGET_TAG)
+            text = widget.read_text(encoding="utf-8")
+            self.assertIn('src="../../noise/logic.js"', text)
+            self.assertIn('src="../../noise/boot.js" defer', text)
+            self.assertEqual(text.count("noise/boot.js"), 1)
+
+    def test_widget_patch_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            widget = Path(tmp) / "index.html"
+            widget.write_text("<html><head></head></html>", encoding="utf-8")
+            apply_noise.patch_html(widget, apply_noise.WIDGET_TAG)
+            apply_noise.patch_html(widget, apply_noise.WIDGET_TAG)
+            self.assertEqual(widget.read_text(encoding="utf-8").count("noise/boot.js"), 1)
+
+
 class BrandingPathsRelativeTest(unittest.TestCase):
     def test_strips_leading_slash(self) -> None:
         config = {

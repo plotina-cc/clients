@@ -29,6 +29,11 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 TAG = '<script src="noise/logic.js"></script><script src="noise/boot.js" defer></script>'
+# The call widget is a second document under /widgets/element-call/.  Its
+# scripts are two levels below the webapp root; without this tag the wrapper
+# only covers the app document, while Element Call asks for the microphone in
+# the widget and the browser falls back to its own (weaker) noise suppressor.
+WIDGET_TAG = '<script src="../../noise/logic.js"></script><script src="../../noise/boot.js" defer></script>'
 MARKER = "noise/boot.js"
 
 REQUIRED_ASSETS = [
@@ -53,7 +58,7 @@ REQUIRED_ASSETS = [
 WEB_BASE_URL = "https://chat.plotina.cc/"
 
 
-def patch_html(path: Path) -> None:
+def patch_html(path: Path, tag: str = TAG) -> None:
     if not path.is_file():
         sys.exit(f"apply-noise: missing document {path}")
     src = path.read_text(encoding="utf-8")
@@ -62,7 +67,7 @@ def patch_html(path: Path) -> None:
         return
     if "</head>" not in src:
         sys.exit(f"apply-noise: no </head> in {path}; upstream layout changed")
-    path.write_text(src.replace("</head>", TAG + "</head>", 1), encoding="utf-8")
+    path.write_text(src.replace("</head>", tag + "</head>", 1), encoding="utf-8")
     print(f"patched: {path}")
 
 
@@ -142,6 +147,10 @@ def main() -> None:
         sys.exit("apply-noise: noise/boot.js does not resolve its own path; refresh the shared noise layer")
 
     patch_html(webapp / "index.html")
+    widget_index = webapp / "widgets" / "element-call" / "index.html"
+    if not widget_index.is_file():
+        sys.exit(f"apply-noise: missing Element Call widget {widget_index}; upstream layout changed")
+    patch_html(widget_index, WIDGET_TAG)
     write_config(config_src, webapp / "config.json", args.brand)
 
     version = webapp / "version"
