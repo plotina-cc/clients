@@ -31,14 +31,18 @@ What this does instead (Windows NSIS + Linux AppImage, packaged builds only):
      AppImage the yml names, byte-identical) or
      https://plotina.cc/dl/Plotina-Desktop-setup.exe — and verifies the
      SHA-512 digest and the byte size it publishes.
-  4. Windows: runs the installer with `/S --updated` and quits, same as
-     autoUpdater.quitAndInstall() would.
+  4. Windows: runs the installer with `/S --updated --force-run` and quits —
+     `--force-run` is what makes the silent NSIS install relaunch the app
+     (see installUpdate: electron-builder's templates only start the app
+     after a silent install when that flag is present).
      Linux (AppImage runtime, process.env.APPIMAGE set): the verified image is
      written next to the running one, chmod +x, then swapped in with an atomic
      rename over the current AppImage (POSIX rename is legal while the old
      file is still open by the FUSE mount: the running process keeps the old
-     inode, the directory entry gets the new bytes). "Restart" re-spawns the
-     same path, which is now the new image. If the directory is not writable
+     inode, the directory entry gets the new bytes). "Restart" hands a detached
+     shell helper the same path; it waits until this process has really exited
+     (the single-instance lock dies with it) and only then execs the image.
+     If the directory is not writable
      the verified file is saved to the user's Downloads and the dialog prints
      the path instead; the running image is left untouched.
      Linux (deb or other system install): updates come from the package
@@ -912,21 +916,62 @@ export function installUpdate(spawnImpl: typeof spawn = spawn): void {
     // For the same reason quitAndInstall sets it: before-quit handlers should persist state now.
     global.appQuitting = true;
     if (UPDATE_MODE === "linux-appimage") {
-        // The swap already happened; "install" just relaunches the same path,
-        // which now holds the new image. No args: a plain start, like the NSIS
-        // runAfterFinish relaunch on Windows. The single-instance lock makes
-        // the overlap until app.quit() safe.
+        // The swap already happened; "install" relaunches the same path, which
+        // now holds the new image. But we must NOT spawn it while this process
+        // is still alive: app.quit() is asynchronous (before-quit handlers,
+        // window teardown, Sentry/store flushes all run first), and the single
+        // instance lock is held until the old main process actually exits.
+        // electron-main.ts answers a lock-less start with
+        // `Other instance detected: exiting` + app.exit() — so a direct spawn
+        // here reliably dies against our own lock, we then quit, and the user
+        // is left with NO running app ("restart" became shutdown; regression
+        // seen on .44 -> .45 updates).
+        //
+        // Instead hand the relaunch to a detached shell helper that waits for
+        // this PID to disappear (and never come back as an unreaped zombie) and
+        // only then execs the AppImage. The wait is capped at ~30s so a hung
+        // shutdown cannot suppress the restart forever: after the cap it
+        // launches anyway, which at worst re-creates the old race, never
+        // "nothing". No args: a plain start, like the NSIS runAfterFinish
+        // relaunch on Windows.
         const target = resolveCurrentAppImage();
-        const child = spawnImpl(target, [], { detached: true, stdio: "ignore" });
-        child.on("error", (e) => console.error("Plotina updater: failed to restart the new AppImage", e));
+        const helper =
+            'old="$1"; target="$2"; i=0\n' +
+            "while kill -0 \"$old\" 2>/dev/null; do\n" +
+            '  st=$(ps -o state= -p "$old" 2>/dev/null)\n' +
+            '  case "$st" in ""|*Z*) break;; esac\n' +
+            "  i=$((i+1)); [ \"$i\" -ge 300 ] && break; sleep 0.1\n" +
+            "done\n" +
+            'exec "$target"';
+        const child = spawnImpl("/bin/sh", ["-c", helper, "plotina-update-restart", String(process.pid), target], {
+            detached: true,
+            stdio: "ignore",
+        });
+        child.on("error", (e) => console.error("Plotina updater: failed to start the restart helper", e));
         child.unref();
         app.quit();
         return;
     }
-    // /S = silent NSIS, --updated = "this is an update, not a first install".
-    // electron-builder's NSIS script force-closes the running app in silent mode,
-    // and app.quit() races gracefully with it; the app-own lock makes double-launch safe.
-    const child = spawnImpl(pendingUpdate.installerPath, ["/S", "--updated"], { detached: true, stdio: "ignore" });
+    // /S = silent NSIS, --updated = "this is an update, not a first install",
+    // --force-run = start the app after the install.
+    // Read against electron-builder 26.16.1's own templates (the version that
+    // builds our installers): installSection.nsh (ONE_CLICK branch) launches
+    // the app after install only when the installer is NOT silent or the
+    // command line carries --force-run; --updated alone does NOT relaunch —
+    // it only keeps shortcuts/user data. Without --force-run, the silent
+    // installer force-kills the running app (allowOnlyOneInstallerInstance.nsh:
+    // taskkill + wait-for-exit), installs, and quits — the app "just turns
+    // off", the Windows half of this bug. electron-updater's own
+    // quitAndInstall(silent, forceRunAfter) passes --force-run for exactly
+    // this reason.
+    // The single-instance lock is not a problem here, unlike the old direct
+    // relaunch on Linux: the installer kills and waits for the old process
+    // BEFORE it ever reaches StartApp (and file locks alone enforce that), so
+    // the relaunched app always starts against a free lock.
+    const child = spawnImpl(pendingUpdate.installerPath, ["/S", "--updated", "--force-run"], {
+        detached: true,
+        stdio: "ignore",
+    });
     child.on("error", (e) => console.error("Plotina updater: failed to start installer", e));
     child.unref();
     app.quit();

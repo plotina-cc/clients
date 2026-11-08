@@ -132,7 +132,17 @@ How a build becomes updatable, end to end:
 - The updater polls `api.github.com/repos/<owner>/<repo>/releases` (from
   app-update.yml), fetches `latest.yml` from the newest releases that carry
   one, compares numeric version tokens with `app.getVersion()`, downloads the
-  installer, verifies its sha512, and runs it with `/S --updated`. Renderer
+  installer, verifies its sha512, and runs it with `/S --updated --force-run`
+  — `--force-run` is required for a *silent* NSIS install to relaunch the app
+  (electron-builder 26.16.1's `installSection.nsh` starts the app after a
+  silent install only with that flag; `/S --updated` alone installs and quits,
+  which is how "Restart to update" became "turn off" on Windows). On Linux the
+  same trap exists in another form: the AppImage is swapped in place and the
+  relaunch goes through a detached wait-for-exit helper, because spawning the
+  new image while the old process still holds the single-instance lock makes it
+  print `Other instance detected: exiting` and die — the old app quits next and
+  nothing is left running. Both orderings are pinned by
+  `desktop/tests/update-restart.test.mjs`. Renderer
   IPC channels (`check_updates`, `install_update`, `update-downloaded`) are
   unchanged, so the webapp Settings UI keeps working.
 - The `windows smoke` job silently installs the built setup.exe on a Windows

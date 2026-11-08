@@ -339,7 +339,13 @@ test("e2e: direct /dl feed downloads the alias AppImage, verifies sha512+size, s
     const dlg = state.dialogs.at(-1);
     assert.ok(dlg && dlg.buttons.includes("Restart now"), "restart dialog shown");
 
-    // 5. "Restart" re-launches the same path (now the new image) detached and quits.
+    // 5. "Restart" must NOT spawn the AppImage directly: the new instance
+    //    would hit our own single-instance lock while this process is still
+    //    alive (app.quit() is async) and die against "Other instance detected:
+    //    exiting" — the user is left with no running app. The relaunch goes
+    //    through a detached /bin/sh helper that waits for OUR pid to exit and
+    //    only then execs the (already swapped, new) image. See
+    //    update-restart.test.mjs for the real process-order regression.
     const spawns = [];
     const fakeSpawn = (target, args, opts) => {
         spawns.push({ target, args, opts });
@@ -347,9 +353,18 @@ test("e2e: direct /dl feed downloads the alias AppImage, verifies sha512+size, s
     };
     updater.installUpdate(fakeSpawn);
     assert.equal(spawns.length, 1);
-    assert.equal(spawns[0].target, layout.current);
-    assert.deepEqual(spawns[0].args, []);
-    assert.equal(spawns[0].opts.detached, true);
+    const s = spawns[0];
+    assert.notEqual(s.target, layout.current, "the AppImage itself is never spawned directly");
+    assert.equal(s.target, "/bin/sh");
+    assert.equal(s.args[0], "-c", "a shell -c helper is spawned");
+    assert.equal(s.args[2], "plotina-update-restart");
+    assert.equal(s.args[3], String(process.pid), "the helper waits on THIS pid");
+    assert.equal(s.args[4], layout.current, "the helper execs the swapped image path");
+    assert.match(s.args[1], /kill -0 "\$old"/, "helper waits for the old process to exit");
+    assert.match(s.args[1], /\[ "\$i" -ge \d+ \] && break/, "the wait is capped");
+    assert.ok(s.args[1].indexOf('exec "$target"') > s.args[1].indexOf("while"), "the exec comes AFTER the wait loop");
+    assert.equal(s.opts.detached, true);
+    assert.equal(s.opts.stdio, "ignore");
     assert.equal(state.quitCount, 1, "app.quit called for the restart");
     assert.equal(globalThis.appQuitting, true);
 
