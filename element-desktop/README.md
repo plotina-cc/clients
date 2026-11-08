@@ -225,6 +225,22 @@ the per-user AppImage below, and `--appimage` forces that. A positional `.deb`
 path/URL and `PLOTINA_DEB_URL` are deprecated escape hatches: they install
 that exact file via apt/dpkg without subscribing the machine to the repo.
 
+To install the newest **dev-channel** build instead of stable, run the same
+script with `--dev`:
+
+```bash
+curl -fsSL https://plotina.cc/dl/Plotina-Desktop-install.sh | bash -s -- --dev
+```
+
+It fetches `https://plotina.cc/dl/dev/desktop/latest-linux-dev.yml`, takes the
+first `files:` entry, downloads that AppImage and verifies **both** its sha512
+(base64 as published, or hex) and its size before installing it through the
+usual per-user AppImage path (binary, `.desktop`, hicolor icons). Nothing is
+installed when verification fails — there is no silent fallback to stable —
+and the dev path never touches apt or GitHub. `--dev` cannot be combined with
+`--deb`, a positional file or `PLOTINA_APPIMAGE_URL`; `PLOTINA_DEV_YAML_URL`
+overrides the metadata URL (tests).
+
 An AppImage does not register its `.desktop` file, so the browser keeps sending
 the SSO callback (`io.element.desktop`) to an installed upstream Element. Run
 the installer as the desktop user:

@@ -16,6 +16,12 @@
 #   * --deb — ТОЛЬКО установка из apt-репозитория (никакого локального .deb:
 #     позиционный .deb с --deb запрещён);
 #   * --appimage — только AppImage в ~/.local (override: PREFIX=...);
+#   * --dev — AppImage в ~/.local, но из DEV-канала: скачивается
+#     latest-linux-dev.yml с /dl/dev/desktop, берётся первый files: вход,
+#     артефакт проверяется по sha512 И size и только затем ставится тем же
+#     AppImage-путём (desktop-файл/иконки/бинарь). Без apt и без GitHub;
+#     с --deb несовместим, позиционный файл и PLOTINA_APPIMAGE_URL с --dev
+#     запрещены — источник задаёт yml;
 #   * позиционный аргумент — путь или URL: .AppImage для AppImage-пути,
 #     .deb — устаревшая явная установка конкретного файла через apt-get/dpkg
 #     (файл ставится как есть, но система НЕ подписывается на репозиторий,
@@ -39,6 +45,12 @@ set -euo pipefail
 #   PLOTINA_APPIMAGE_URL=... install-appimage.sh
 DEFAULT_APPIMAGE_URL="https://plotina.cc/dl/Plotina-Desktop.AppImage"
 APPIMAGE_URL="${PLOTINA_APPIMAGE_URL:-$DEFAULT_APPIMAGE_URL}"
+# Dev-канал: electron-builder yml с нашего зеркала /dl/dev/desktop (его
+# обновляет CI dev-сборки). --dev скачивает этот yml, берёт ПЕРВЫЙ вход
+# files: (url/sha512/size), проверяет артефакт по ОБОИМ значениям и ставит
+# его AppImage-путём. yml-адрес переопределяется только ради тестов.
+DEFAULT_DEV_YAML_URL="https://plotina.cc/dl/dev/desktop/latest-linux-dev.yml"
+DEV_YAML_URL="${PLOTINA_DEV_YAML_URL:-$DEFAULT_DEV_YAML_URL}"
 
 APT_PACKAGE="plotina-desktop"
 APT_SOURCES_LINE='deb [signed-by=/usr/share/keyrings/plotina.gpg] https://plotina.cc/apt ./'
@@ -51,6 +63,7 @@ SCHEME="io.element.desktop"
 DESKTOP_NAME="plotina-desktop.desktop"
 
 MODE="auto"          # auto | deb (apt-репозиторий) | appimage
+DEV_MODE=0           # 1 = --dev: AppImage из dev-канала (latest-linux-dev.yml)
 DEB_SOURCE=""        # устаревшее: явный путь/URL для .deb-файла
 APP_SOURCE=""        # явный путь/URL для AppImage
 SUDO_CMD=()          # (sudo) или пусто, если прав root хватает
@@ -61,7 +74,7 @@ die()  { echo "ОШИБКА: $*" >&2; exit 1; }
 
 usage() {
     cat <<'EOF'
-Использование: install-appimage.sh [--deb|--appimage] [ПУТЬ_или_URL]
+Использование: install-appimage.sh [--deb|--appimage|--dev] [ПУТЬ_или_URL]
 
   без аргументов       на Debian/Ubuntu с sudo — подписка на apt-репозиторий
                        Plotina и установка plotina-desktop из него;
@@ -70,9 +83,15 @@ usage() {
                        /etc/apt/sources.list.d/plotina.list + apt-get install;
                        позиционный .deb с --deb запрещён)
   --appimage           ставить только AppImage в ~/.local (override: PREFIX=...)
+  --dev                AppImage в ~/.local из DEV-канала: первый files: вход
+                       latest-linux-dev.yml (url/sha512/size), артефакт
+                       проверяется по sha512 и размеру; без apt и без GitHub.
+                       Несовместимо с --deb, позиционным файлом и
+                       PLOTINA_APPIMAGE_URL
   ПУТЬ_или_URL         .AppImage для AppImage-пути; .deb — устаревшая явная
                        установка конкретного файла (без подписки на репозиторий)
   PLOTINA_APPIMAGE_URL                    переопределить URL AppImage
+  PLOTINA_DEV_YAML_URL                    переопределить yml dev-канала для --dev
   PLOTINA_DEB_URL                         устарело: трактуется как позиционный .deb
 EOF
 }
@@ -81,12 +100,18 @@ EOF
 while [ $# -gt 0 ]; do
     case "$1" in
         --deb)
+            [ "$DEV_MODE" = 1 ] && die "--dev и --deb вместе нельзя: --dev ставит AppImage из dev-канала без apt"
             [ "$MODE" = "appimage" ] && die "нельзя одновременно --deb и --appimage"
             MODE="deb"
             ;;
         --appimage)
             [ "$MODE" = "deb" ] && die "нельзя одновременно --deb и --appimage"
             MODE="appimage"
+            ;;
+        --dev)
+            [ "$MODE" = "deb" ] && die "--dev и --deb вместе нельзя: --dev ставит AppImage из dev-канала без apt"
+            MODE="appimage"
+            DEV_MODE=1
             ;;
         -h|--help)  usage; exit 0 ;;
         --*)        die "неизвестный флаг: $1" ;;
@@ -99,6 +124,12 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+if [ "$DEV_MODE" = 1 ] && [ -n "$APP_SOURCE" ]; then
+    die "--dev берёт AppImage из $DEV_YAML_URL; позиционный файл ($APP_SOURCE) с ним запрещён"
+fi
+if [ "$DEV_MODE" = 1 ] && [ -n "${PLOTINA_APPIMAGE_URL:-}" ]; then
+    die "--dev берёт AppImage из $DEV_YAML_URL; снимите PLOTINA_APPIMAGE_URL"
+fi
 if [ -n "${PLOTINA_DEB_URL:-}" ] && [ -z "$DEB_SOURCE" ]; then
     # Устаревшее поведение (дефолт ставил .deb скачиванием) убран; переменная
     # сохранена как явный файл-оверрайд для старых вызовов.
@@ -152,6 +183,122 @@ obtain() {
         download "$url" "$TMP/$name" || die "не удалось скачать: $url"
         RESOLVED="$TMP/$name"
     fi
+}
+
+# --------- dev-канал: разбор latest-linux-dev.yml и проверка артефакта ------
+# electron-builder пишет yml сам; первый вход files: — актуальная dev-сборка.
+# url в yml абсолютный, но умеем и относительный (resolved от папки yml).
+# sha512 — base64 от сырого дайджеста (электрон-builder именно так и делает);
+# hex-форма тоже принимается. size — байты.
+parse_dev_yml() {
+    # $1: yml-файл. Заполняет DEV_URL/DEV_SHA512/DEV_SIZE; 0, если нашёлся
+    # полный ПЕРВЫЙ вход files:, иначе 1.
+    local yml="$1" line t in_files=0
+    DEV_URL=""; DEV_SHA512=""; DEV_SIZE=""
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        t="${line#"${line%%[![:space:]]*}"}"   # leading whitespace strip
+        if [ "$in_files" -eq 0 ]; then
+            [ "$t" = "files:" ] && in_files=1
+            continue
+        fi
+        # неотступленный ключ нулевого уровня закрывает список files:
+        if [ -n "$t" ] && [ "$line" = "$t" ]; then
+            break
+        fi
+        case "$t" in
+            "- url:"*)  [ -n "$DEV_URL" ]    || DEV_URL="${t#*- url:}" ;;
+            "sha512:"*) [ -n "$DEV_SHA512" ] || DEV_SHA512="${t#sha512:}" ;;
+            "size:"*)   [ -n "$DEV_SIZE" ]   || DEV_SIZE="${t#size:}" ;;
+        esac
+        # ведущие пробелы значений (case-метки схлопнуты руками выше)
+        DEV_URL="${DEV_URL#"${DEV_URL%%[![:space:]]*}"}"
+        DEV_SHA512="${DEV_SHA512#"${DEV_SHA512%%[![:space:]]*}"}"
+        DEV_SIZE="${DEV_SIZE#"${DEV_SIZE%%[![:space:]]*}"}"
+    done < "$yml"
+    case "$DEV_URL" in
+        http://*|https://*) ;;
+        "") return 1 ;;
+        /*) local scheme host
+            scheme="${DEV_YAML_URL%%://*}"; host="${DEV_YAML_URL#*://}"; host="${host%%/*}"
+            DEV_URL="$scheme://$host$DEV_URL" ;;
+        *)  DEV_URL="${DEV_YAML_URL%/*}/$DEV_URL" ;;
+    esac
+    [ -n "$DEV_URL" ] && [ -n "$DEV_SHA512" ] && [ -n "$DEV_SIZE" ] || return 1
+    case "$DEV_SIZE" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    return 0
+}
+
+sha512_hex_to_b64() {
+    # hex-дайджест -> стандартный base64 чистим bash'ом (внешний base64 не
+    # обязателен на машине пользователя).
+    local hex="$1"
+    local chars='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+    local -a v=()
+    local i n out="" b0 b1 b2 triple o1 o2 o3 o4
+    for ((i = 0; i < ${#hex}; i += 2)); do
+        v+=( "$(( 16#${hex:i:2} ))" )
+    done
+    n=${#v[@]}
+    for ((i = 0; i < n; i += 3)); do
+        b0=${v[i]}; b1=${v[i + 1]:-0}; b2=${v[i + 2]:-0}
+        triple=$(( (b0 << 16) | (b1 << 8) | b2 ))
+        o1=$(( (triple >> 18) & 63 )); o2=$(( (triple >> 12) & 63 ))
+        o3=$(( (triple >> 6) & 63 ));  o4=$(( triple & 63 ))
+        out+="${chars:o1:1}${chars:o2:1}"
+        if (( i + 1 < n )); then out+="${chars:o3:1}"; else out+="="; fi
+        if (( i + 2 < n )); then out+="${chars:o4:1}"; else out+="="; fi
+    done
+    printf '%s' "$out"
+}
+
+verify_dev_artifact() {
+    # $1: файл, $2: ожидаемый sha512 (base64 или hex), $3: ожидаемый размер.
+    # 0 — совпало и sha512, и size; 1 — отказ, причина в DEV_VERIFY_REASON.
+    local file="$1" want="$2" want_size="$3"
+    DEV_VERIFY_REASON=""
+    command -v sha512sum >/dev/null 2>&1 || { DEV_VERIFY_REASON="нет sha512sum в PATH"; return 1; }
+    local size actual_hex want_cmp actual_cmp
+    size="$(wc -c < "$file")"
+    size="${size//[[:space:]]/}"
+    if [ "$size" != "$want_size" ]; then
+        DEV_VERIFY_REASON="размер $size != ${want_size} из yml"
+        return 1
+    fi
+    actual_hex="$(sha512sum -- "$file")"
+    actual_hex="${actual_hex%% *}"
+    actual_hex="${actual_hex,,}"
+    if [[ "$want" =~ ^[0-9a-fA-F]{128}$ ]]; then
+        want_cmp="${want,,}"; actual_cmp="$actual_hex"
+    elif [[ "$want" =~ ^[A-Za-z0-9+/]+={0,2}$ ]]; then
+        want_cmp="$want"; actual_cmp="$(sha512_hex_to_b64 "$actual_hex")"
+    else
+        DEV_VERIFY_REASON="sha512 в yml не похож на base64/hex: $want"
+        return 1
+    fi
+    if [ "$want_cmp" != "$actual_cmp" ]; then
+        DEV_VERIFY_REASON="sha512 не совпал (ожидался $want)"
+        return 1
+    fi
+    return 0
+}
+
+dev_resolve_appimage() {
+    # --dev: yml -> первый files: вход -> скачивание -> sha512+size -> RESOLVED.
+    # Отказ (die) на любой нестыковке: dev-артефакт НЕ заменяется стабильным.
+    info "Dev-метаданные: $DEV_YAML_URL"
+    download "$DEV_YAML_URL" "$TMP/latest-linux-dev.yml" \
+        || die "не удалось скачать dev-метаданные: $DEV_YAML_URL"
+    parse_dev_yml "$TMP/latest-linux-dev.yml" \
+        || die "в $DEV_YAML_URL нет полного первого входа files: (url/sha512/size)"
+    info "Dev-сборка: $DEV_URL (size=$DEV_SIZE)"
+    download "$DEV_URL" "$TMP/dev-Plotina-Desktop.AppImage" \
+        || die "не удалось скачать dev-артефакт: $DEV_URL"
+    verify_dev_artifact "$TMP/dev-Plotina-Desktop.AppImage" "$DEV_SHA512" "$DEV_SIZE" \
+        || die "dev-артефакт не прошёл проверку: $DEV_URL — $DEV_VERIFY_REASON; ничего не установлено"
+    RESOLVED="$TMP/dev-Plotina-Desktop.AppImage"
 }
 
 # --------- регистрация схемы и .desktop-кэша: warn-but-continue --------------
@@ -316,7 +463,14 @@ install_appimage() {
     desktop="$PREFIX/share/applications/$DESKTOP_NAME"
     icon_dir="$PREFIX/share/icons/hicolor"
 
-    obtain "$APP_SOURCE" "$APPIMAGE_URL" "Plotina-Desktop.AppImage"
+    # --dev: берём dev-артефакт из latest-linux-dev.yml с проверкой sha512 и
+    # размера; стабильный URL/позиционный файл здесь не участвуют (позиционный
+    # с --dev запрещён на разборе аргументов).
+    if [ "$DEV_MODE" = 1 ]; then
+        dev_resolve_appimage
+    else
+        obtain "$APP_SOURCE" "$APPIMAGE_URL" "Plotina-Desktop.AppImage"
+    fi
     appimage="$RESOLVED"
 
     install -d "$PREFIX/bin" "$(dirname "$desktop")"

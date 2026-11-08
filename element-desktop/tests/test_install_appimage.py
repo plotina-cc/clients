@@ -23,6 +23,8 @@ PLOTINA_TEST_FIXTURE_DIR); если сети нет — эти тесты про
 
     cd element-desktop && python3 -m unittest discover -s tests -v
 """
+import base64
+import hashlib
 import os
 import shutil
 import struct
@@ -244,7 +246,7 @@ exit 0
 """
 
 CORE_TOOLS = ["bash", "sh", "cat", "chmod", "cp", "curl", "env", "grep", "id", "install",
-              "mkdir", "mktemp", "mv", "rm", "dirname", "python3"]
+              "mkdir", "mktemp", "mv", "rm", "dirname", "python3", "sha512sum", "wc"]
 
 
 def make_core_bin(directory: Path) -> Path:
@@ -444,6 +446,16 @@ class TestScriptContract(InstallerCase):
         self.assertIn("PLOTINA_APT_KEYRING", text)
         self.assertIn("PLOTINA_APT_LIST", text)
         self.assertIn("PLOTINA_APT_KEY_URL", text)
+        self.assertIn("PLOTINA_DEV_YAML_URL", text)
+
+    def test_dev_channel_constants_and_no_github(self):
+        """--dev: фиксированный yml нашего зеркала; установщик не ходит на GitHub."""
+        text = SCRIPT.read_text()
+        self.assertIn('DEFAULT_DEV_YAML_URL="https://plotina.cc/dl/dev/desktop/latest-linux-dev.yml"', text)
+        self.assertIn('DEV_YAML_URL="${PLOTINA_DEV_YAML_URL:-$DEFAULT_DEV_YAML_URL}"', text)
+        self.assertIn("--dev)", text, "флаг --dev должен разбираться")
+        self.assertNotIn("github.com", text.lower(),
+                         "installer must not touch GitHub (apt repo + /dl mirror only)")
 
 
 class TestAppImagePath(InstallerCase):
@@ -760,6 +772,171 @@ class TestDebPath(InstallerCase):
         self.assertNotIn("apt-get install -y plotina-desktop", lines)
         self.assertFalse(self.keyring.exists() or self.list_file.exists())
         self.assertFalse((self.prefix / "bin" / "plotina-desktop").exists())
+
+
+def dev_b64_sha512(data: bytes) -> str:
+    """sha512 в формате electron-builder yml: base64 от сырого дайджеста."""
+    return base64.b64encode(hashlib.sha512(data).digest()).decode()
+
+
+def dev_yml_text(url: str, sha: str, size: int) -> str:
+    """yml ровно формы latest-linux-dev.yml: файлы-входы + top-level дубликаты,
+    которые парсер обязан не схлопнуть с первым входом files:."""
+    return (
+        "version: 1.12.32-plotina.43-dev.42\n"
+        "files:\n"
+        f"  - url: {url}\n"
+        f"    sha512: {sha}\n"
+        f"    size: {size}\n"
+        "    blockMapSize: 233482\n"
+        f"path: {url}\n"
+        f"sha512: {sha}\n"
+        "releaseDate: '2026-11-08T09:48:24.900Z'\n"
+    )
+
+
+class TestDevChannel(InstallerCase):
+    """--dev: AppImage из dev-канала по latest-linux-dev.yml с проверкой
+    sha512 И размера, без apt и без GitHub. Фикстуры — локальный HTTP-сервер:
+    yml и артефакт-заглушки лежат в tmp; настоящие 200 МБ не качаются."""
+
+    def setUp(self):
+        super().setUp()
+        self.artifact = self.tmp / "Plotina-Desktop-1.12.32-plotina.43-dev.42.AppImage"
+        self.artifact.write_text(FAKE_EXTRACT_APPIMAGE)
+        self.artifact.chmod(0o755)
+        self.base = self.serve(self.tmp)
+        self.xdg_mocks = {
+            "xdg-settings": MOCK_XDG_SETTINGS,
+            "update-desktop-database": MOCK_UPDATE_DESKTOP_DB,
+        }
+
+    def write_yml(self, url=None, sha=None, size=None, artifact=None):
+        data = (artifact or self.artifact).read_bytes()
+        y = dev_yml_text(
+            url if url is not None else f"{self.base}/{self.artifact.name}",
+            sha if sha is not None else dev_b64_sha512(data),
+            size if size is not None else len(data),
+        )
+        p = self.tmp / "latest-linux-dev.yml"
+        p.write_text(y)
+        return f"{self.base}/{p.name}"
+
+    # ----- успех: dev-артефакт ставится существующим AppImage-путём -----
+
+    def test_dev_flag_installs_verified_artifact_from_yml(self):
+        yml = self.write_yml()
+        proc = self.run_installer(["--dev"], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": yml, "ICON_SIZES": "16 512"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assert_sso_footer(proc)
+        binp = self.prefix / "bin" / "plotina-desktop"
+        self.assertTrue(binp.is_file() and os.access(binp, os.X_OK))
+        desktop = (self.prefix / "share" / "applications" / "plotina-desktop.desktop").read_text()
+        self.assertIn(f'Exec="{binp}"', desktop)
+        self.assertIn("Icon=plotina-desktop", desktop)
+        for size in ("16x16", "512x512"):
+            self.assertTrue((self.prefix / "share" / "icons" / "hicolor" / size
+                             / "apps" / "plotina-desktop.png").is_file(), size)
+
+    def test_dev_never_touches_apt_even_when_repo_is_available(self):
+        # sudo/apt/dpkg/gpg в PATH и PLOTINA_APPIMAGE_URL выставлен — --dev всё
+        # равно обязан взять yml и поставить AppImage.
+        yml = self.write_yml()
+        proc = self.run_installer(["--dev"], mocks=FULL_MOCKS,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": yml})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
+        for line in self.mock_log_lines():
+            self.assertNotIn("apt-get", line)
+            self.assertNotIn("dpkg", line)
+
+    def test_dev_hex_sha512_and_relative_url_accepted(self):
+        yml = self.write_yml(url=self.artifact.name,  # относительный — от папки yml
+                             sha=hashlib.sha512(self.artifact.read_bytes()).hexdigest())
+        proc = self.run_installer(["--dev"], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": yml})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
+
+    def test_dev_with_appimage_flag_combined(self):
+        # --appimage + --dev: оба про AppImage, dev берёт источник из yml.
+        yml = self.write_yml()
+        proc = self.run_installer(["--appimage", "--dev"], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": yml})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
+
+    # ----- отказ: нестыковка sha512/size ничего не устанавливает -----
+
+    def _assert_refused(self, proc, needle):
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("ОШИБКА", proc.stderr)
+        self.assertIn(needle, proc.stderr)
+        self.assertFalse((self.prefix / "bin" / "plotina-desktop").exists(),
+                         "отказанный dev-артефакт не должен ни ставиться, ни откатываться на stable")
+
+    def test_dev_sha512_mismatch_refused(self):
+        yml = self.write_yml(sha=dev_b64_sha512(b"tampered-bytes"))
+        proc = self.run_installer(["--dev"], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": yml})
+        self._assert_refused(proc, "sha512")
+
+    def test_dev_size_mismatch_refused(self):
+        yml = self.write_yml(size=self.artifact.stat().st_size + 1)
+        proc = self.run_installer(["--dev"], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": yml})
+        self._assert_refused(proc, "размер")
+
+    def test_dev_yml_without_complete_entry_refused(self):
+        p = self.tmp / "broken.yml"
+        p.write_text("version: 1.0\npath: x.AppImage\n")
+        proc = self.run_installer(["--dev"], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": f"{self.base}/{p.name}"})
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("files:", proc.stderr)
+
+    def test_dev_metadata_download_failure_refused(self):
+        proc = self.run_installer(["--dev"], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": "http://127.0.0.1:1/latest-linux-dev.yml"})
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("не удалось скачать dev-метаданные", proc.stderr)
+
+    # ----- конфликты флагов -----
+
+    def test_dev_and_deb_rejected_in_both_orders(self):
+        yml = self.write_yml()
+        for args in (["--dev", "--deb"], ["--deb", "--dev"]):
+            proc = self.run_installer(args, mocks=FULL_MOCKS,
+                                      extra_env={"PLOTINA_DEV_YAML_URL": yml})
+            self.assertNotEqual(proc.returncode, 0, args)
+            self.assertIn("--dev", proc.stderr)
+            self.assertIn("--deb", proc.stderr)
+
+    def test_dev_with_positional_file_rejected(self):
+        yml = self.write_yml()
+        proc = self.run_installer(["--dev", str(self.artifact)], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": yml})
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("позиционный", proc.stderr)
+
+    def test_dev_with_plotina_appimage_url_rejected(self):
+        yml = self.write_yml()
+        proc = self.run_installer(["--dev"], mocks=self.xdg_mocks,
+                                  extra_env={"PLOTINA_DEV_YAML_URL": yml,
+                                             "PLOTINA_APPIMAGE_URL": f"{self.base}/{self.artifact.name}"})
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("PLOTINA_APPIMAGE_URL", proc.stderr)
+
+    # ----- стабильный путь не затронут: без --dev yml не скачивается -----
+
+    def test_stable_appimage_ignores_dev_yml_entirely(self):
+        fake = make_fake_appimage(self.tmp)
+        proc = self.run_installer(
+            ["--appimage", str(fake)], mocks=FULL_MOCKS,
+            extra_env={"PLOTINA_DEV_YAML_URL": "http://127.0.0.1:1/never-fetched.yml"})
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue((self.prefix / "bin" / "plotina-desktop").is_file())
 
 
 class TestRealAppImage(InstallerCase):
