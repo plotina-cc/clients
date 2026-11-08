@@ -68,9 +68,22 @@ fi
 
 # ---- 2/3. icons + web --------------------------------------------------------
 bash scripts/build-icons.sh
-if [ ! -f web/index.html ] || [ -n "${LITE_DIST:-}" ]; then
+if [ -n "${LITE_DIST:-}" ]; then
   bash scripts/stage-web.sh
+elif [ ! -f web/index.html ]; then
+  echo "build-packages: web/index.html missing; set LITE_DIST to a freshly built patched Cinny dist" >&2
+  exit 1
+else
+  echo "build-packages: using existing web/ (LITE_DIST not set)"
 fi
+# A stale web/ from a previous upstream build is the exact failure that shipped
+# "Welcome to Cinny" and the Support button. Never package it silently.
+grep -q 'Plotina' web/index.html || {
+  echo "build-packages: web/index.html is not Plotina-branded; set LITE_DIST" >&2; exit 1; }
+grep -Raq 'Welcome to Plotina Lite Web' web/assets || {
+  echo "build-packages: web assets lack the Plotina welcome marker; set LITE_DIST" >&2; exit 1; }
+grep -Raq 'plotina-updates-page' web/assets || {
+  echo "build-packages: web assets lack the Plotina updates marker; set LITE_DIST" >&2; exit 1; }
 # electron + electron-builder must be installed (npm ci in CI; dev here).
 [ -x node_modules/.bin/electron-builder ] || { echo "run npm install first" >&2; exit 1; }
 
