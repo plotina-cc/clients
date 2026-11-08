@@ -1,0 +1,412 @@
+name: QA windows updater restart (no publish)
+
+# Independent QA for the "Restart became shutdown" fix (829d383) on a REAL
+# Windows runner. It builds three local, never-published QA installers from
+# this branch (versions 1.12.32-plotina.qa44/qa45/qa46, clearly outside the
+# real release namespace; nothing is uploaded anywhere) and drives the exact
+# lifecycle the fix changes:
+#   1. CONTROL (pre-fix argv):  installer with `/S --updated`     -> app dies, no relaunch (bug reproduced)
+#   2. FIX     (argv of 829d383): installer with `/S --updated --force-run` -> old PID exits, NEW PID gets a window and survives
+#   3. single-instance lock probe (why the old Linux direct-spawn died)
+#   4. proof that the SHIPPED app.asar (lib/updater.js) carries the fixed argv,
+#      and that tests/windows-restart-args.test.mjs is GREEN on real Windows.
+# No tags, no releases, no /srv, no main. Read-only permissions.
+
+on:
+  workflow_dispatch:
+
+run-name: "QA windows update-restart (installer lifecycle e2e)"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-windows-update-restart
+  cancel-in-progress: false
+
+env:
+  PNPM_VERSION: "11.23.0"
+  UPSTREAM_REPO: https://github.com/element-hq/element-web.git
+
+jobs:
+  # Same webapp assembly as the release pipeline, so the QA installers embed
+  # the very same asar (with the fixed updater.ts baked in).
+  webapp:
+    name: webapp (ubuntu, same as release pipeline)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Assemble the webapp
+        working-directory: element-desktop
+        env:
+          SENTRY_DSN: ${{ vars.SENTRY_DSN }}
+        run: scripts/prepare-webapp.sh --dest "$RUNNER_TEMP/webapp"
+
+      - name: Pack it for the build jobs
+        run: tar czf "$RUNNER_TEMP/webapp.tar.gz" -C "$RUNNER_TEMP/webapp" .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qa-webapp
+          path: ${{ runner.temp }}/webapp.tar.gz
+          retention-days: 1
+
+  windows-qa:
+    name: windows lifecycle QA (real windows-latest)
+    needs: webapp
+    runs-on: windows-latest
+    timeout-minutes: 150
+    env:
+      SRC: element-desktop/.build/element-web
+    steps:
+      - uses: actions/checkout@v4
+
+      # nx chokes on CRLF checkouts (same as the release pipeline).
+      - name: Git line endings
+        shell: bash
+        run: |
+          git config --system core.autocrlf false
+          git config --system core.eol lf
+
+      - name: Pin upstream
+        shell: bash
+        run: |
+          TAG="$(cat element-desktop/UPSTREAM_TAG)"
+          echo "upstream tag: $TAG"
+          git clone --depth 1 --branch "$TAG" "$UPSTREAM_REPO" "$SRC"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: qa-webapp
+          path: ${{ runner.temp }}/webapp
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: element-desktop/.build/element-web/apps/desktop/.node-version
+          cache: pnpm
+          cache-dependency-path: element-desktop/.build/element-web/pnpm-lock.yaml
+
+      - name: Desktop deps
+        working-directory: element-desktop/.build/element-web/apps/desktop
+        run: pnpm install --frozen-lockfile --filter element-desktop
+
+      - name: Unpack the webapp
+        shell: bash
+        run: |
+          WEBAPP_DIR="$PWD/$SRC/apps/desktop/webapp"
+          rm -rf "$WEBAPP_DIR"
+          mkdir -p "$WEBAPP_DIR"
+          cd "$RUNNER_TEMP/webapp"
+          tar xzf webapp.tar.gz -C "$WEBAPP_DIR"
+
+      - name: Pack webapp.asar
+        working-directory: element-desktop/.build/element-web/apps/desktop
+        shell: bash
+        run: |
+          pnpm run asar-webapp
+          LIST="$(pnpm exec asar list webapp.asar | tr '\\' '/')"
+          printf '%s\n' "$LIST" | grep -qx '/config.json'
+          echo "webapp.asar packed"
+
+      - name: Apply Plotina desktop sources (fixed updater.ts included)
+        shell: bash
+        run: |
+          cp "${{ github.workspace }}/element-desktop/desktop/updater.ts" "$SRC/apps/desktop/src/updater.ts"
+          cp "${{ github.workspace }}/element-desktop/desktop/icon.ts" "$SRC/apps/desktop/src/icon.ts"
+          rm -rf "$SRC/apps/desktop/build/icons"
+          cp -r "${{ github.workspace }}/element-desktop/build/icons" "$SRC/apps/desktop/build/icons"
+          if command -v python3 >/dev/null; then PY=python3; else PY=python; fi
+          "$PY" "${{ github.workspace }}/element-desktop/desktop/patch-shell.py" "$SRC/apps/desktop/src"
+
+      # The argv contract of the fix, executed by the real updater code on a
+      # real Windows runner (Node here is the .node-version pinned 24, which
+      # supports .ts type-stripping like the ubuntu updater-tests job).
+      - name: updater argv test on Windows
+        working-directory: element-desktop/desktop
+        shell: bash
+        run: node --test tests/windows-restart-args.test.mjs
+
+      - name: Build three QA installers (qa44 -> qa45 -> qa46)
+        working-directory: element-desktop/.build/element-web/apps/desktop
+        shell: bash
+        env:
+          VARIANT_PATH: variant.json
+          USE_HARD_LINKS: "false"
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          set -euo pipefail
+          cp "${{ github.workspace }}/element-desktop/build.plotina.json" variant.json
+          cp "${{ github.workspace }}/element-desktop/build/icon.png" build/icon.png
+          cp "${{ github.workspace }}/element-desktop/build/icon.ico" build/icon.ico
+          QA_DIR="$RUNNER_TEMP/qa"
+          mkdir -p "$QA_DIR"
+          for VER in 1.12.32-plotina.qa44 1.12.32-plotina.qa45 1.12.32-plotina.qa46; do
+            echo "::group::build $VER"
+            pnpm exec nx reset || true
+            VERSION="$VER" pnpm run build --publish never -w nsis \
+              --config.publish.provider=github \
+              --config.publish.owner=plotina-cc \
+              --config.publish.repo=clients \
+              --config.publish.releaseType=release \
+              --config.win.executableName=Plotina-Desktop \
+              "--config.nsis.artifactName=Plotina-Desktop-$VER-setup.exe"
+            # Prove the VERSION env really reached the metadata (else the
+            # three installers would not be three versions and the QA is moot).
+            grep -E "^version: $VER\$" dist/latest.yml
+            mkdir -p "$QA_DIR/$VER"
+            cp "dist/Plotina-Desktop-$VER-setup.exe" "$QA_DIR/$VER/"
+            cp dist/latest.yml "$QA_DIR/$VER/latest.yml"
+            echo "::endgroup::"
+          done
+          ls -lh "$QA_DIR"/*/*.exe
+
+      - name: Prove the shipped app.asar carries the fixed argv
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p qa-evidence
+          cd "$SRC/apps/desktop"
+          # extractFile needs native path separators on Windows (same trap the
+          # noise e2e hit), hence path.join.
+          node -e '
+          const { extractFile } = require("@electron/asar");
+          const path = require("path"), fs = require("fs");
+          const src = extractFile("dist/win-unpacked/resources/app.asar", path.join("lib", "updater.js")).toString();
+          const i = src.indexOf("\"--force-run\"");
+          if (i < 0) { console.error("compiled lib/updater.js has no --force-run"); process.exit(1); }
+          const seg = src.slice(Math.max(0, i - 500), i + 300);
+          for (const want of ["\"/S\"", "\"--updated\""]) {
+              if (!seg.includes(want)) { console.error("argv segment missing " + want + ":\n" + seg); process.exit(1); }
+          }
+          fs.writeFileSync(path.join(process.env.GITHUB_WORKSPACE, "qa-evidence", "shipped-lib-updater.js"), src);
+          fs.writeFileSync(path.join(process.env.GITHUB_WORKSPACE, "qa-evidence", "shipped-argv-segment.txt"), seg);
+          console.log("compiled app.asar lib/updater.js argv segment:\n" + seg);
+          '
+
+      - name: Windows lifecycle QA (control = bug, fixed argv = restart)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $EV = Join-Path $env:GITHUB_WORKSPACE 'qa-evidence'
+          New-Item -ItemType Directory -Force -Path $EV | Out-Null
+          Start-Transcript -Path (Join-Path $EV 'transcript.txt') -Append | Out-Null
+
+          $V1 = '1.12.32-plotina.qa44'; $V2 = '1.12.32-plotina.qa45'; $V3 = '1.12.32-plotina.qa46'
+          $QD = Join-Path $env:RUNNER_TEMP 'qa'
+          function Installer([string]$v) { Join-Path $QD "$v\Plotina-Desktop-$v-setup.exe" }
+          $flags = [ordered]@{}
+          function Log([string]$m) {
+              $line = "EVID|{0}|{1}" -f (Get-Date).ToString('o'), $m
+              Write-Host $line
+              Add-Content -Path (Join-Path $EV 'events.log') -Value $line
+          }
+          function Snap([string]$label) {
+              $ps = @(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue)
+              $d = ($ps | ForEach-Object { "pid=$($_.Id) win=$($_.MainWindowHandle)" }) -join ';'
+              Log "SNAP $label count=$($ps.Count) $d"
+              return , $ps
+          }
+          function Wait-Exit([int]$procId, [int]$sec) {
+              $dl = (Get-Date).AddSeconds($sec)
+              while ((Get-Date) -lt $dl) {
+                  if (-not (Get-Process -Id $procId -ErrorAction SilentlyContinue)) { return $true }
+                  Start-Sleep 2
+              }
+              return $false
+          }
+          function Wait-Windowed([int]$sec, [int]$exclude) {
+              $dl = (Get-Date).AddSeconds($sec)
+              while ((Get-Date) -lt $dl) {
+                  $p = @(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue |
+                         Where-Object { $_.MainWindowHandle -ne 0 -and $_.Id -ne $exclude })
+                  if ($p.Count -ge 1) { return $p[0] }
+                  Start-Sleep 2
+              }
+              return $null
+          }
+          function Shot([string]$name) {
+              try {
+                  Add-Type -AssemblyName System.Windows.Forms
+                  Add-Type -AssemblyName System.Drawing
+                  $b = New-Object System.Drawing.Bitmap 1280, 720
+                  $g = [System.Drawing.Graphics]::FromImage($b)
+                  $g.CopyFromScreen(0, 0, 0, 0, $b.Size)
+                  $b.Save((Join-Path $EV "$name.png"))
+                  $g.Dispose(); $b.Dispose()
+                  Log "SCREENSHOT $name.png saved"
+              } catch { Log "SCREENSHOT $name failed: $_" }
+          }
+          function KillAll([string]$why) {
+              Log "KILLALL $why"
+              & taskkill /IM Plotina-Desktop.exe /F /T 2>&1 | ForEach-Object { Log "  $_" }
+              Start-Sleep 3
+          }
+          function AsarAppVersion([string]$root) {
+              # package.json sits at the asar root: no separator trap here.
+              Push-Location 'element-desktop\.build\element-web\apps\desktop'
+              $js = 'const{extractFile}=require("@electron/asar");process.stdout.write(extractFile(process.argv[1],"package.json").toString())'
+              $json = node -e $js (Join-Path $root 'resources\app.asar')
+              Pop-Location
+              ($json | ConvertFrom-Json).version
+          }
+
+          Log "BEGIN installer files:"
+          foreach ($v in @($V1, $V2, $V3)) {
+              $i = Get-Item (Installer $v)
+              Log ("  {0} {1} MB FileVersion={2} ProductVersion={3}" -f $i.Name, [math]::Round($i.Length / 1MB), $i.VersionInfo.FileVersion, $i.VersionInfo.ProductVersion)
+          }
+
+          # fresh runner: nothing should run
+          KillAll 'pre-clean'
+
+          # ---- Phase 0: install qa44 (plain silent, first install) ----
+          $p = Start-Process (Installer $V1) -ArgumentList '/S' -Wait -PassThru
+          Log "INSTALL0 $V1 exit=$($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "base installer exited $($p.ExitCode)" }
+          Start-Sleep 5
+          $root = @(Get-ChildItem "$env:LOCALAPPDATA\Programs" -Directory -Filter 'Plotina*')[0].FullName
+          $appExe = Join-Path $root 'Plotina-Desktop.exe'
+          if (-not (Test-Path $appExe)) { throw "no $appExe after install" }
+          Log "INSTALL0 root=$root ProductVersion=$((Get-Item $appExe).VersionInfo.ProductVersion) asarVersion=$(AsarAppVersion $root)"
+
+          # ---- Phase 1: launch qa44, capture OLD pid, verify window ----
+          Start-Process $appExe
+          $w1 = $null
+          $dl = (Get-Date).AddSeconds(150)
+          while ((Get-Date) -lt $dl -and -not $w1) {
+              $c = @(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
+              if ($c.Count) { $w1 = $c[0] } else { Start-Sleep 2 }
+          }
+          if (-not $w1) { KillAll 'no-window-on-launch'; throw "qa44 app never opened a window" }
+          $oldPid = $w1.Id
+          Log "LAUNCH1 pid=$oldPid title='$($w1.MainWindowTitle)' handle=$($w1.MainWindowHandle)"
+          Snap 'phase1-running-qa44' | Out-Null
+          Shot '01-app-qa44-window'
+          $flags['Q1_old_app_ran_with_window'] = "PASS (pid=$oldPid, title='$($w1.MainWindowTitle)')"
+
+          # ---- Phase 1b: single-instance lock probe ----
+          $before = Snap 'probe-before'
+          $probe = Start-Process $appExe -PassThru
+          Start-Sleep 10
+          $after = Snap 'probe-after'
+          $probeGone = -not (Get-Process -Id $probe.Id -ErrorAction SilentlyContinue)
+          $oldAlive = $null -ne (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)
+          Log "LOCKPROBE second_pid=$($probe.Id) exited=$probeGone first_pid_alive=$oldAlive"
+          $flags['Q2_single_instance_lock'] = if ($probeGone -and $oldAlive) { "PASS (2nd instance exited, first kept the lock)" } else { "FAIL (probe=$($probe.Id) gone=$probeGone old_alive=$oldAlive)" }
+          # also look for the electron-main guard message in the app log dir
+          $logHits = ''
+          foreach ($d in @((Join-Path $env:APPDATA 'Plotina Desktop'), (Join-Path $env:APPDATA 'plotina-desktop'), (Join-Path $env:APPDATA 'Element'))) {
+              if (Test-Path $d) {
+                  $hits = Get-ChildItem $d -Recurse -Include *.log -ErrorAction SilentlyContinue | Select-String -Pattern 'Other instance' -SimpleMatch -ErrorAction SilentlyContinue | Select-Object -First 3
+                  if ($hits) { $logHits = ($hits | ForEach-Object { "$($_.Filename):$($_.LineNumber): $($_.Line.Trim())" }) -join ' || '; break }
+              }
+          }
+          if ($logHits) { Log "LOCKPROBE log: $logHits" } else { Log "LOCKPROBE no 'Other instance' line found in userData logs (guard was proven by process exit anyway)" }
+
+          # ---- Phase 2: CONTROL = the pre-fix argv (reproduces the bug) ----
+          $ctrl = Start-Process (Installer $V2) -ArgumentList '/S', '--updated' -Wait -PassThru
+          Log "CONTROL installer($V2) ['/S','--updated'] exit=$($ctrl.ExitCode)"
+          $gone = Wait-Exit $oldPid 120
+          Log "CONTROL old_pid=$oldPid exited=$gone"
+          Start-Sleep 60
+          $left = Snap 'control-after'
+          $bug = ($gone -and $left.Count -eq 0)
+          Log "BUG_REPRODUCED=$bug (pre-fix argv left NO app => 'update = shutdown')"
+          Shot '02-control-after-prefix-argv'
+          $flags['Q3_control_prefix_argv_bug'] = if ($bug) { "PASS - bug reproduced on real Windows: old pid $oldPid killed, NOTHING relaunched after 60s" } else { "INCONCLUSIVE - app did NOT die/relaunched as expected; processes left=$($left.Count)" }
+          $midVer = (Get-Item $appExe).VersionInfo.ProductVersion
+          $midAsar = AsarAppVersion $root
+          Log "CONTROL install happened: exe ProductVersion=$midVer asar version=$midAsar (expect $V2)"
+
+          # ---- Phase 3: FIX = the argv shipped in updater.ts (829d383) ----
+          Start-Process $appExe
+          $w2 = $null
+          $dl = (Get-Date).AddSeconds(150)
+          while ((Get-Date) -lt $dl -and -not $w2) {
+              $c = @(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
+              if ($c.Count) { $w2 = $c[0] } else { Start-Sleep 2 }
+          }
+          if (-not $w2) { throw "app would not start again after control phase" }
+          $old2 = $w2.Id
+          Log "LAUNCH2 pid=$old2 title='$($w2.MainWindowTitle)'"
+          $tFix0 = Get-Date
+          $fix = Start-Process (Installer $V3) -ArgumentList '/S', '--updated', '--force-run' -Wait -PassThru
+          Log "FIX installer($V3) ['/S','--updated','--force-run'] exit=$($fix.ExitCode)"
+          $gone2 = Wait-Exit $old2 150
+          Log "FIX old_pid=$old2 exited=$gone2"
+          if (-not $gone2) { KillAll 'fix-old-stuck'; throw "OLD process $old2 still alive 150s after the fixed installer run" }
+          $new = Wait-Windowed 150 $old2
+          $restart = $null -ne $new
+          if ($restart) {
+              $newPid = $new.Id
+              Log "FIX NEW pid=$newPid handle=$($new.MainWindowHandle) title='$($new.MainWindowTitle)' started_at=$($new.StartTime.ToString('o')) (installer run started $tFix0.ToString('o'))"
+          } else {
+              Snap 'fix-no-window' | Out-Null
+          }
+          Start-Sleep 45
+          $alive = if ($restart) { Get-Process -Id $newPid -ErrorAction SilentlyContinue } else { $null }
+          $reWindowed = $null -ne $alive -and $alive.MainWindowHandle -ne 0
+          Log "FIX survivor pid=$newPid alive=$($null -ne $alive) window=$reWindowed"
+          Snap 'phase3-restarted-qa46' | Out-Null
+          Shot '03-restarted-qa46-window'
+          $endVer = (Get-Item $appExe).VersionInfo.ProductVersion
+          $endAsar = AsarAppVersion $root
+          Log "FIX installed now: exe ProductVersion=$endVer asar version=$endAsar (expect $V3)"
+          $flags['Q4_old_process_died'] = if ($gone2) { "PASS (pid $old2 gone before relaunch)" } else { "FAIL" }
+          $flags['Q5_new_process_relaunched'] = if ($restart -and $alive) { "PASS (pid $newPid up, survived 45s)" } else { "FAIL (no relaunch after --force-run)" }
+          $flags['Q6_window_opened'] = if ($reWindowed) { "PASS ('$($alive.MainWindowTitle)')" } else { "FAIL" }
+          $flags['Q7_upgrade_applied'] = if ($endAsar -eq $V3) { "PASS (installed asar version=$endAsar)" } else { "FAIL (asar version=$endAsar)" }
+
+          # copy the app log dir for evidence
+          foreach ($d in @((Join-Path $env:APPDATA 'Plotina Desktop'), (Join-Path $env:APPDATA 'plotina-desktop'))) {
+              if (Test-Path $d) {
+                  $logs = Get-ChildItem $d -Recurse -Include *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 2
+                  foreach ($l in $logs) { Copy-Item $l.FullName (Join-Path $EV ("applog-" + $l.Name)) -ErrorAction SilentlyContinue; Log "APPCOPY $($l.FullName)" }
+                  break
+              }
+          }
+
+          KillAll 'final-cleanup'
+          Log "SUMMARY"
+          $sum = foreach ($k in $flags.Keys) { "- **$k**: $($flags[$k])" }
+          $sum | Add-Content -Path (Join-Path $EV 'qa-summary.md')
+          $sum | ForEach-Object { Write-Host $_ }
+          $hardFail = @($flags.Values | Where-Object { $_ -like 'FAIL*' })
+          if ($hardFail.Count) {
+              Write-Host "::error::Windows lifecycle QA FAILED: $($hardFail -join ' | ')"
+              throw "QA failed"
+          }
+          Stop-Transcript | Out-Null
+
+      - name: Job summary
+        if: always()
+        shell: pwsh
+        run: |
+          $f = Join-Path $env:GITHUB_WORKSPACE 'qa-evidence\qa-summary.md'
+          if (Test-Path $f) { (Get-Content $f -Raw) + "`n" | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_STEP_SUMMARY }
+          $e = Join-Path $env:GITHUB_WORKSPACE 'qa-evidence\events.log'
+          if (Test-Path $e) { $fence = '```'; (($fence, (Get-Content $e -Raw), $fence) -join "`n") | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_STEP_SUMMARY }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa-windows-evidence
+          path: qa-evidence/
+          retention-days: 14
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: qa-windows-installers
+          path: ${{ runner.temp }}/qa/*/*.exe
+          retention-days: 1
