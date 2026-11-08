@@ -17,6 +17,13 @@
 #     ${PREFIX:-$HOME/.local}.
 #   --deb forces the apt-repo install; it never installs a local file (a
 #     positional .deb with --deb is rejected). --appimage forces the AppImage.
+#   --dev installs the newest DEV-channel AppImage instead of stable: it
+#     fetches https://plotina.cc/dl/dev/lite/latest-lite-linux-dev.yml, takes
+#     the first files: entry, downloads that artifact, verifies BOTH sha512
+#     (base64 as published, or hex) and size, then installs it through the
+#     same AppImage path below. No apt, no GitHub. --dev conflicts with --deb
+#     and with a positional file or PLOTINA_LITE_APPIMAGE_URL (the yml is the
+#     source). PLOTINA_LITE_DEV_YAML_URL overrides the metadata URL (tests).
 #   A positional .deb path/URL is kept as a DEPRECATED direct-file install:
 #     the file is installed as-is via apt-get/dpkg and the machine is NOT
 #     subscribed to the repo, so apt will not track new builds for it.
@@ -38,6 +45,11 @@ set -euo pipefail
 
 APPIMAGE_URL="${PLOTINA_LITE_APPIMAGE_URL:-https://plotina.cc/dl/Plotina-Lite-Desktop.AppImage}"
 
+# Dev-channel metadata (electron-builder yml on our /dl/dev/lite mirror,
+# refreshed by the dev CI). --dev reads the first files: entry from it.
+# The URL is env-overridable for tests only.
+DEV_YAML_URL="${PLOTINA_LITE_DEV_YAML_URL:-https://plotina.cc/dl/dev/lite/latest-lite-linux-dev.yml}"
+
 # Signed flat apt repo for Plotina (https://plotina.cc/apt). The sources
 # line is copied verbatim from /apt/README.md; the keyring/list paths are
 # env-overridable for tests only — production writes the system files and
@@ -55,6 +67,7 @@ APP_COMMENT="Matrix client for plotina.cc"
 MIME_TYPES="x-scheme-handler/cc.plotina.chat;x-scheme-handler/matrix;"
 
 MODE="auto"
+DEV_MODE=0           # 1 = --dev: AppImage from the dev-channel yml
 DEB_SOURCE=""
 APP_SOURCE=""
 SUDO_CMD=()
@@ -65,29 +78,46 @@ die()  { echo "ERROR: $*" >&2; exit 1; }   # the ONLY output on failure
 
 usage() {
     cat <<'EOF'
-Usage: install-lite-electron.sh [--deb|--appimage] [PATH_or_URL]
+Usage: install-lite-electron.sh [--deb|--appimage|--dev] [PATH_or_URL]
   default: Debian/Ubuntu with sudo -> subscribe to the signed Plotina apt
            repo (https://plotina.cc/apt) and install plotina-lite-desktop
            from it; otherwise the AppImage into ${PREFIX:-$HOME/.local}
   --deb      apt-repo install only (never a local .deb file)
   --appimage AppImage only (override: PREFIX=...)
+  --dev      newest DEV-channel AppImage via latest-lite-linux-dev.yml:
+             the first files: entry is downloaded and verified by sha512
+             AND size before installing (same AppImage path); no apt, no
+             GitHub; conflicts with --deb, a positional file and
+             PLOTINA_LITE_APPIMAGE_URL
   PATH_or_URL  .AppImage source; a .deb file/URL is the DEPRECATED
                direct-file install (no repo subscription)
-  PLOTINA_LITE_APPIMAGE_URL  override the AppImage download source
-  PLOTINA_LITE_DEB_URL       deprecated: treated as a positional .deb source
+  PLOTINA_LITE_APPIMAGE_URL      override the AppImage download source
+  PLOTINA_LITE_DEV_YAML_URL      override the dev-channel metadata URL (--dev)
+  PLOTINA_LITE_DEB_URL           deprecated: treated as a positional .deb source
 EOF
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --deb)  [ "$MODE" = "appimage" ] && die "conflicting --deb and --appimage"; MODE="deb" ;;
+        --deb)
+            [ "$DEV_MODE" = 1 ] && die "--dev and --deb cannot be combined (--dev installs the dev AppImage without apt)"
+            [ "$MODE" = "appimage" ] && die "conflicting --deb and --appimage"; MODE="deb" ;;
         --appimage) [ "$MODE" = "deb" ] && die "conflicting --deb and --appimage"; MODE="appimage" ;;
+        --dev)
+            [ "$MODE" = "deb" ] && die "--dev and --deb cannot be combined (--dev installs the dev AppImage without apt)"
+            DEV_MODE=1; MODE="appimage" ;;
         -h|--help) usage; exit 0 ;;
         --*) die "unknown flag: $1" ;;
         *) case "$1" in *.deb) DEB_SOURCE="$1" ;; *) APP_SOURCE="$1" ;; esac ;;
     esac
     shift
 done
+if [ "$DEV_MODE" = 1 ] && [ -n "$APP_SOURCE" ]; then
+    die "--dev takes its source from $DEV_YAML_URL; a positional file ($APP_SOURCE) is not accepted"
+fi
+if [ "$DEV_MODE" = 1 ] && [ -n "${PLOTINA_LITE_APPIMAGE_URL:-}" ]; then
+    die "--dev takes its source from $DEV_YAML_URL; unset PLOTINA_LITE_APPIMAGE_URL"
+fi
 if [ -n "${PLOTINA_LITE_DEB_URL:-}" ] && [ -z "$DEB_SOURCE" ]; then
     # Default no longer downloads a .deb; keep the old variable as an
     # explicit-file override so existing scripted invocations still work.
@@ -131,6 +161,119 @@ obtain() {
         download "$url" "$TMP/$name" || die "download failed: $url"
         RESOLVED="$TMP/$name"
     fi
+}
+
+# --------- dev channel: latest-lite-linux-dev.yml parsing + verification ----
+# electron-builder writes the yml; the first files: entry is the current dev
+# build. url is absolute but relative forms resolve against the yml folder.
+# sha512 is base64 of the raw digest (as published); 128-hex is accepted too.
+# size is bytes. Both must match or nothing installs.
+parse_dev_yml() {
+    # $1: yml file. Sets DEV_URL/DEV_SHA512/DEV_SIZE from the FIRST complete
+    # files: entry; returns 1 when they cannot all be found.
+    local yml="$1" line t in_files=0
+    DEV_URL=""; DEV_SHA512=""; DEV_SIZE=""
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        t="${line#"${line%%[![:space:]]*}"}"   # strip leading whitespace
+        if [ "$in_files" -eq 0 ]; then
+            [ "$t" = "files:" ] && in_files=1
+            continue
+        fi
+        # an unindented top-level key ends the files: list
+        if [ -n "$t" ] && [ "$line" = "$t" ]; then
+            break
+        fi
+        case "$t" in
+            "- url:"*)  [ -n "$DEV_URL" ]    || DEV_URL="${t#*- url:}" ;;
+            "sha512:"*) [ -n "$DEV_SHA512" ] || DEV_SHA512="${t#sha512:}" ;;
+            "size:"*)   [ -n "$DEV_SIZE" ]   || DEV_SIZE="${t#size:}" ;;
+        esac
+        DEV_URL="${DEV_URL#"${DEV_URL%%[![:space:]]*}"}"
+        DEV_SHA512="${DEV_SHA512#"${DEV_SHA512%%[![:space:]]*}"}"
+        DEV_SIZE="${DEV_SIZE#"${DEV_SIZE%%[![:space:]]*}"}"
+    done < "$yml"
+    case "$DEV_URL" in
+        http://*|https://*) ;;
+        "") return 1 ;;
+        /*) local scheme host
+            scheme="${DEV_YAML_URL%%://*}"; host="${DEV_YAML_URL#*://}"; host="${host%%/*}"
+            DEV_URL="$scheme://$host$DEV_URL" ;;
+        *)  DEV_URL="${DEV_YAML_URL%/*}/$DEV_URL" ;;
+    esac
+    [ -n "$DEV_URL" ] && [ -n "$DEV_SHA512" ] && [ -n "$DEV_SIZE" ] || return 1
+    case "$DEV_SIZE" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    return 0
+}
+
+sha512_hex_to_b64() {
+    # hex digest -> standard base64 in pure bash (no external base64 needed
+    # on the user's machine).
+    local hex="$1"
+    local chars='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+    local -a v=()
+    local i n out="" b0 b1 b2 triple o1 o2 o3 o4
+    for ((i = 0; i < ${#hex}; i += 2)); do
+        v+=( "$(( 16#${hex:i:2} ))" )
+    done
+    n=${#v[@]}
+    for ((i = 0; i < n; i += 3)); do
+        b0=${v[i]}; b1=${v[i + 1]:-0}; b2=${v[i + 2]:-0}
+        triple=$(( (b0 << 16) | (b1 << 8) | b2 ))
+        o1=$(( (triple >> 18) & 63 )); o2=$(( (triple >> 12) & 63 ))
+        o3=$(( (triple >> 6) & 63 ));  o4=$(( triple & 63 ))
+        out+="${chars:o1:1}${chars:o2:1}"
+        if (( i + 1 < n )); then out+="${chars:o3:1}"; else out+="="; fi
+        if (( i + 2 < n )); then out+="${chars:o4:1}"; else out+="="; fi
+    done
+    printf '%s' "$out"
+}
+
+verify_dev_artifact() {
+    # $1: file, $2: expected sha512 (base64 or hex), $3: expected size.
+    # 0 = both match; 1 = refusal, reason in DEV_VERIFY_REASON.
+    local file="$1" want="$2" want_size="$3"
+    DEV_VERIFY_REASON=""
+    command -v sha512sum >/dev/null 2>&1 || { DEV_VERIFY_REASON="sha512sum not found in PATH"; return 1; }
+    local size actual_hex want_cmp actual_cmp
+    size="$(wc -c < "$file")"
+    size="${size//[[:space:]]/}"
+    if [ "$size" != "$want_size" ]; then
+        DEV_VERIFY_REASON="size $size != $want_size from the yml"
+        return 1
+    fi
+    actual_hex="$(sha512sum -- "$file")"
+    actual_hex="${actual_hex%% *}"
+    actual_hex="${actual_hex,,}"
+    if [[ "$want" =~ ^[0-9a-fA-F]{128}$ ]]; then
+        want_cmp="${want,,}"; actual_cmp="$actual_hex"
+    elif [[ "$want" =~ ^[A-Za-z0-9+/]+={0,2}$ ]]; then
+        want_cmp="$want"; actual_cmp="$(sha512_hex_to_b64 "$actual_hex")"
+    else
+        DEV_VERIFY_REASON="sha512 in the yml is neither base64 nor hex: $want"
+        return 1
+    fi
+    if [ "$want_cmp" != "$actual_cmp" ]; then
+        DEV_VERIFY_REASON="sha512 mismatch (expected $want)"
+        return 1
+    fi
+    return 0
+}
+
+dev_resolve_appimage() {
+    # --dev: yml -> first files: entry -> download -> sha512+size -> RESOLVED.
+    # Any mismatch is fatal: a refused dev artifact never falls back to stable.
+    download "$DEV_YAML_URL" "$TMP/latest-lite-linux-dev.yml" \
+        || die "download failed: $DEV_YAML_URL"
+    parse_dev_yml "$TMP/latest-lite-linux-dev.yml" \
+        || die "no complete first files: entry (url/sha512/size) in $DEV_YAML_URL"
+    download "$DEV_URL" "$TMP/dev-Plotina-Lite-Desktop.AppImage" \
+        || die "download failed: $DEV_URL"
+    verify_dev_artifact "$TMP/dev-Plotina-Lite-Desktop.AppImage" "$DEV_SHA512" "$DEV_SIZE" \
+        || die "dev artifact refused: $DEV_URL — $DEV_VERIFY_REASON; nothing installed"
+    RESOLVED="$TMP/dev-Plotina-Lite-Desktop.AppImage"
 }
 
 refresh_desktop_db() {
@@ -257,7 +400,13 @@ install_appimage() {
     desktop="$PREFIX/share/applications/$DESKTOP_NAME"
     icon_dir="$PREFIX/share/icons/hicolor"
 
-    obtain "$APP_SOURCE" "$APPIMAGE_URL" "Plotina-Lite-Desktop.AppImage"
+    # --dev: verified dev-channel artifact from the yml; the stable URL and a
+    # positional file are not used here (both rejected during arg parsing).
+    if [ "$DEV_MODE" = 1 ]; then
+        dev_resolve_appimage
+    else
+        obtain "$APP_SOURCE" "$APPIMAGE_URL" "Plotina-Lite-Desktop.AppImage"
+    fi
     appimage="$RESOLVED"
 
     install -d "$PREFIX/bin" "$(dirname "$desktop")"

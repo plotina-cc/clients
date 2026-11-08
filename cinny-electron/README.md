@@ -39,7 +39,11 @@ cinny-electron/
   scripts/fix-deb.sh        # restore hyphenated dpkg-sortable Version
   scripts/stage-release-assets.mjs  # stable aliases + SHA256SUMS (+latest*.yml fallback)
   scripts/verify-release-assets.mjs # release gate: verify version+hashes+metadata, assemble upload dir
-  scripts/install-lite-electron.sh  # silent curl|bash installer (apt-repo deb / AppImage paths)
+  scripts/install-lite-electron.sh  # silent curl|bash installer (apt-repo deb /
+                            #   AppImage paths; --dev installs the newest
+                            #   dev-channel AppImage from
+                            #   /dl/dev/lite/latest-lite-linux-dev.yml with
+                            #   sha512+size verification, no apt, no GitHub)
   scripts/qa-linux-package.sh       # packaged smoke: xprop identity + full qa.mjs
   scripts/test-updater.mjs  # updater unit tests (feed parsing, version ordering)
   scripts/typecheck.mjs     # node --check over src/, scripts/, tests/
@@ -230,6 +234,14 @@ and installs.
   layout, `latest-lite-linux-dev.yml` + artifacts) — use it together with
   `PLOTINA_QA_UPDATES=1`/`PLOTINA_UPDATE_FEED_URL`, which resolves the file name
   per channel.
+* Fresh installs on the dev channel: `install-lite-electron.sh --dev` reads
+  `https://plotina.cc/dl/dev/lite/latest-lite-linux-dev.yml`, downloads the
+  first `files:` AppImage, verifies its sha512 (base64 or hex) **and** size,
+  then installs it through the normal AppImage path — no apt, no GitHub, no
+  fallback to stable on a failed check. `--dev` with `--deb`, a positional
+  file or `PLOTINA_LITE_APPIMAGE_URL` is rejected; `PLOTINA_LITE_DEV_YAML_URL`
+  overrides the metadata URL for tests (`cinny/tests/test_install_lite_electron.py`
+  runs it against local fixture metadata/stub artifacts).
 
 ## Status / open items
 
