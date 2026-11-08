@@ -33,7 +33,7 @@
     "theme": "custom-Plotina Mint",
     "custom_themes": [
       {
-        "name": "Plotina Mint",
+        "name": "Mint Light",
         "is_dark": false,
         "colors": {
           "accent-color": "#17795a",
@@ -52,7 +52,7 @@
         }
       },
       {
-        "name": "Plotina Mint Dark",
+        "name": "Mint Dark",
         "is_dark": true,
         "colors": {
           "accent-color": "#7ee2b8",
