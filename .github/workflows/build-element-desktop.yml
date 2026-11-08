@@ -80,7 +80,13 @@ jobs:
         # update-channel.test.mjs guards the opt-in Dev channel: feed selection,
         # dev version comparison, metadata parsing, and the confirmed
         # "return to stable" behaviour.
-        run: node --test tests/linux-updater.test.mjs tests/update-feed.test.mjs tests/update-channel.test.mjs
+        # update-restart.test.mjs is a real-process regression for the
+        # "Restart became shutdown" bug: the relaunched instance must only
+        # start after the old PID died and must survive (Linux helper path).
+        # windows-restart-args.test.mjs pins the silent-NSIS argument contract
+        # (/S --updated --force-run) that makes the Windows update relaunch.
+        # stable-direct-feed.test.mjs guards the direct /dl stable feed.
+        run: node --test tests/linux-updater.test.mjs tests/update-feed.test.mjs tests/update-channel.test.mjs tests/stable-direct-feed.test.mjs tests/update-restart.test.mjs tests/windows-restart-args.test.mjs
 
   # One webapp for both platforms: the desktop shell embeds a fixed asar, so the
   # overlay has to be applied once and handed to the packaging jobs.
