@@ -14,6 +14,11 @@ name: QA windows updater restart (no publish)
 
 on:
   workflow_dispatch:
+  # self-trigger while this file only lives on the QA branch (GitHub has not
+  # registered the dispatch button for unlisted workflows yet).
+  push:
+    branches: [qa/windows-update-restart]
+    paths: [".github/workflows/qa-windows-update-restart.yml"]
 
 run-name: "QA windows update-restart (installer lifecycle e2e)"
 
