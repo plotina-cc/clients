@@ -1,13 +1,16 @@
 // Flow tests for the channel-aware updater (src/updater.js) driven with the
 // fake electron + a fake fetch, so no network and no Electron are involved:
 //
-//   F1 stable channel reads ONLY the GitHub releases listing (never dev URLs)
+//   F1 stable channel reads ONLY the direct edge feed (https://plotina.cc/dl
+//      metadata + stable alias) — never the GitHub API, never a dev URL
 //   F2 dev channel reads the dev-latest direct URL and installs the dev build
 //   F3 a -dev. build advertised on the STABLE feed is refused (never offered)
 //   F4 'Вернуться на стабильный' installs a LOWER stable version (downgrade)
 //   F5 an automatic check never downgrades
 //   F6 the preload IPC contract (get/set + confirmation + return-to-stable)
 //   F7 feed/asset metadata parsing for a dev feed file (deb-first selection)
+//   F8 stable feed coordinates fall back to plotina-cc/clients
+//   F9 a size mismatch on the /dl artifact is refused; the install untouched
 //
 // node tests/updater-channel-flow.test.mjs
 'use strict';
@@ -23,7 +26,10 @@ const { installElectronStub } = require('./helpers/electron-stub.cjs');
 const policy = require('../src/update-channel.js');
 
 const DEV_BASE = 'https://github.com/plotina-cc/clients/releases/download/dev-latest';
-const API_URL = 'https://api.github.com/repos/plotina-cc/clients/releases?per_page=100';
+// The stable feed is the edge host, served here by the fetch stub from local
+// fixtures — exactly the URLs pull-release.py maintains in /srv/dl.
+const DL_YML = 'https://plotina.cc/dl/latest-lite-linux.yml';
+const DL_ART = 'https://plotina.cc/dl/Plotina-Lite-Desktop.AppImage';
 
 // ------------------------------------------------------------------ fixtures
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plotina-flow-'));
@@ -54,13 +60,14 @@ const sha512b64 = (buf) => crypto.createHash('sha512').update(buf).digest('base6
 const artifactBytes = (label) => Buffer.from(`#!/bin/sh\necho '${label}'\n` + 'x'.repeat(4096));
 const aiName = (version) => `Plotina-Lite-Desktop-${version}-x86_64.AppImage`;
 
-/** latest-lite-linux-dev.yml / latest-linux.yml body, deb listed FIRST (the trap
- *  the AppImage picker must survive) with per-file sha512/size. */
-function linuxYml({ version, bytes }) {
+/** latest-lite-linux-dev.yml / /dl/latest-lite-linux.yml body, deb listed
+ *  FIRST (the trap the AppImage picker must survive) with per-file
+ *  sha512/size. sizeOffset forges the claimed AppImage byte count (F9). */
+function linuxYml({ version, bytes, sizeOffset = 0 }) {
   const file = aiName(version);
   return `version: ${version}\nfiles:\n  - url: Plotina-Lite-Desktop-${version}-amd64.deb\n` +
     `    sha512: ${sha512b64(Buffer.from('deb-bytes'))}\n    size: 9\n  - url: ${file}\n` +
-    `    sha512: ${sha512b64(bytes)}\n    size: ${bytes.length}\npath: ${file}\n` +
+    `    sha512: ${sha512b64(bytes)}\n    size: ${bytes.length + sizeOffset}\npath: ${file}\n` +
     `sha512: ${sha512b64(bytes)}\nreleaseDate: '2026-11-07T10:00:00.000Z'\n`;
 }
 
@@ -77,21 +84,13 @@ function serve(routes) {
     return new Response(JSON.stringify(hit), { status: 200, headers: { 'content-type': 'application/json' } });
   };
 }
-const ghRelease = (version, bytes, metaFile = 'latest-lite-linux.yml') => {
-  const ymlUrl = `https://github.com/plotina-cc/clients/releases/download/v${version}/${metaFile}`;
-  const artUrl = `https://github.com/plotina-cc/clients/releases/download/v${version}/${aiName(version)}`;
-  return {
-    routes: {
-      [ymlUrl]: linuxYml({ version, bytes }),
-      [artUrl]: bytes,
-      [API_URL]: [{ tag_name: `v${version}`, draft: false, prerelease: false, assets: [
-        { name: metaFile, browser_download_url: ymlUrl },
-        { name: aiName(version), browser_download_url: artUrl },
-      ] }],
-    },
-    ymlUrl, artUrl,
-  };
-};
+/** Edge /dl fixture: metadata naming the VERSIONED artifact, plus the stable
+ *  alias bytes — byte-identical, exactly how pull-release.py mirrors them.
+ *  The updater must download the ALIAS, never the versioned name. */
+const dlRelease = (version, bytes, { sizeOffset = 0 } = {}) => ({
+  routes: { [DL_YML]: linuxYml({ version, bytes, sizeOffset }), [DL_ART]: bytes },
+  ymlUrl: DL_YML, artUrl: DL_ART,
+});
 
 function resetChannel(channelName) {
   state.statuses.length = 0;
@@ -119,21 +118,26 @@ const appImageBytes = () => fs.readFileSync(appImagePath);
 let n = 0;
 const t = async (name, fn) => { await fn(); n++; console.log('ok', name); };
 
-await t('F1 stable channel reads the release listing only, never a dev URL', async () => {
+await t('F1 stable channel reads the direct /dl feed only: metadata + alias, never the API', async () => {
   const version = '4.12.8-plotina.19';
   const bytes = artifactBytes('stable-19');
-  const rel = ghRelease(version, bytes);
+  const rel = dlRelease(version, bytes);
   const devYml = `${DEV_BASE}/latest-lite-linux-dev.yml`;
-  globalThis.fetch = serve({ ...rel.routes, [devYml]: linuxYml({ version: '4.12.8-plotina.99-dev.9', bytes }) });
+  globalThis.fetch = serve({
+    ...rel.routes,
+    [devYml]: linuxYml({ version: '4.12.8-plotina.99-dev.9', bytes }),
+    'https://api.github.com/repos/plotina-cc/clients/releases?per_page=100': 'MUST NOT BE CALLED',
+  });
   resetChannel('stable');
   fs.writeFileSync(appImagePath, '#!/bin/sh\necho running-image\n');
   state.version = '4.12.8-plotina.18';
   state.dialogResponse = 1;
   await updater.runCheck(true);
-  assert.ok(requested.includes(API_URL), 'listed GitHub releases');
-  assert.ok(requested.includes(rel.ymlUrl), 'read latest-lite-linux.yml');
-  assert.ok(requested.includes(rel.artUrl), 'downloaded the AppImage asset');
-  assert.ok(!requested.some((u) => u.includes('dev-latest') || u.includes('latest-lite-linux-dev')), `no dev URL: ${requested}`);
+  // Exactly the two direct edge GETs: no api.github.com release listing and
+  // no download of the versioned fileName the metadata names — /dl serves
+  // the stable alias with the same verified bytes.
+  assert.deepStrictEqual(requested, [DL_YML, DL_ART], `direct edge URLs only: ${requested}`);
+  assert.ok(!requested.some((u) => u.includes('github.com')), `no GitHub at all: ${requested}`);
   assert.strictEqual(statusFor('available').channel, 'stable');
   assert.strictEqual(statusFor('available').version, version);
   assert.strictEqual(statusFor('downloaded').channel, 'stable');
@@ -151,8 +155,8 @@ await t('F2 dev channel reads the dev-latest direct URL and swaps in the dev bui
   globalThis.fetch = serve({
     [devYml]: linuxYml({ version, bytes }),
     [devArt]: bytes,
-    [API_URL]: 'SHOULD NOT BE CALLED',
-    [`${DEV_BASE}/latest-linux.yml`]: 'SHOULD NOT BE CALLED',
+    [DL_YML]: 'SHOULD NOT BE CALLED',
+    [DL_ART]: 'SHOULD NOT BE CALLED',
   });
   switchTo('dev'); // drops F1's pending stable image
   fs.writeFileSync(appImagePath, '#!/bin/sh\necho stable-image\n');
@@ -168,14 +172,13 @@ await t('F2 dev channel reads the dev-latest direct URL and swaps in the dev bui
 await t('F3 a dev build advertised on the stable feed is never offered', async () => {
   const version = '4.12.8-plotina.20-dev.1';
   const bytes = artifactBytes('dev-on-stable');
-  const rel = ghRelease(version, bytes);
+  const rel = dlRelease(version, bytes);
   globalThis.fetch = serve({ ...rel.routes });
   switchTo('stable');
   fs.writeFileSync(appImagePath, '#!/bin/sh\necho untouched\n');
   state.version = '4.12.8-plotina.18';
   await updater.runCheck(true);
-  assert.ok(requested.includes(rel.ymlUrl), 'the metadata was inspected');
-  assert.ok(!requested.includes(rel.artUrl), 'the artifact was NOT downloaded');
+  assert.deepStrictEqual(requested, [DL_YML], 'the metadata was inspected, the artifact NOT downloaded');
   assert.strictEqual(statusFor('up-to-date').plan, 'foreign');
   assert.strictEqual(statusFor('up-to-date').offered, version);
   assert.strictEqual(appImageBytes().toString(), '#!/bin/sh\necho untouched\n', 'install untouched');
@@ -185,7 +188,7 @@ await t('F3 a dev build advertised on the stable feed is never offered', async (
 await t('F4 return-to-stable installs a lower stable version (explicit downgrade)', async () => {
   const stableVersion = '4.12.8-plotina.19';
   const bytes = artifactBytes('stable-19');
-  const rel = ghRelease(stableVersion, bytes);
+  const rel = dlRelease(stableVersion, bytes);
   const devYml = `${DEV_BASE}/latest-lite-linux-dev.yml`;
   globalThis.fetch = serve({ ...rel.routes, [devYml]: linuxYml({ version: '4.12.8-plotina.19-dev.9', bytes }) });
   switchTo('dev');
@@ -197,9 +200,9 @@ await t('F4 return-to-stable installs a lower stable version (explicit downgrade
   assert.strictEqual(res.ok, true);
   assert.strictEqual(res.channel, 'stable');
   assert.strictEqual(policy.readChannel(profile, {}).channel, 'stable', 'preference pinned to stable');
-  assert.ok(requested.includes(API_URL) && requested.includes(rel.ymlUrl) && requested.includes(rel.artUrl),
-    `stable feed used: ${requested}`);
+  assert.ok(requested.includes(DL_YML) && requested.includes(DL_ART), `edge stable feed used: ${requested}`);
   assert.ok(!requested.some((u) => u.includes('dev-latest')), 'dev feed not read for the stable return');
+  assert.ok(!requested.some((u) => u.includes('api.github.com')), 'no API listing on the stable return');
   const dl = statusFor('downloaded');
   assert.strictEqual(dl.version, stableVersion);
   assert.strictEqual(dl.downgrade, true);
@@ -297,6 +300,24 @@ await t('F8 stable feed coordinates fall back to plotina-cc/clients without app-
   assert.deepStrictEqual([fallback.owner, fallback.repo, fallback.source], ['plotina-cc', 'clients', 'builtin']);
   fs.writeFileSync(path.join(resources, 'app-update.yml'),
     'provider: github\nowner: plotina-cc\nrepo: clients\nreleaseType: release\n');
+});
+
+await t('F9 a size mismatch on the /dl artifact is refused; the running image stays untouched', async () => {
+  const version = '4.12.8-plotina.25';
+  const bytes = artifactBytes('wrong-size');
+  const rel = dlRelease(version, bytes, { sizeOffset: 1 }); // claims one byte more than served
+  globalThis.fetch = serve({ ...rel.routes });
+  switchTo('stable');
+  fs.writeFileSync(appImagePath, '#!/bin/sh\necho untouched\n');
+  state.version = '4.12.8-plotina.18';
+  await updater.runCheck(true);
+  assert.ok(requested.includes(DL_ART), 'the alias was fetched (the mismatch is found on it)');
+  const err = statusFor('error');
+  assert.ok(err && /size mismatch/.test(err.message), `size mismatch must surface: ${JSON.stringify(state.statuses)}`);
+  assert.ok(!state.statuses.some((p) => p.state === 'downloaded'), 'nothing is reported downloaded');
+  assert.strictEqual(appImageBytes().toString(), '#!/bin/sh\necho untouched\n', 'running image untouched');
+  assert.ok(!fs.existsSync(`${path.dirname(appImagePath)}/${aiName(version)}.plotina-new`), 'no staged file survives');
+  assert.ok(!fs.existsSync(`${path.dirname(appImagePath)}/${aiName(version)}.plotina-new.part`), 'no .part survives');
 });
 
 fs.rmSync(root, { recursive: true, force: true });

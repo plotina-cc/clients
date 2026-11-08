@@ -2,10 +2,14 @@
 //
 // Two channels, one app:
 //
-//   stable  the shipping feed: GitHub releases of plotina-cc/clients, the
-//           electron-builder metadata next to the artifacts
-//           (latest.yml for NSIS, latest-linux.yml for AppImage). Unchanged
-//           behaviour: newest non-prerelease release that carries the file.
+//   stable  the shipping feed: the electron-builder metadata on OUR EDGE —
+//           https://plotina.cc/dl/latest-lite-linux.yml (AppImage) and
+//           https://plotina.cc/dl/latest-lite.yml (NSIS). One direct GET, no
+//           api.github.com listing, no API quota. The artifact comes from the
+//           stable alias on the same path (/dl/Plotina-Lite-Desktop.AppImage
+//           / /dl/Plotina-Lite-Desktop-setup.exe); infra pull-release.py
+//           mirrors both from the newest Lite release, so the metadata's
+//           sha512+size describe exactly the bytes /dl serves.
 //   dev     opt-in test feed on GitHub (NOT the edge host): one fixed release
 //           tag `dev-latest` SHARED between products, whose assets are
 //           re-uploaded on command, read by direct download URL — no release
@@ -48,9 +52,17 @@ const DEV_FEED_BASE = `https://github.com/${RELEASE_OWNER}/${RELEASE_REPO}/relea
 // Product-scoped stable metadata. The repository hosts several clients;
 // generic latest.yml/latest-linux.yml belong to Plotina Desktop, which older
 // Desktop builds scan without a tag filter. Lite must never publish those
-// names or an old Desktop can install a Lite release over itself.
+// names or an old Desktop can install a Lite release over itself. The same
+// product-scoped names are mirrored to the edge /dl, which IS the stable
+// feed now (see the header; DL_BASE + these file names).
 const WINDOWS_METADATA_FILE = 'latest-lite.yml';
 const LINUX_METADATA_FILE = 'latest-lite-linux.yml';
+// Direct edge feed (infra scripts/pull-release.py mirrors the newest stable
+// Lite release under exactly these names; the alias bytes are byte-identical
+// to the versioned artifacts the metadata names).
+const DL_BASE = 'https://plotina.cc/dl';
+const WINDOWS_ARTIFACT_ALIAS = 'Plotina-Lite-Desktop-setup.exe';
+const LINUX_ARTIFACT_ALIAS = 'Plotina-Lite-Desktop.AppImage';
 // The dev release `dev-latest` is shared the same way: Desktop publishes its
 // rolling latest-dev.yml / latest-linux-dev.yml there, so Lite reads (and its
 // CI publishes) only the product-scoped dev names.
@@ -72,12 +84,40 @@ function metadataFileFor({ installKind, channel = DEFAULT_CHANNEL } = {}) {
 }
 
 /** Direct download URL of the dev metadata, or null when the channel is not
- *  dev (the stable channel is listed through the GitHub API instead). */
+ *  dev (the stable channel is read from the edge /dl feed instead — see
+ *  stableFeedUrl; dev is the only path that still uses github.com, and only
+ *  as a direct release asset, never the API). */
 function devFeedUrl({ installKind, channel = DEFAULT_CHANNEL, devFeedBase = DEV_FEED_BASE } = {}) {
   if (channel !== DEV) return null;
   const file = metadataFileFor({ installKind, channel: DEV });
   if (!file) return null;
   return `${devFeedBase.replace(/\/$/, '')}/${file}`;
+}
+
+/**
+ * Stable feed: direct metadata URL on the edge host for this install kind —
+ * https://plotina.cc/dl/latest-lite-linux.yml (AppImage) or
+ * https://plotina.cc/dl/latest-lite.yml (NSIS). null for kinds that never
+ * self-update (package/msi/unknown/dev) and for the dev channel. dlBase is a
+ * parameter so local-QA runs can point at a fixture server.
+ */
+function stableFeedUrl({ installKind, channel = DEFAULT_CHANNEL, dlBase = DL_BASE } = {}) {
+  if (channel !== STABLE) return null;
+  const file = metadataFileFor({ installKind, channel: STABLE });
+  if (!file) return null;
+  return `${dlBase.replace(/\/$/, '')}/${file}`;
+}
+
+/**
+ * Stable artifact: the versionless alias on the same edge path. The metadata
+ * names the VERSIONED file, but /dl serves byte-identical copies under these
+ * fixed names, so this URL — not the metadata fileName — is what to download,
+ * verified against the metadata's sha512+size.
+ */
+function stableArtifactUrl({ installKind, dlBase = DL_BASE } = {}) {
+  if (installKind !== 'appimage' && installKind !== 'nsis') return null;
+  const alias = installKind === 'appimage' ? LINUX_ARTIFACT_ALIAS : WINDOWS_ARTIFACT_ALIAS;
+  return `${dlBase.replace(/\/$/, '')}/${alias}`;
 }
 
 /** QA/local feed override (PLOTINA_QA_UPDATES=1): metadata and artifacts sit
@@ -259,9 +299,10 @@ const UI_TEXT = {
 module.exports = {
   STABLE, DEV, CHANNELS, DEFAULT_CHANNEL, CHANNEL_FILE_NAME, CHANNEL_ENV,
   RELEASE_OWNER, RELEASE_REPO, DEV_RELEASE_TAG, DEV_FEED_BASE,
+  DL_BASE, WINDOWS_ARTIFACT_ALIAS, LINUX_ARTIFACT_ALIAS,
   WINDOWS_METADATA_FILE, LINUX_METADATA_FILE, DEV_WINDOWS_METADATA_FILE, DEV_LINUX_METADATA_FILE,
   SELF_UPDATE_KINDS,
-  isSelfUpdateKind, metadataFileFor, devFeedUrl, qaFeedUrl, resolveDevFeedBase,
+  isSelfUpdateKind, metadataFileFor, devFeedUrl, stableFeedUrl, stableArtifactUrl, qaFeedUrl, resolveDevFeedBase,
   versionTokens, compareVersions, isVersionNewer, isVersionLower,
   isDevVersion, isStableVersion, channelOfVersion, pickHighestVersion,
   isCandidateAllowed, planUpdate,

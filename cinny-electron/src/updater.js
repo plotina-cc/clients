@@ -1,8 +1,8 @@
 // Plotina Lite Desktop updater (Electron).
 //
 // Adapted from element-desktop/desktop/updater.ts (the proven reference:
-// GitHub releases + electron-builder latest.yml/latest-linux.yml metadata +
-// sha512 + AppImage atomic swap + NSIS silent `/S --updated`). Differences for
+// electron-builder latest*.yml metadata + sha512 + size + AppImage atomic
+// swap + NSIS silent `/S --updated`). Differences for
 // Lite (per docs/LITE_ELECTRON_MIGRATION.md §7 and the Phase-2 decision):
 //
 //   * Install-kind detection lives here and is reported to the renderer over
@@ -22,9 +22,13 @@
 //     artifacts, same layout as a release). Production ignores both.
 //   * Two update channels. src/update-channel.js owns the policy (URLs, the
 //     version grammar, the downgrade rules, the persisted preference, the
-//     strings); this module is the glue. 'stable' is the existing GitHub
-//     releases listing, unchanged. 'dev' is opt-in and reads the fixed
-//     `dev-latest` release by direct download URL — no API call, no quota.
+//     strings); this module is the glue. 'stable' is the DIRECT edge feed:
+//     one GET of https://plotina.cc/dl/latest-lite-linux.yml (AppImage) /
+//     /dl/latest-lite.yml (NSIS) and the artifact from the stable alias
+//     /dl/Plotina-Lite-Desktop.AppImage / /dl/Plotina-Lite-Desktop-setup.exe
+//     — no api.github.com call anywhere on the stable path, no release
+//     listing, no anonymous rate limit. 'dev' is opt-in and reads the fixed
+//     `dev-latest` release by direct download URL — also no API call.
 //     The preference lives in <userData>/update-channel.json and is switched
 //     from the app/tray menu entry 'Канал обновлений: Стабильный / Dev' or by
 //     the renderer through the preload contract. Two invariants:
@@ -36,10 +40,12 @@
 //         that stable release and so needs a downgrade to leave.
 //
 // SECURITY (same trade-off as Plotina Desktop): builds are unsigned (no
-// Authenticode cert yet), so trust in an update = TLS to github.com /
-// api.github.com + the sha512 published in latest*.yml (dev feed included:
-// same verification, same placement code). This stops corruption and casual
-// tampering, not a compromised release. When a certificate is added,
+// Authenticode cert yet), so trust in an update = TLS to plotina.cc (our edge;
+// /dl is mirrored from the GitHub release by infra scripts/pull-release.py) or
+// to github.com for the dev feed, plus the sha512 AND size published in the
+// latest*.yml metadata (dev feed included: same verification, same placement
+// code). This stops corruption and casual tampering, not a compromised release
+// or a compromised edge host. When a certificate is added,
 // electron-builder writes `publisherName` into app-update.yml and this module
 // should verify it via PowerShell Get-AuthenticodeSignature before install.
 'use strict';
@@ -55,9 +61,8 @@ const { pipeline } = require('node:stream/promises');
 const { createWriteStream } = require('node:fs');
 const policy = require('./update-channel');
 
-const UPDATE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000; // GitHub API: 60 req/h/IP
+const UPDATE_POLL_INTERVAL_MS = 6 * 60 * 60 * 1000; // our own edge: a check is one small GET; stay polite
 const INITIAL_UPDATE_DELAY_MS = process.env.PLOTINA_QA_UPDATES === '1' ? 1000 : 30 * 1000;
-const MAX_METADATA_CHECKS = 5;
 const DOWNLOAD_PAGE = 'https://plotina.cc/dl/';
 const USER_AGENT = 'Plotina-Lite-Desktop';
 
@@ -279,11 +284,24 @@ function matchesSha512(file, expected) {
     .catch(() => false);
 }
 
+/** Second, cheap gate next to the digest: the byte count the metadata claims.
+ *  Absent/invalid sizes are skipped (older feeds), exactly like Desktop. */
+async function matchesSize(file, expected) {
+  if (expected === null || expected === undefined || !Number.isFinite(expected) || expected <= 0) return true;
+  try {
+    return (await fs.stat(file)).size === expected;
+  } catch {
+    return false;
+  }
+}
+
 // --------------------------------------------------------------- download
-async function downloadArtifact(url, dest, expectedSha512) {
+async function downloadArtifact(url, dest, expectedSha512, expectedSize = null) {
   if (await matchesSha512(dest, expectedSha512)) {
-    console.log(`[updater] reusing verified download ${dest}`);
-    return;
+    if (await matchesSize(dest, expectedSize)) {
+      console.log(`[updater] reusing verified download ${dest}`);
+      return;
+    }
   }
   console.log(`[updater] downloading ${url}`);
   const res = await fetch(url, { headers: { 'User-Agent': `${USER_AGENT}/${app.getVersion()}` } });
@@ -294,6 +312,10 @@ async function downloadArtifact(url, dest, expectedSha512) {
   if (!(await matchesSha512(tmp, expectedSha512))) {
     await fs.rm(tmp, { force: true }); // a corrupted artifact never survives
     throw new Error(`sha512 mismatch for ${path.basename(dest)}; refusing to install`);
+  }
+  if (!(await matchesSize(tmp, expectedSize))) {
+    await fs.rm(tmp, { force: true }); // the digest matched a wrong-length stream: never install it
+    throw new Error(`size mismatch for ${path.basename(dest)}; refusing to install`);
   }
   await fs.rm(dest, { force: true });
   await fs.rename(tmp, dest);
@@ -379,45 +401,29 @@ async function findDevUpdate({ allowDowngrade, devFeedBase }) {
   return candidateFrom(yml, assetUrl, { channelName: policy.DEV, allowDowngrade });
 }
 
-/** Stable channel: the newest release carrying our metadata file, as before,
- *  plus the channel firewall (a stray `-dev.` build in the listing is skipped)
- *  and an opt-out of the newer-than-current rule for the explicit
- *  return-to-stable pass (then the highest available stable build wins). */
-async function findGitHubUpdate(feed, { channelName = policy.STABLE, allowDowngrade = false } = {}) {
-  const metaFile = policy.metadataFileFor({ installKind: INSTALL_KIND, channel: channelName });
-  if (!metaFile) return null;
-  const res = await fetch(`https://api.github.com/repos/${feed.owner}/${feed.repo}/releases?per_page=100`, {
-    headers: { Accept: 'application/vnd.github+json', 'User-Agent': `${USER_AGENT}/${app.getVersion()}` },
-  });
-  if (!res.ok) throw new Error(`GitHub releases responded HTTP ${res.status}`);
-  const releases = await res.json();
-  const candidates = releases
-    .filter((r) => !r.draft && !r.prerelease && r.assets.some((a) => a.name === metaFile))
-    .slice(0, MAX_METADATA_CHECKS);
-  const seen = [];
-  for (const release of candidates) {
-    const asset = release.assets.find((a) => a.name === metaFile);
-    let yml;
-    try {
-      const ymlRes = await fetch(asset.browser_download_url, { headers: { 'User-Agent': `${USER_AGENT}/${app.getVersion()}` } });
-      if (!ymlRes.ok) continue;
-      yml = parseLatestYml(await ymlRes.text(), { requireAppImage: INSTALL_KIND === 'appimage' });
-    } catch (e) { console.warn('[updater]', e.message); continue; }
-    if (!yml) continue;
-    const cand = candidateFrom(yml, null, { channelName, allowDowngrade });
-    if (cand.plan === 'foreign') {
-      console.warn(`[updater] refusing ${yml.version} from the stable feed: a dev build is never offered on the stable channel`);
-    }
-    const artifact = release.assets.find((a) => a.name === yml.fileName);
-    if (artifact) cand.assetUrl = artifact.browser_download_url;
-    else if (cand.plan === 'apply' || cand.plan === 'downgrade') continue; // cannot install what is not there
-    seen.push(cand);
+/** Stable channel: ONE direct GET of the electron-builder metadata on our
+ *  edge (policy.stableFeedUrl: /dl/latest-lite-linux.yml / /dl/latest-lite.yml
+ *  — no api.github.com listing), plus the channel firewall (a stray `-dev.`
+ *  build advertised there is refused) and the downgrade pass for the explicit
+ *  return-to-stable. The artifact is the stable ALIAS on the same path — the
+ *  versioned fileName in the metadata is never used to build a URL; the alias
+ *  is byte-identical and its sha512+size are what the metadata certifies. */
+async function findStableUpdate({ channelName = policy.STABLE, allowDowngrade = false } = {}) {
+  const url = policy.stableFeedUrl({ installKind: INSTALL_KIND, channel: channelName });
+  const assetUrl = policy.stableArtifactUrl({ installKind: INSTALL_KIND });
+  if (!url || !assetUrl) return null;
+  const yml = await fetchMetadata(url, { requireAppImage: INSTALL_KIND === 'appimage' });
+  if (!yml) { console.log('[updater] stable feed not published yet (HTTP 404)'); return null; }
+  if (!yml.fileName.startsWith('Plotina-Lite-Desktop')) {
+    // Belt and braces: /dl is Lite-scoped by file name, but never accept
+    // another product's artifact if the edge ever serves the wrong yml.
+    throw new Error(`stable feed ${url} names ${yml.fileName}, which is not a Plotina Lite Desktop artifact`);
   }
-  // Installable candidates win; otherwise hand back the first refusal so the
-  // caller can report *why* nothing was offered (foreign / blocked / same).
-  const installable = seen.filter((c) => c.plan === 'apply' || c.plan === 'downgrade');
-  if (!installable.length) return seen[0] || null;
-  return installable.reduce((best, c) => (isVersionNewer(c.yml.version, best.yml.version) ? c : best));
+  const cand = candidateFrom(yml, assetUrl, { channelName, allowDowngrade });
+  if (cand.plan === 'foreign') {
+    console.warn(`[updater] refusing ${yml.version} from the stable feed: a dev build is never offered on the stable channel`);
+  }
+  return cand;
 }
 
 /** Download + verify + place the artifact, then prompt for a restart. Shared
@@ -434,7 +440,7 @@ async function applyCandidate(found, { manual }) {
     const stagingDir = isDirWritable(dir) ? dir : path.join(app.getPath('userData'), 'plotina-updates');
     await fs.mkdir(stagingDir, { recursive: true });
     const staged = path.join(stagingDir, `${yml.fileName}.plotina-new`);
-    await downloadArtifact(assetUrl, staged, yml.sha512);
+    await downloadArtifact(assetUrl, staged, yml.sha512, yml.size);
     const swap = await swapAppImage(staged, currentPath);
     if (!swap.swapped) {
       sendStatus({ state: 'error', message: `downloaded but could not replace ${currentPath} (${swap.reason}); the running AppImage is untouched` });
@@ -451,7 +457,7 @@ async function applyCandidate(found, { manual }) {
     const dir = path.join(app.getPath('userData'), 'plotina-updates');
     await fs.mkdir(dir, { recursive: true });
     const dest = path.join(dir, yml.fileName);
-    await downloadArtifact(assetUrl, dest, yml.sha512);
+    await downloadArtifact(assetUrl, dest, yml.sha512, yml.size);
     pendingUpdate = { version: yml.version, channel: channelName, plan, mode: 'windows-installer', installerPath: dest };
   }
   sendStatus({ state: 'downloaded', version: yml.version, channel: channelName, releaseDate: yml.releaseDate, downgrade });
@@ -513,7 +519,7 @@ async function runCheck(manual = false, opts = {}) {
     let found;
     if (qa) found = await metadataUrlAndAssets(qa.base, { channelName, allowDowngrade });
     else if (channelName === policy.DEV) found = await findDevUpdate({ allowDowngrade, devFeedBase: policy.resolveDevFeedBase(process.env) });
-    else found = await findGitHubUpdate(feed, { channelName: policy.STABLE, allowDowngrade });
+    else found = await findStableUpdate({ channelName: policy.STABLE, allowDowngrade });
 
     if (!found) {
       if (manual) sendStatus({ state: 'up-to-date', version: app.getVersion(), channel: channelName });
@@ -600,7 +606,7 @@ function init(getStatusTarget, { onChannelChange } = {}) {
     const feed = readUpdateFeed();
     const where = info.channel === policy.DEV
       ? policy.devFeedUrl({ installKind: INSTALL_KIND, channel: policy.DEV, devFeedBase: policy.resolveDevFeedBase(process.env) })
-      : `https://api.github.com/repos/${feed.owner}/${feed.repo}/releases (source: ${feed.source})`;
+      : `${policy.stableFeedUrl({ installKind: INSTALL_KIND, channel: policy.STABLE })} (app-update.yml source: ${feed.source})`;
     console.log(`[updater] channel=${info.channel}(${info.source}) feed ${where} kind=${INSTALL_KIND} version=${app.getVersion()}`);
   }
   timers = [

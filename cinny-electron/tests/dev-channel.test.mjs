@@ -62,6 +62,38 @@ t('C1c QA local feed override keeps the stable layout and follows the channel', 
   assert.strictEqual(ch.qaFeedUrl({ base: 'http://h/', installKind: 'msi', channel: 'dev' }), null);
 });
 
+t('C1d stable feed is the direct edge /dl: product-scoped metadata + alias artifact, no API', () => {
+  assert.strictEqual(ch.DL_BASE, 'https://plotina.cc/dl');
+  // metadata: the same product-scoped names GitHub carries, mirrored to /dl
+  assert.strictEqual(
+    ch.stableFeedUrl({ installKind: 'appimage' }), 'https://plotina.cc/dl/latest-lite-linux.yml');
+  assert.strictEqual(
+    ch.stableFeedUrl({ installKind: 'nsis', channel: 'stable' }), 'https://plotina.cc/dl/latest-lite.yml');
+  assert.strictEqual(ch.stableFeedUrl({ installKind: 'package' }), null, 'deb/rpm: apt/dnf is the update path');
+  assert.strictEqual(ch.stableFeedUrl({ installKind: 'msi' }), null);
+  assert.strictEqual(ch.stableFeedUrl({ installKind: 'dev' }), null);
+  assert.strictEqual(ch.stableFeedUrl({ installKind: 'appimage', channel: 'dev' }), null, 'dev is GitHub-only');
+  // artifact: the versionless alias, never the versioned fileName
+  assert.strictEqual(
+    ch.stableArtifactUrl({ installKind: 'appimage' }), 'https://plotina.cc/dl/Plotina-Lite-Desktop.AppImage');
+  assert.strictEqual(
+    ch.stableArtifactUrl({ installKind: 'nsis' }), 'https://plotina.cc/dl/Plotina-Lite-Desktop-setup.exe');
+  assert.strictEqual(ch.stableArtifactUrl({ installKind: 'package' }), null);
+  // fixture/QA base override with trailing-slash normalization
+  assert.strictEqual(
+    ch.stableFeedUrl({ installKind: 'nsis', dlBase: 'http://127.0.0.1:8099/dl/' }),
+    'http://127.0.0.1:8099/dl/latest-lite.yml');
+  assert.strictEqual(
+    ch.stableArtifactUrl({ installKind: 'appimage', dlBase: 'http://127.0.0.1:8099/dl/' }),
+    'http://127.0.0.1:8099/dl/Plotina-Lite-Desktop.AppImage');
+  // no URL on the stable path may name the GitHub API
+  assert.ok(!ch.stableFeedUrl({ installKind: 'appimage' }).includes('api.github.com'));
+  assert.ok(!ch.stableArtifactUrl({ installKind: 'nsis' }).includes('github.com'));
+  // dev feed names stay product-scoped (Lite never touches Desktop's names)
+  assert.strictEqual(ch.DEV_WINDOWS_METADATA_FILE, 'latest-lite-dev.yml');
+  assert.strictEqual(ch.DEV_LINUX_METADATA_FILE, 'latest-lite-linux-dev.yml');
+});
+
 // ------------------------------------------------------------ C2 dev versions
 t('C2 dev version parsing', () => {
   assert.deepStrictEqual(ch.versionTokens('4.12.8-plotina.19-dev.2'), [4, 12, 8, 19, 2]);
