@@ -88,16 +88,29 @@
   }
 
   /*
-   * Element Call (LiveKit) asks for audio with plain booleans:
-   *   { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
-   * Element Web's voice-message recorder asks with constraints objects:
+   * Element Call's current media handler asks with constraint objects:
    *   { noiseSuppression: { ideal: true }, ... }
-   * Only the first shape is a call.
+   * Older Element Call releases used booleans, and some callers still do.
+   * Element Web's voice-message recorder also uses the object form, but it
+   * pins channelCount to 1; a call does not. Accept both truthy shapes and
+   * keep the voice-message path raw. Explicit false (or ideal/exact false)
+   * stays skipped, so the stock toggle remains the master switch.
    */
+  function isRequested(value) {
+    if (value === true) return true;
+    if (!value || typeof value !== "object") return false;
+    if (value.ideal === false || value.exact === false) return false;
+    return value.ideal !== undefined || value.exact !== undefined || Object.keys(value).length > 0;
+  }
+
   function shouldProcess(constraints) {
     var audio = constraints && constraints.audio;
     if (!audio || typeof audio !== "object") return false;
-    return typeof audio.noiseSuppression === "boolean" && audio.noiseSuppression !== false;
+    if (!isRequested(audio.noiseSuppression)) return false;
+    // Voice messages ask for mono; Element Call's microphone constraints do
+    // not set channelCount.
+    if (audio.channelCount === 1) return false;
+    return true;
   }
 
   /* Ask the browser for raw audio: its own suppressor would fight DeepFilterNet.

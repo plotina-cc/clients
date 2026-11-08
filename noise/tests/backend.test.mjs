@@ -176,6 +176,35 @@ test("existing level logic untouched", () => {
   assert.equal(L.shouldProcess({ audio: { noiseSuppression: true } }), true);
 });
 
+test("shouldProcess accepts the current Element Call object constraints", () => {
+  assert.equal(
+    L.shouldProcess({
+      audio: {
+        autoGainControl: { ideal: true },
+        echoCancellation: { ideal: true },
+        noiseSuppression: { ideal: true },
+      },
+      video: { width: { ideal: 640 }, height: { ideal: 360 } },
+    }),
+    true
+  );
+});
+
+test("shouldProcess keeps voice messages and disabled suppression raw", () => {
+  assert.equal(
+    L.shouldProcess({
+      audio: {
+        channelCount: 1,
+        noiseSuppression: { ideal: true },
+      },
+    }),
+    false
+  );
+  assert.equal(L.shouldProcess({ audio: { noiseSuppression: { ideal: false } } }), false);
+  assert.equal(L.shouldProcess({ audio: { noiseSuppression: { exact: false } } }), false);
+  assert.equal(L.shouldProcess({ audio: { noiseSuppression: false } }), false);
+});
+
 test("DEFAULT_LEVEL exists and is applied", () => {
   assert.equal(typeof L.DEFAULT_LEVEL, "number", "DEFAULT_LEVEL must be a number");
   assert.ok(Number.isInteger(L.DEFAULT_LEVEL), `DEFAULT_LEVEL must be an integer, got ${L.DEFAULT_LEVEL}`);
