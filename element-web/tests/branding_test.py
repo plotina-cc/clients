@@ -105,6 +105,8 @@ class AppFixture(unittest.TestCase):
         # brand pass runs (same contract as plotina-icon.svg).
         shutil.copyfile(WEBAPP / "plotina-theme.js",
                         self.app / "plotina-theme.js")
+        shutil.copyfile(WEBAPP / "plotina-dm-aliases.js",
+                        self.app / "plotina-dm-aliases.js")
 
         # A sibling chunk that carries Element branding we deliberately keep:
         # the built-in Element Call widget and the baked release literal.
@@ -238,7 +240,10 @@ class IndexHtmlTest(AppFixture):
         self.brand()
         html = self.index()
         self.assertEqual(html.count(NOISE_TAG), 1)
-        self.assertIn(NOISE_TAG + "</head>", html)
+        # The pair stays byte-identical and keeps its place at the end of
+        # <head>; only the DM alias overlay tag may follow it now.
+        self.assertIn(NOISE_TAG + '<script src="/plotina-dm-aliases.js" defer></script></head>',
+                      html)
 
     def test_modal_a11y_style(self) -> None:
         self.brand()
@@ -391,6 +396,58 @@ class ThemeBootstrapTest(AppFixture):
         dockerfile = (WEBAPP / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("COPY plotina-theme.js /app/plotina-theme.js", dockerfile)
         self.assertIn("plotina-theme.js", dockerfile.split("branding.py --app /app")[-1])
+
+
+DM_ALIASES_TAG = '<script src="/plotina-dm-aliases.js" defer></script>'
+
+
+class DmAliasesTest(AppFixture):
+    """The /plotina-dm-aliases.js tag branding.py injects (SPIKE-dm-aliases.md)."""
+
+    def test_tag_inserted_once(self) -> None:
+        self.brand()
+        html = self.index()
+        self.assertEqual(html.count(DM_ALIASES_TAG), 1)
+        self.assertTrue(html.index(DM_ALIASES_TAG) < html.index("</head>"))
+
+    def test_relative_tag_never_served_on_the_web(self) -> None:
+        # /app is the site root: the web image must use the absolute src only.
+        self.brand()
+        html = self.index()
+        self.assertNotIn('<script src="plotina-dm-aliases.js" defer></script>', html)
+
+    def test_second_run_stays_byte_stable(self) -> None:
+        self.brand()
+        before = self.index()
+        proc = self.run_branding()
+        self.assertEqual(proc.returncode, 0, msg=proc.stdout + proc.stderr)
+        after = self.index()
+        self.assertEqual(after, before)
+        self.assertEqual(after.count(DM_ALIASES_TAG), 1)
+
+    def test_missing_payload_fails_loudly(self) -> None:
+        (self.app / "plotina-dm-aliases.js").unlink()
+        proc = self.run_branding()
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("plotina-dm-aliases.js", proc.stderr)
+
+    def test_dockerfile_copies_payload(self) -> None:
+        dockerfile = (WEBAPP / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("COPY plotina-dm-aliases.js /app/plotina-dm-aliases.js",
+                      dockerfile)
+        self.assertIn("plotina-dm-aliases.js", dockerfile.split("branding.py --app /app")[-1])
+
+    def test_payload_is_a_self_contained_overlay(self) -> None:
+        # The overlay must stay dependency-free (no import/require) and free
+        # of room-state writes: the whole point is that it never mutates the
+        # room. Guard the source, not the built bundle.
+        src = (WEBAPP / "plotina-dm-aliases.js").read_text(encoding="utf-8")
+        self.assertIn("cc.plotina.room_aliases", src)
+        self.assertIn("setAccountData", src)
+        self.assertIn("mxMatrixClientPeg", src)
+        self.assertNotIn("import ", src.split("/*")[-1])
+        for forbidden in ("sendStateEvent", "m.room.name", "setRoomName"):
+            self.assertNotIn(forbidden, src.split("How it attaches")[1])
 
 
 class NodeThemeLogicTest(unittest.TestCase):
