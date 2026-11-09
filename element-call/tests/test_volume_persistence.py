@@ -283,11 +283,17 @@ class PatchAppliesToPinnedTagTests(unittest.TestCase):
                 self.assertEqual(
                     0, applied.returncode, f"{patch.name}: {applied.stderr}"
                 )
-            # …and what landed there is what the probe above ran against.
-            self.assertEqual(
-                added_file(STORE),
-                (root / STORE).read_text(encoding="utf-8"),
-            )
+            # …and the store 0004 promised is still there. Later patches in the
+            # series extend the same file (0005 adds the stream-visibility
+            # entries), so this is a containment check rather than equality.
+            applied_store = (root / STORE).read_text(encoding="utf-8")
+            for marker in (
+                'export const LOCAL_STORAGE_KEY = "plotina_voice_volumes_v1";',
+                'export const ACCOUNT_DATA_TYPE = "cc.plotina.voice_volumes";',
+                "export class PersistentVolumeStore",
+                "export function rememberParticipantVolume",
+            ):
+                self.assertIn(marker, applied_store)
 
 
 if __name__ == "__main__":

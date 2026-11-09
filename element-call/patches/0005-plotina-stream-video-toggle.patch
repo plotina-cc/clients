@@ -1,0 +1,1085 @@
+diff --git a/locales/en/app.json b/locales/en/app.json
+index f3d568b..f2a81d3 100644
+--- a/locales/en/app.json
++++ b/locales/en/app.json
+@@ -270,9 +270,12 @@
+     "camera_starting": "Video loading...",
+     "collapse": "Collapse",
+     "expand": "Expand",
++    "hide_stream": "Don't show this stream",
+     "mute_for_me": "Mute for me",
+     "muted_for_me": "Muted for me",
++    "screen_share_visibility": "Screen share visibility",
+     "screen_share_volume": "Screen share volume",
++    "stream_hidden": "Stream hidden",
+     "volume": "Volume",
+     "waiting_for_media": "Waiting for media..."
+   }
+diff --git a/locales/ru/app.json b/locales/ru/app.json
+index ec68fd7..8600bd9 100644
+--- a/locales/ru/app.json
++++ b/locales/ru/app.json
+@@ -250,9 +250,12 @@
+     "camera_starting": "Загрузка видео...",
+     "collapse": "Свернуть",
+     "expand": "Развернуть",
++    "hide_stream": "Не показывать этот стрим",
+     "mute_for_me": "Заглушить звук для меня",
+     "muted_for_me": "Приглушить для меня",
++    "screen_share_visibility": "Показ демонстрации экрана",
+     "screen_share_volume": "Громкость демонстрации экрана",
++    "stream_hidden": "Стрим скрыт",
+     "volume": "Громкость",
+     "waiting_for_media": "В ожидании медиа..."
+   }
+diff --git a/src/state/PersistentVolume.ts b/src/state/PersistentVolume.ts
+index 7424b0f..7c9663a 100644
+--- a/src/state/PersistentVolume.ts
++++ b/src/state/PersistentVolume.ts
+@@ -24,11 +24,15 @@ Please see LICENSE in the repository root for full details.
+  *
+  *     {
+  *       "@alice:example.org": { "volume": 0.7, "muted": false, "ts": 1730000000000 },
+- *       "@bob:example.org#screenshare": { "volume": 0.3, "muted": true, "ts": 1730000000000 }
++ *       "@bob:example.org#screenshare": { "volume": 0.3, "muted": true, "ts": 1730000000000 },
++ *       "@bob:example.org#screenshare-video": { "visible": false, "ts": 1730000000000 }
+  *     }
+  *
+  * The key is the participant's MXID for their microphone and
+  * `mxid#screenshare` for their screen share audio, so the two can differ.
++ * `mxid#screenshare-video` holds the viewer's own choice of whether that
++ * stream should be rendered and received at all: it is not a volume, so its
++ * entry carries `visible` instead of `volume`/`muted`.
+  *
+  * `ts` is the writer's clock in milliseconds and decides which of two devices'
+  * values wins for the same key (last write wins); the maps are otherwise
+@@ -52,6 +56,13 @@ export const ACCOUNT_DATA_TYPE = "cc.plotina.voice_volumes";
+ /** Suffix distinguishing a participant's screen share audio from their mic. */
+ export const SCREEN_SHARE_KEY_SUFFIX = "#screenshare";
+ 
++/**
++ * Suffix distinguishing whether a participant's screen share video is shown
++ * from the audio levels above. It is stored in the same map so that the
++ * viewer's choices travel together, but the entry means something else.
++ */
++export const STREAM_VIDEO_KEY_SUFFIX = "#screenshare-video";
++
+ /**
+  * How many entries we are willing to keep. Account data is an ordinary state
+  * event: unencrypted, visible to the homeserver, and bounded in size (servers
+@@ -75,6 +86,32 @@ export interface VoiceVolumeEntry {
+ 
+ export type VoiceVolumeMap = Record<string, VoiceVolumeEntry>;
+ 
++/**
++ * The viewer's own choice about one participant's screen share video. It is
++ * not a volume, which is why it gets its own entry shape in the same map.
++ */
++export interface StreamVideoEntry {
++  /** Whether this viewer wants the stream rendered and received. */
++  visible: boolean;
++  /** When this choice was made, in milliseconds since the epoch. */
++  ts: number;
++}
++
++/** Everything the shared map can hold: audio levels and stream visibility. */
++export type StoreEntry = VoiceVolumeEntry | StreamVideoEntry;
++
++export type StoreMap = Record<string, StoreEntry>;
++
++/** Narrows a stored entry to the audio-level shape. */
++function isVoiceVolumeEntry(entry: StoreEntry): entry is VoiceVolumeEntry {
++  return "volume" in entry;
++}
++
++/** Narrows a stored entry to the stream-visibility shape. */
++function isStreamVideoEntry(entry: StoreEntry): entry is StreamVideoEntry {
++  return "visible" in entry;
++}
++
+ /** The value a ViewModel needs to apply, without the bookkeeping fields. */
+ export interface SavedVoiceVolume {
+   volume: number;
+@@ -86,18 +123,36 @@ export function screenShareVolumeKey(mxid: string): string {
+   return `${mxid}${SCREEN_SHARE_KEY_SUFFIX}`;
+ }
+ 
++/** The key under which a viewer's choice about a stream's video is kept. */
++export function streamVideoKey(mxid: string): string {
++  return `${mxid}${STREAM_VIDEO_KEY_SUFFIX}`;
++}
++
++/** Whether `key` names a video-visibility entry rather than an audio level. */
++export function isStreamVideoKey(key: string): boolean {
++  return key.endsWith(STREAM_VIDEO_KEY_SUFFIX);
++}
++
+ /**
+- * An MXID, optionally followed by the screen share suffix. Anything else is
+- * dropped rather than stored: the account data map is not ours alone (another
+- * device, or a future version of this patch, may have written junk in it).
++ * An MXID, optionally followed by one of this module's suffixes. Anything else
++ * is dropped rather than stored: the account data map is not ours alone
++ * (another device, or a future version of this patch, may have written junk in
++ * it).
+  */
+-function isVolumeKey(key: unknown): key is string {
++function isStoreKey(key: unknown): key is string {
+   return (
+     typeof key === "string" &&
+-    /^@[^:\s]{1,255}:[^:\s]{1,255}(?:#screenshare)?$/.test(key)
++    /^@[^:\s]{1,255}:[^:\s]{1,255}(?:#screenshare|#screenshare-video)?$/.test(
++      key,
++    )
+   );
+ }
+ 
++/** An MXID, optionally followed by the screen share audio suffix. */
++function isVolumeKey(key: unknown): key is string {
++  return isStoreKey(key) && !isStreamVideoKey(key);
++}
++
+ /** Clamps a volume to 0..1 and rounds it to 3 decimals, or null if it is junk. */
+ function clampVolume(value: unknown): number | null {
+   if (typeof value !== "number" || !Number.isFinite(value)) return null;
+@@ -105,78 +160,113 @@ function clampVolume(value: unknown): number | null {
+ }
+ 
+ /**
+- * Validates one entry. An entry without a usable volume is dropped; a missing
+- * or nonsensical timestamp only means it sorts as the oldest, and a missing
+- * `muted` means "not muted".
++ * Validates one entry, depending on what its key means. A volume entry without
++ * a usable volume is dropped; a visibility entry needs a boolean `visible`. A
++ * missing or nonsensical timestamp only means it sorts as the oldest, and a
++ * missing `muted` means "not muted".
+  */
+-function normaliseEntry(raw: unknown): VoiceVolumeEntry | null {
++function normaliseEntry(raw: unknown, key: string): StoreEntry | null {
+   if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+     return null;
+   const candidate = raw as Record<string, unknown>;
+-  const volume = clampVolume(candidate.volume);
+-  if (volume === null) return null;
+   const ts =
+     typeof candidate.ts === "number" &&
+     Number.isFinite(candidate.ts) &&
+     candidate.ts > 0
+       ? candidate.ts
+       : 0;
++  if (isStreamVideoKey(key)) {
++    if (typeof candidate.visible !== "boolean") return null;
++    return { visible: candidate.visible, ts };
++  }
++  const volume = clampVolume(candidate.volume);
++  if (volume === null) return null;
+   return { volume, muted: candidate.muted === true || volume === 0, ts };
+ }
+ 
+ /** Keeps the newest `MAX_ENTRIES` entries, dropping the oldest by timestamp. */
+-export function limitVolumeMap(map: VoiceVolumeMap): VoiceVolumeMap {
++export function limitStoreMap<T extends StoreEntry>(
++  map: Record<string, T>,
++): Record<string, T> {
+   const keys = Object.keys(map);
+   if (keys.length <= MAX_ENTRIES) return map;
+   // Sort oldest first; ties break on the key so the result is deterministic.
+   keys.sort((a, b) => map[a].ts - map[b].ts || (a < b ? -1 : a > b ? 1 : 0));
+-  const kept: VoiceVolumeMap = { ...map };
++  const kept: Record<string, T> = { ...map };
+   for (const key of keys.slice(0, keys.length - MAX_ENTRIES)) delete kept[key];
+   return kept;
+ }
+ 
+ /** Parses untrusted content (account data or a parsed cache) into a valid map. */
+-export function parseVolumeMap(raw: unknown): VoiceVolumeMap {
+-  const result: VoiceVolumeMap = {};
++export function parseStore(raw: unknown): StoreMap {
++  const result: StoreMap = {};
+   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+     return result;
+   }
+   for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+-    if (!isVolumeKey(key)) continue;
+-    const entry = normaliseEntry(value);
++    if (!isStoreKey(key)) continue;
++    const entry = normaliseEntry(value, key);
+     if (entry) result[key] = entry;
+   }
+-  return limitVolumeMap(result);
++  return limitStoreMap(result);
++}
++
++/** The audio levels in `raw`, ignoring any visibility entries. */
++export function parseVolumeMap(raw: unknown): VoiceVolumeMap {
++  const result: VoiceVolumeMap = {};
++  for (const [key, entry] of Object.entries(parseStore(raw))) {
++    if ("volume" in entry) result[key] = entry;
++  }
++  return result;
+ }
+ 
+ /** Parses the localStorage cache. Broken JSON is a cold start, not a crash. */
+-export function parseStoredVolumes(
+-  text: string | null | undefined,
+-): VoiceVolumeMap {
++export function parseStoredStore(text: string | null | undefined): StoreMap {
+   if (typeof text !== "string" || text.length === 0) return {};
+   try {
+-    return parseVolumeMap(JSON.parse(text));
++    return parseStore(JSON.parse(text));
+   } catch {
+     // A corrupt cache is thrown away: the account data copy refills it.
+     return {};
+   }
+ }
+ 
++/** Parses the localStorage cache, keeping only the audio levels in it. */
++export function parseStoredVolumes(
++  text: string | null | undefined,
++): VoiceVolumeMap {
++  const result: VoiceVolumeMap = {};
++  for (const [key, entry] of Object.entries(parseStoredStore(text))) {
++    if (isVoiceVolumeEntry(entry)) result[key] = entry;
++  }
++  return result;
++}
++
++/** Whether two entries say the same thing, ignoring when they were written. */
++function sameEntry(a: StoreEntry | undefined, b: StoreEntry): boolean {
++  if (!a) return false;
++  if (isStreamVideoEntry(a) && isStreamVideoEntry(b))
++    return a.visible === b.visible;
++  if (isVoiceVolumeEntry(a) && isVoiceVolumeEntry(b))
++    return a.volume === b.volume && a.muted === b.muted;
++  return false;
++}
++
+ /**
+  * Merges a map received from another device into ours. Last write wins per
+  * key; on a tie the remote copy wins, because it is the one the other devices
+  * have already agreed on.
+  */
+-export function mergeVolumeMaps(
+-  local: VoiceVolumeMap,
+-  remote: VoiceVolumeMap,
+-): VoiceVolumeMap {
+-  const merged: VoiceVolumeMap = { ...local };
++export function mergeVolumeMaps<T extends StoreEntry>(
++  local: Record<string, T>,
++  remote: Record<string, T>,
++): Record<string, T> {
++  const merged: Record<string, T> = { ...local };
+   for (const [key, entry] of Object.entries(remote)) {
+     const current = merged[key];
+     if (!current || entry.ts >= current.ts) merged[key] = entry;
+   }
+-  return limitVolumeMap(merged);
++  return limitStoreMap(merged);
+ }
+ 
+ interface StorageLike {
+@@ -225,7 +315,7 @@ export class PersistentVolumeStore {
+   private readonly debounceMs: number;
+   private readonly onError: (error: unknown) => void;
+ 
+-  private entries: VoiceVolumeMap = {};
++  private entries: StoreMap = {};
+   private started = false;
+   private client: VoiceVolumeClient | null = null;
+   private accountId: string | null = null;
+@@ -246,10 +336,44 @@ export class PersistentVolumeStore {
+   public get(key: string): SavedVoiceVolume | null {
+     if (!this.start()) return null;
+     const entry = this.entries[key];
+-    if (!entry) return null;
++    if (!entry || !("volume" in entry)) return null;
+     return { volume: entry.volume, muted: entry.muted || entry.volume === 0 };
+   }
+ 
++  /**
++   * Whether this viewer wants the stream belonging to `key` shown, or null if
++   * they never said. The ViewModel treats null as "show": hiding a stream is
++   * an explicit choice, so the default must not need a stored entry.
++   */
++  public getStreamVisible(key: string): boolean | null {
++    if (!this.start()) return null;
++    const entry = this.entries[key];
++    return entry && isStreamVideoEntry(entry) ? entry.visible : null;
++  }
++
++  /**
++   * Remembers whether the stream belonging to `key` should be shown. Junk keys
++   * and no-op changes are ignored, so an unchanged choice is neither cached
++   * nor synced.
++   */
++  public setStreamVisible(key: string, visible: boolean): void {
++    if (!this.start()) return;
++    if (!isStreamVideoKey(key) || !isStoreKey(key)) return;
++    const previous = this.entries[key];
++    if (
++      previous &&
++      isStreamVideoEntry(previous) &&
++      previous.visible === visible
++    )
++      return;
++    this.entries = limitStoreMap({
++      ...this.entries,
++      [key]: { visible, ts: this.clock() },
++    });
++    this.persistLocal();
++    this.scheduleWrite();
++  }
++
+   /**
+    * Remembers the volume of `key`. Values outside 0..1 are clamped and junk is
+    * ignored. `muted` is implied by a volume of 0; the level is kept so that
+@@ -263,7 +387,9 @@ export class PersistentVolumeStore {
+ 
+     const previous = this.entries[key];
+     const previousVolume =
+-      previous && previous.volume > 0 ? previous.volume : 1;
++      previous && "volume" in previous && previous.volume > 0
++        ? previous.volume
++        : 1;
+     const entry: VoiceVolumeEntry =
+       muted || clamped === 0
+         ? {
+@@ -277,13 +403,14 @@ export class PersistentVolumeStore {
+     // between two devices that keep re-applying each other's value.
+     if (
+       previous &&
++      "volume" in previous &&
+       previous.volume === entry.volume &&
+       previous.muted === entry.muted
+     ) {
+       return;
+     }
+ 
+-    this.entries = limitVolumeMap({ ...this.entries, [key]: entry });
++    this.entries = limitStoreMap({ ...this.entries, [key]: entry });
+     this.persistLocal();
+     this.scheduleWrite();
+   }
+@@ -337,7 +464,7 @@ export class PersistentVolumeStore {
+   private start(): boolean {
+     if (!this.started) {
+       this.started = true;
+-      this.entries = parseStoredVolumes(this.readLocal());
++      this.entries = parseStoredStore(this.readLocal());
+       this.installFlushHooks();
+     }
+     return this.ensureClient() !== null;
+@@ -453,7 +580,7 @@ export class PersistentVolumeStore {
+   private handleAccountData(event: VoiceVolumeEvent): void {
+     try {
+       if (event.getType() !== ACCOUNT_DATA_TYPE) return;
+-      this.mergeRemote(parseVolumeMap(event.getContent()));
++      this.mergeRemote(parseStore(event.getContent()));
+     } catch (error) {
+       // Account data is written by other devices as well; anything unexpected
+       // in it must not take the call down.
+@@ -461,18 +588,12 @@ export class PersistentVolumeStore {
+     }
+   }
+ 
+-  private mergeRemote(remote: VoiceVolumeMap): void {
++  private mergeRemote(remote: StoreMap): void {
+     const previous = this.entries;
+     const merged = mergeVolumeMaps(previous, remote);
+-    const changed = Object.keys(merged).filter((key) => {
+-      const before = previous[key];
+-      const after = merged[key];
+-      return (
+-        !before ||
+-        before.volume !== after.volume ||
+-        before.muted !== after.muted
+-      );
+-    });
++    const changed = Object.keys(merged).filter(
++      (key) => !sameEntry(previous[key], merged[key]),
++    );
+     this.entries = merged;
+     if (changed.length === 0) return;
+     this.persistLocal();
+@@ -504,7 +625,7 @@ export class PersistentVolumeStore {
+     try {
+       await client.setAccountData(
+         ACCOUNT_DATA_TYPE,
+-        limitVolumeMap(this.entries),
++        limitStoreMap(this.entries),
+       );
+     } catch (error) {
+       // The server may refuse the write (size, rate limit) or the client may
+diff --git a/src/state/media/RemoteScreenShareViewModel.test.ts b/src/state/media/RemoteScreenShareViewModel.test.ts
+new file mode 100644
+index 0000000..c74d188
+--- /dev/null
++++ b/src/state/media/RemoteScreenShareViewModel.test.ts
+@@ -0,0 +1,333 @@
++/*
++Copyright 2026 Element Creations Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE in the repository root for full details.
++*/
++
++import { beforeEach, describe, expect, test, vi } from "vitest";
++import { Track, type RemoteTrackPublication } from "livekit-client";
++
++import {
++  mockRemoteParticipant,
++  mockRemoteScreenShare,
++  mockRtcMembership,
++} from "../../utils/test";
++import {
++  ACCOUNT_DATA_TYPE,
++  LOCAL_STORAGE_KEY,
++  persistentVolumeStore,
++  STREAM_VIDEO_KEY_SUFFIX,
++  streamVideoKey,
++  type VoiceVolumeClient,
++  type VoiceVolumeEvent,
++} from "../PersistentVolume";
++import { type RemoteScreenShareViewModel } from "./RemoteScreenShareViewModel";
++
++const ALICE = "@alice:example.org";
++const BOB = "@bob:example.org";
++const rtcMembership = mockRtcMembership(ALICE, "AAAA");
++
++interface FakePublication {
++  publication: RemoteTrackPublication;
++  setSubscribed: ReturnType<typeof vi.fn>;
++}
++
++/** A publication that records the subscription changes made to it. */
++function fakePublication(): FakePublication {
++  const setSubscribed = vi.fn();
++  return {
++    publication: { setSubscribed } as unknown as RemoteTrackPublication,
++    setSubscribed,
++  };
++}
++
++interface FakeClient {
++  client: VoiceVolumeClient;
++  setAccountData: ReturnType<typeof vi.fn>;
++  /** Delivers account data as if it had arrived from another device. */
++  emit(content: unknown): void;
++}
++
++/** A Matrix client that only knows the bits the store touches. */
++function fakeClient(initial?: unknown): FakeClient {
++  const listeners = new Set<(event: VoiceVolumeEvent) => void>();
++  const setAccountData = vi.fn().mockResolvedValue({});
++  const client: VoiceVolumeClient = {
++    getUserId: (): string => "@me:example.org",
++    getAccountData: (type: string): { getContent(): unknown } | undefined =>
++      type === ACCOUNT_DATA_TYPE && initial !== undefined
++        ? { getContent: () => initial }
++        : undefined,
++    setAccountData,
++    on: (_event: string, listener: (event: VoiceVolumeEvent) => void): void => {
++      listeners.add(listener);
++    },
++    off: (
++      _event: string,
++      listener: (event: VoiceVolumeEvent) => void,
++    ): void => {
++      listeners.delete(listener);
++    },
++  };
++  return {
++    client,
++    setAccountData,
++    emit: (content: unknown): void => {
++      for (const listener of listeners) {
++        listener({
++          getType: () => ACCOUNT_DATA_TYPE,
++          getContent: () => content,
++        });
++      }
++    },
++  };
++}
++
++/** Creates the screen share of `mxid`, publishing through `publication`. */
++function screenShare(
++  publication: RemoteTrackPublication = fakePublication().publication,
++  mxid: string = ALICE,
++): RemoteScreenShareViewModel {
++  const participant = mockRemoteParticipant({
++    getTrackPublication: (source?: Track.Source): RemoteTrackPublication =>
++      (source === Track.Source.ScreenShare
++        ? publication
++        : undefined) as RemoteTrackPublication,
++    setVolume: vi.fn(),
++  });
++  return mockRemoteScreenShare(
++    mxid === ALICE ? rtcMembership : mockRtcMembership(mxid, "BBBB"),
++    {},
++    participant,
++  );
++}
++
++/** Points the shared store at a fake account, with a clean cache. */
++function useAccount(initial?: unknown): FakeClient {
++  const fake = fakeClient(initial);
++  (window as unknown as { matrixclient: unknown }).matrixclient = fake.client;
++  account = fake;
++  return fake;
++}
++
++/** The account the most recent test is signed in to. */
++let account: FakeClient;
++
++beforeEach(() => {
++  window.localStorage.clear();
++  // The store is a process-wide singleton that remembers its account, so each
++  // test starts from the same state a page load would: an empty cache and a
++  // client it has not seen before.
++  persistentVolumeStore().dispose();
++  useAccount();
++});
++
++describe("screen share video visibility", () => {
++  test("a stream is shown, and received, by default", () => {
++    const { publication, setSubscribed } = fakePublication();
++    const vm = screenShare(publication);
++    expect(vm.videoVisible$.value).toBe(true);
++    expect(setSubscribed).toHaveBeenCalledWith(true);
++  });
++
++  test("hiding a stream unsubscribes its video track", () => {
++    const { publication, setSubscribed } = fakePublication();
++    const vm = screenShare(publication);
++    vm.setVideoVisible(false);
++    expect(vm.videoVisible$.value).toBe(false);
++    expect(setSubscribed).toHaveBeenLastCalledWith(false);
++    // Disconnecting a viewer from the video is the point: it is not merely
++    // left for the renderer to skip.
++    expect(setSubscribed).toHaveBeenCalledTimes(2);
++  });
++
++  test("showing it again resubscribes", () => {
++    const { publication, setSubscribed } = fakePublication();
++    const vm = screenShare(publication);
++    vm.setVideoVisible(false);
++    vm.setVideoVisible(true);
++    expect(vm.videoVisible$.value).toBe(true);
++    expect(setSubscribed).toHaveBeenLastCalledWith(true);
++  });
++
++  test("the publisher's state is kept apart from the viewer's choice", () => {
++    const { publication } = fakePublication();
++    const vm = screenShare(publication);
++    vm.setVideoVisible(false);
++    // Hiding a stream must not look like the publisher stopped sharing.
++    expect(vm.videoEnabled$.value).toBe(true);
++  });
++
++  test("hiding a stream leaves voice and the share's audio alone", () => {
++    const { publication } = fakePublication();
++    const participant = mockRemoteParticipant({
++      getTrackPublication: (source?: Track.Source): RemoteTrackPublication =>
++        (source === Track.Source.ScreenShare
++          ? publication
++          : undefined) as RemoteTrackPublication,
++      setVolume: vi.fn(),
++    });
++    const vm = mockRemoteScreenShare(rtcMembership, {}, participant);
++    const setVolume = participant.setVolume as ReturnType<typeof vi.fn>;
++    const callsBefore = setVolume.mock.calls.length;
++
++    vm.setVideoVisible(false);
++
++    expect(setVolume).toHaveBeenCalledTimes(callsBefore);
++    expect(vm.playbackVolume$.value).toBe(1);
++    expect(vm.playbackMuted$.value).toBe(false);
++  });
++
++  test("only the chosen stream is affected", () => {
++    const first = fakePublication();
++    const second = fakePublication();
++    const vm = screenShare(first.publication, ALICE);
++    screenShare(second.publication, BOB);
++
++    vm.setVideoVisible(false);
++
++    expect(first.setSubscribed).toHaveBeenLastCalledWith(false);
++    expect(second.setSubscribed).not.toHaveBeenCalledWith(false);
++  });
++
++  test("a reconnect applies the remembered choice to the new publication", () => {
++    const first = fakePublication();
++    const vm = screenShare(first.publication);
++    vm.setVideoVisible(false);
++
++    // A reconnect creates a new participant and a new publication.
++    const second = fakePublication();
++    const reconnected = screenShare(second.publication);
++
++    expect(reconnected.videoVisible$.value).toBe(false);
++    expect(second.setSubscribed).toHaveBeenCalledWith(false);
++  });
++
++  test("the choice survives a restart", () => {
++    const first = fakePublication();
++    screenShare(first.publication).setVideoVisible(false);
++    expect(window.localStorage.getItem(LOCAL_STORAGE_KEY)).toContain(
++      streamVideoKey(ALICE),
++    );
++
++    // Reopening the app: same account, same cache, brand new store and VM.
++    persistentVolumeStore().dispose();
++    const second = fakePublication();
++    const reopened = screenShare(second.publication);
++
++    expect(reopened.videoVisible$.value).toBe(false);
++    expect(second.setSubscribed).toHaveBeenCalledWith(false);
++  });
++
++  test("showing it again after the track ended does not throw", () => {
++    // The publisher stops sharing (or their track ends) while this viewer has
++    // the stream hidden: there is no publication left to subscribe to.
++    let current: RemoteTrackPublication | undefined;
++    const participant = mockRemoteParticipant({
++      getTrackPublication: () => current as RemoteTrackPublication,
++      setVolume: vi.fn(),
++    });
++    const vm = mockRemoteScreenShare(rtcMembership, {}, participant);
++    const ended = fakePublication();
++    current = ended.publication;
++    (
++      participant as unknown as {
++        emit: (event: string, ...args: unknown[]) => void;
++      }
++    ).emit("trackPublished", ended.publication, participant);
++
++    vm.setVideoVisible(false);
++    expect(ended.setSubscribed).toHaveBeenCalledWith(false);
++
++    current = undefined;
++    (
++      participant as unknown as {
++        emit: (event: string, ...args: unknown[]) => void;
++      }
++    ).emit("trackUnpublished", ended.publication, participant);
++
++    // Showing it again must not throw with nothing to subscribe to.
++    expect(() => vm.setVideoVisible(true)).not.toThrow();
++    expect(vm.videoVisible$.value).toBe(true);
++
++    // …and a share that comes back afterwards is shown, not hidden.
++    const restarted = fakePublication();
++    current = restarted.publication;
++    (
++      participant as unknown as {
++        emit: (event: string, ...args: unknown[]) => void;
++      }
++    ).emit("trackPublished", restarted.publication, participant);
++    expect(restarted.setSubscribed).toHaveBeenLastCalledWith(true);
++  });
++
++  test("hiding before the track arrives applies when it does", () => {
++    // A screen share ViewModel exists as soon as the publisher starts sharing,
++    // but the publication can reach this client a moment later.
++    let current: RemoteTrackPublication | undefined;
++    const participant = mockRemoteParticipant({
++      getTrackPublication: () => current as RemoteTrackPublication,
++      setVolume: vi.fn(),
++    });
++    const vm = mockRemoteScreenShare(rtcMembership, {}, participant);
++
++    vm.setVideoVisible(false);
++    const { publication, setSubscribed } = fakePublication();
++    current = publication;
++    (
++      participant as unknown as {
++        emit: (event: string, ...args: unknown[]) => void;
++      }
++    ).emit("trackPublished", publication, participant);
++
++    expect(vm.videoVisible$.value).toBe(false);
++    expect(setSubscribed).toHaveBeenCalledWith(false);
++  });
++
++  test("a choice made on another device reaches the running call", () => {
++    const { publication, setSubscribed } = fakePublication();
++    const vm = screenShare(publication);
++
++    // This is what sync delivers when the account data is written elsewhere.
++    account.emit({
++      [streamVideoKey(ALICE)]: { visible: false, ts: Date.now() },
++    });
++
++    expect(vm.videoVisible$.value).toBe(false);
++    expect(setSubscribed).toHaveBeenLastCalledWith(false);
++  });
++});
++
++describe("stream visibility in the shared store", () => {
++  test("the key is the mxid plus the source", () => {
++    expect(streamVideoKey(ALICE)).toBe(`${ALICE}${STREAM_VIDEO_KEY_SUFFIX}`);
++    expect(streamVideoKey(ALICE)).toBe(`${ALICE}#screenshare-video`);
++  });
++
++  test("a visibility entry is not read back as a volume", () => {
++    const store = persistentVolumeStore();
++    store.setStreamVisible(streamVideoKey(ALICE), false);
++    expect(store.getStreamVisible(streamVideoKey(ALICE))).toBe(false);
++    expect(store.get(streamVideoKey(ALICE))).toBeNull();
++    expect(store.get(ALICE)).toBeNull();
++  });
++
++  test("the choice is written to account data once it settles", async () => {
++    vi.useFakeTimers();
++    screenShare().setVideoVisible(false);
++    await vi.advanceTimersByTimeAsync(500);
++    vi.useRealTimers();
++
++    expect(account.setAccountData).toHaveBeenCalledWith(ACCOUNT_DATA_TYPE, {
++      [streamVideoKey(ALICE)]: { visible: false, ts: expect.any(Number) },
++    });
++  });
++
++  test("junk keys and entries are ignored", () => {
++    const store = persistentVolumeStore();
++    store.setStreamVisible("alice", false);
++    store.setStreamVisible(`@alice:example.org#nonsense`, false);
++    expect(window.localStorage.getItem(LOCAL_STORAGE_KEY)).toBeNull();
++  });
++});
+diff --git a/src/state/media/RemoteScreenShareViewModel.ts b/src/state/media/RemoteScreenShareViewModel.ts
+index bf5fb24..492c049 100644
+--- a/src/state/media/RemoteScreenShareViewModel.ts
++++ b/src/state/media/RemoteScreenShareViewModel.ts
+@@ -6,8 +6,12 @@ SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
+ Please see LICENSE in the repository root for full details.
+ */
+ 
+-import { Track, type RemoteParticipant } from "livekit-client";
+-import { map, of, switchMap } from "rxjs";
++import {
++  Track,
++  type RemoteParticipant,
++  type RemoteTrackPublication,
++} from "livekit-client";
++import { BehaviorSubject, combineLatest, map, of, switchMap } from "rxjs";
+ 
+ import { type Behavior } from "../Behavior";
+ import {
+@@ -18,8 +22,10 @@ import {
+ import { type ObservableScope } from "../ObservableScope";
+ import { createVolumeControls, type VolumeControls } from "../VolumeControls";
+ import {
++  persistentVolumeStore,
+   rememberParticipantVolume,
+   screenShareVolumeKey,
++  streamVideoKey,
+ } from "../PersistentVolume";
+ import { observeTrackReference$ } from "../observeTrackReference";
+ 
+@@ -28,8 +34,21 @@ export interface RemoteScreenShareViewModel
+   local: false;
+   /**
+    * Whether this screen share's video should be displayed.
++   *
++   * This reflects the publisher: whether they are sharing and connected. It is
++   * not the viewer's choice; see `videoVisible$` for that.
+    */
+   videoEnabled$: Behavior<boolean>;
++  /**
++   * Whether this viewer wants the stream rendered and received.
++   *
++   * Plotina addition: local to the viewer, remembered by MXID and source, and
++   * independent of `videoEnabled$` and of the share's audio.
++   */
++  videoVisible$: Behavior<boolean>;
++  /** Shows or hides this stream for this viewer only. */
++  setVideoVisible: (visible: boolean) => void;
++  toggleVideoVisible: () => void;
+   /**
+    * Whether this screen share should be considered to have an audio track.
+    */
+@@ -64,6 +83,47 @@ export function createRemoteScreenShare(
+     volumeControls,
+   );
+ 
++  // Plotina: whether this viewer wants the stream at all. Kept apart from
++  // videoEnabled$ (which is the publisher's state) so hiding a stream never
++  // looks like the publisher stopped sharing.
++  const store = persistentVolumeStore();
++  const videoKey = streamVideoKey(inputs.userId);
++  const videoVisibleSubject$ = new BehaviorSubject<boolean>(
++    // Show by default: hiding is an explicit choice, so it needs an entry.
++    store.getStreamVisible(videoKey) ?? true,
++  );
++  const videoVisible$ = scope.behavior<boolean>(videoVisibleSubject$);
++  // A choice made on another device applies to a call that is already running.
++  scope.onEnd(
++    store.onChange(videoKey, () => {
++      const saved = store.getStreamVisible(videoKey);
++      if (saved !== null && saved !== videoVisibleSubject$.value)
++        videoVisibleSubject$.next(saved);
++    }),
++  );
++
++  const screenSharePublication$ = inputs.participant$.pipe(
++    switchMap((p) =>
++      p ? observeTrackReference$(p, Track.Source.ScreenShare) : of(undefined),
++    ),
++    // A remote participant's publication is always a RemoteTrackPublication,
++    // which is the half that can unsubscribe; the base type is the common one.
++    map((ref) => ref?.publication as RemoteTrackPublication | undefined),
++  );
++  // This is what actually stops the video: taking the track out of the
++  // subscription means the client does not receive it, rather than receiving
++  // it and not drawing it. Re-applied whenever the publication changes (a
++  // reconnect or a re-share creates a new one), so the choice survives both.
++  combineLatest([screenSharePublication$, videoVisible$])
++    .pipe(scope.bind())
++    .subscribe(([publication, visible]) => publication?.setSubscribed(visible));
++
++  const setVideoVisible = (visible: boolean): void => {
++    if (videoVisibleSubject$.value === visible) return;
++    videoVisibleSubject$.next(visible);
++    store.setStreamVisible(videoKey, visible);
++  };
++
+   return {
+     ...createBaseScreenShare(scope, inputs),
+     ...volumeControls,
+@@ -71,6 +131,9 @@ export function createRemoteScreenShare(
+     videoEnabled$: scope.behavior(
+       pretendToBeDisconnected$.pipe(map((disconnected) => !disconnected)),
+     ),
++    videoVisible$,
++    setVideoVisible,
++    toggleVideoVisible: (): void => setVideoVisible(!videoVisible$.value),
+     audioEnabled$: scope.behavior(
+       inputs.participant$.pipe(
+         switchMap((p) =>
+diff --git a/src/tile/SpotlightTile.test.tsx b/src/tile/SpotlightTile.test.tsx
+index 854d853..b793a4a 100644
+--- a/src/tile/SpotlightTile.test.tsx
++++ b/src/tile/SpotlightTile.test.tsx
+@@ -11,6 +11,7 @@ import { axe } from "vitest-axe";
+ import userEvent from "@testing-library/user-event";
+ import { TooltipProvider } from "@vector-im/compound-web";
+ import { BehaviorSubject } from "rxjs";
++import { type RemoteTrackPublication } from "livekit-client";
+ 
+ import { SpotlightTile } from "./SpotlightTile";
+ import {
+@@ -171,6 +172,62 @@ test("Screen share volume UI is hidden when screen share has no audio", async ()
+   ).not.toBeInTheDocument();
+ });
+ 
++test("Screen share can be hidden and shown again from its menu", async () => {
++  const setSubscribed = vi.fn();
++  const vm = mockRemoteScreenShare(
++    mockRtcMembership("@alice:example.org", "AAAA"),
++    {},
++    mockRemoteParticipant({
++      getTrackPublication: () =>
++        ({ setSubscribed }) as unknown as RemoteTrackPublication,
++    }),
++  );
++
++  const user = userEvent.setup();
++  const { container } = render(
++    <SpotlightTile
++      vm={
++        new SpotlightTileViewModel(
++          constant([vm]),
++          constant(false),
++          constant("solid"),
++        )
++      }
++      targetWidth={300}
++      targetHeight={200}
++      expanded={false}
++      onToggleExpanded={vi.fn()}
++      showIndicators
++      showNameTags
++      showRingingStatus
++      focusable
++    />,
++  );
++
++  expect(await axe(container)).toHaveNoViolations();
++
++  // The toggle lives next to the volume button, so it is available for a
++  // stream with no audio too.
++  await user.click(
++    screen.getByRole("button", { name: "Screen share visibility" }),
++  );
++  const hideItem = screen.getByRole("menuitemcheckbox", {
++    name: "Don't show this stream",
++  });
++  expect(hideItem).toHaveAttribute("aria-checked", "false");
++  await user.click(hideItem);
++
++  expect(vm.videoVisible$.value).toBe(false);
++  expect(setSubscribed).toHaveBeenLastCalledWith(false);
++  // The tile stays in place so the stream can be shown again from here.
++  screen.getByText("Stream hidden");
++
++  await user.click(hideItem);
++  expect(vm.videoVisible$.value).toBe(true);
++  expect(setSubscribed).toHaveBeenLastCalledWith(true);
++  expect(screen.queryByText("Stream hidden")).not.toBeInTheDocument();
++});
++
+ test("SpotlightTile displays ringing media", async () => {
+   const pickupState$ = new BehaviorSubject<
+     RingingMediaViewModel["pickupState$"]["value"]
+diff --git a/src/tile/SpotlightTile.tsx b/src/tile/SpotlightTile.tsx
+index 97e1f4a..3548f20 100644
+--- a/src/tile/SpotlightTile.tsx
++++ b/src/tile/SpotlightTile.tsx
+@@ -8,6 +8,7 @@ Please see LICENSE in the repository root for full details.
+ import {
+   type ComponentProps,
+   type FC,
++  type ReactNode,
+   type Ref,
+   type RefAttributes,
+   useCallback,
+@@ -20,6 +21,8 @@ import {
+   CollapseIcon,
+   ChevronLeftIcon,
+   ChevronRightIcon,
++  VisibilityOffIcon,
++  VisibilityOnIcon,
+   VolumeOffIcon,
+   VolumeOnIcon,
+   VolumeOffSolidIcon,
+@@ -31,7 +34,7 @@ import { useObservableRef } from "observable-hooks";
+ import { useTranslation } from "react-i18next";
+ import classNames from "classnames";
+ import { type TrackReferenceOrPlaceholder } from "@livekit/components-core";
+-import { Menu, MenuItem, Text } from "@vector-im/compound-web";
++import { Menu, MenuItem, Text, ToggleMenuItem } from "@vector-im/compound-web";
+ 
+ import FullScreenMaximiseIcon from "../icons/FullScreenMaximise.svg?react";
+ import FullScreenMinimiseIcon from "../icons/FullScreenMinimise.svg?react";
+@@ -146,6 +149,8 @@ SpotlightUserMediaItem.displayName = "SpotlightUserMediaItem";
+ interface SpotlightScreenShareItemProps extends SpotlightMemberMediaItemBaseProps {
+   vm: ScreenShareViewModel;
+   videoEnabled: boolean;
++  /** Shown over the tile, e.g. when the viewer has hidden this stream. */
++  status?: ReactNode;
+ }
+ 
+ const SpotlightScreenShareItem: FC<SpotlightScreenShareItemProps> = ({
+@@ -162,9 +167,19 @@ interface SpotlightRemoteScreenShareItemProps extends SpotlightMemberMediaItemBa
+ const SpotlightRemoteScreenShareItem: FC<
+   SpotlightRemoteScreenShareItemProps
+ > = ({ vm, ...props }) => {
++  const { t } = useTranslation();
+   const videoEnabled = useBehavior(vm.videoEnabled$);
++  const videoVisible = useBehavior(vm.videoVisible$);
+   return (
+-    <SpotlightScreenShareItem vm={vm} videoEnabled={videoEnabled} {...props} />
++    <SpotlightScreenShareItem
++      {...props}
++      vm={vm}
++      // The published track may still exist briefly after unsubscribing; never
++      // hand it to the player while the viewer has hidden the stream.
++      video={videoVisible ? props.video : undefined}
++      videoEnabled={videoEnabled && videoVisible}
++      status={videoVisible ? undefined : t("video_tile.stream_hidden")}
++    />
+   );
+ };
+ 
+@@ -380,6 +395,60 @@ const ScreenShareVolumeButton: FC<ScreenShareVolumeButtonProps> = ({ vm }) => {
+   );
+ };
+ 
++interface ScreenShareVisibilityButtonProps {
++  vm: RemoteScreenShareViewModel;
++}
++
++/**
++ * Plotina: lets this viewer stop receiving and showing one participant's
++ * screen share. The publisher, the other streams and all audio are untouched;
++ * the choice is remembered per MXID and source.
++ */
++const ScreenShareVisibilityButton: FC<ScreenShareVisibilityButtonProps> = ({
++  vm,
++}) => {
++  const { t } = useTranslation();
++  const videoVisible = useBehavior(vm.videoVisible$);
++  const latestVideoVisible = useLatest(videoVisible);
++  const [visibilityMenuOpen, setVisibilityMenuOpen] = useState(false);
++  const onSelectVisibility = useCallback(
++    (e: Event) => {
++      // Keep the menu open: the item is a toggle, and its checked state is the
++      // feedback that the choice was applied.
++      e.preventDefault();
++      vm.setVideoVisible(!latestVideoVisible.current);
++    },
++    [vm, latestVideoVisible],
++  );
++
++  const label = t("video_tile.screen_share_visibility");
++  return (
++    <Menu
++      open={visibilityMenuOpen}
++      onOpenChange={setVisibilityMenuOpen}
++      title={label}
++      side="top"
++      align="end"
++      trigger={
++        <button className={styles.expand} aria-label={label}>
++          {videoVisible ? (
++            <VisibilityOnIcon aria-hidden width={20} height={20} />
++          ) : (
++            <VisibilityOffIcon aria-hidden width={20} height={20} />
++          )}
++        </button>
++      }
++    >
++      <ToggleMenuItem
++        Icon={videoVisible ? VisibilityOnIcon : VisibilityOffIcon}
++        label={t("video_tile.hide_stream")}
++        checked={!videoVisible}
++        onSelect={onSelectVisibility}
++      />
++    </Menu>
++  );
++};
++
+ interface Props {
+   ref?: Ref<HTMLDivElement>;
+   vm: SpotlightTileViewModel;
+@@ -536,6 +605,9 @@ export const SpotlightTile: FC<Props> = ({
+       </div>
+ 
+       <div className={styles.bottomRightButtons}>
++        {visibleMedia?.type === "screen share" && !visibleMedia.local && (
++          <ScreenShareVisibilityButton vm={visibleMedia} />
++        )}
+         {visibleMedia?.type === "screen share" && !visibleMedia.local && (
+           <ScreenShareVolumeButton vm={visibleMedia} />
+         )}
+diff --git a/src/utils/test.ts b/src/utils/test.ts
+index 49ae0a3..d7bcc3c 100644
+--- a/src/utils/test.ts
++++ b/src/utils/test.ts
+@@ -373,7 +373,11 @@ export function mockRemoteParticipant(
+     isLocal: false,
+     setVolume() {},
+     getTrackPublication: () =>
+-      ({}) as Partial<RemoteTrackPublication> as RemoteTrackPublication,
++      // A publication the ViewModels may talk to; screen shares ask it to
++      // subscribe or unsubscribe as the viewer hides or shows them.
++      ({
++        setSubscribed() {},
++      }) as Partial<RemoteTrackPublication> as RemoteTrackPublication,
+     // this will only get used for `getTrackPublications().length`
+     getTrackPublications: () => [0],
+     ...mockEmitter(),

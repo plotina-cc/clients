@@ -13,6 +13,11 @@ This note is about that patch only. Element X, FluffyChat and Cinny are out of s
 per-participant volume at all, and FluffyChat's calls are not stable enough to build on. Nothing in
 this patch touches them, the SFU, or `pins.env`.
 
+`patches/0005-plotina-stream-video-toggle.patch` reuses the same map and account data event for the
+viewer's choice of whether to show a stream at all (`<mxid>#screenshare-video`); see
+[STREAM-VIDEO-TOGGLE.md](./STREAM-VIDEO-TOGGLE.md). Its entries are not volumes and are never read
+as one.
+
 ## What is remembered, and under which key
 
 | Key | What it controls |
