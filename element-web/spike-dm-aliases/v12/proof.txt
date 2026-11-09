@@ -1,0 +1,27 @@
+INFO room id: !SXCZ-1RDqc_JxejRKA17NoOqnAUk2TuB9bBy9GMTIuo (v12 opaque)
+PASS room id is an opaque v12 id (no server part): !SXCZ-1RDqc_JxejRKA17NoOqnAUk2TuB9bBy9GMTIuo
+PASS room is recognised as a DM from room data, not from the id shape: isDirect(!SXCZ-1RDqc_JxejRKA17NoOqnAUk2TuB9bBy9GMTIuo)=true
+INFO before: room v12 state events=7 m.room.name=404 account_data={}
+PASS stock name before rename: header="Даниил" room.name="Даниил" aliases={}
+PASS header takes the alias: header="Денчик"
+PASS room list takes the alias: list=["Денчик","QA Группа"]
+PASS Room.name takes the alias: room.name="Денчик"
+PASS advertised alias map: {"!SXCZ-1RDqc_JxejRKA17NoOqnAUk2TuB9bBy9GMTIuo":"Денчик"}
+INFO tab title: after rename="Plotina Desktop | Даниил" after 8s="Plotina Desktop | Даниил" after a room switch="Plotina Desktop | Денчик"
+INFO room settings name field reads m.room.name state: unaffected by the alias
+PASS m.room.name still absent: HTTP 404 {"errcode":"M_NOT_FOUND","error":"Event not found."}
+PASS alias lives in account data: {"!SXCZ-1RDqc_JxejRKA17NoOqnAUk2TuB9bBy9GMTIuo":"Денчик"}
+INFO after rename: m.room.name=404 state events=7 account_data={"!SXCZ-1RDqc_JxejRKA17NoOqnAUk2TuB9bBy9GMTIuo":"Денчик"}
+PASS second account does not see the alias: header="Алиса" room.name="Алиса" aliases={}
+PASS alias is per account, both directions: other header="Алиса-для-Боба" other account_data={"!SXCZ-1RDqc_JxejRKA17NoOqnAUk2TuB9bBy9GMTIuo":"Алиса-для-Боба"} owner room.name="Денчик"
+PASS alias applied at startup without action: aliases={"!SXCZ-1RDqc_JxejRKA17NoOqnAUk2TuB9bBy9GMTIuo":"Денчик"} header="Денчик"
+PASS no alias UI on a group room: header="QA Группа"
+PASS group alias is refused with a coded error and a visible message: error="not_direct" banner="Личное имя доступно только в личных диалогах." account_data={"!SXCZ-1RDqc_JxejRKA17NoOqnAUk2TuB9bBy9GMTIuo":"Денчик"}
+PASS invalid room id is refused visibly: error="invalid_room_id" banner="Некорректный id комнаты: \"not a room id\""
+PASS reset restores the stock name: header="Даниил" room.name="Даниил"
+PASS reset leaves an empty map with no empty values: HTTP 200 {}
+INFO after reset: m.room.name=404 state events=7 account_data={}
+PASS no page errors and no overlay errors in the client log: 0 of 12 console errors mention the overlay
+
+18/18 checks passed; shots in /home/hermes/.hermes/profiles/dev/cache/scratch/t_bbbd531d/evidence/shots-v12-final2
+EXIT=0

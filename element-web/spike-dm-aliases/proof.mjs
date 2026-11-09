@@ -53,6 +53,8 @@ const HS = arg("homeserver", "http://127.0.0.1:8008");
 const [OWNER_USER, OWNER_PASS] = arg("owner", "alice:alice-spike-pass").split(":");
 const [OTHER_USER, OTHER_PASS] = arg("other", "bob:bob-spike-pass").split(":");
 const ROOM = arg("room", "");
+const GROUP = arg("group", "");
+const EXPECT_OPAQUE = arg("expect-opaque", "") !== "";
 const OUT = arg("out", "/tmp/spike-shots");
 const ALIAS = arg("alias", "Денчик");
 const ACCOUNT_DATA = "cc.plotina.room_aliases";
@@ -127,21 +129,24 @@ async function dismissNotices(page) {
 }
 
 async function openRoom(page, roomId) {
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < 6; attempt++) {
     // The device-verification prompt can land after the first sync, i.e.
     // after login() already drained the earlier ones; keep draining.
     await dismissNotices(page);
     await page.evaluate((id) => { location.hash = "#/home"; }, roomId);
-    await page.waitForTimeout(800);
+    await page.waitForTimeout(1000);
     await page.evaluate((id) => { location.hash = "#/room/" + id; }, roomId);
     try {
-      await page.waitForSelector(".mx_RoomHeader_heading", { timeout: 20000 });
+      await page.waitForSelector(".mx_RoomHeader_heading", { timeout: 25000 });
       await dismissNotices(page);
-      await page.waitForTimeout(1200);
+      await page.waitForTimeout(1500);
       return page.textContent(".mx_RoomHeader_heading");
     } catch (err) {
-      if (attempt === 3) throw err;
-      await page.waitForTimeout(2500);
+      if (attempt === 5) {
+        await page.screenshot({ path: path.join(OUT, "room-open-failed.png") }).catch(() => {});
+        throw err;
+      }
+      await page.waitForTimeout(4000);
     }
   }
   return null;
@@ -163,8 +168,30 @@ async function aliases(page) {
   return page.evaluate(() => (window.plotinaDmAliases ? window.plotinaDmAliases.aliases() : null));
 }
 
-function shot(page, name) {
+async function shot(page, name) {
   return page.screenshot({ path: path.join(OUT, name) });
+}
+
+/** API evidence for the report: room state before/after + account data. */
+async function apiDump(base, name) {
+  const room = encodeURIComponent(base.roomId);
+  const user = encodeURIComponent(base.userId);
+  const stateName = await api(`/_matrix/client/v3/rooms/${room}/state/m.room.name`, base.token);
+  const stateAll = await api(`/_matrix/client/v3/rooms/${room}/state`, base.token);
+  const create = await api(`/_matrix/client/v3/rooms/${room}/state/m.room.create`, base.token);
+  const accountData = await api(`/_matrix/client/v3/user/${user}/account_data/${ACCOUNT_DATA}`, base.token);
+  const dump = {
+    at: new Date().toISOString(),
+    room_id: base.roomId,
+    room_version: (create.json || {}).room_version,
+    id_has_server_part: base.roomId.includes(":"),
+    state_m_room_name: { status: stateName.status, body: stateName.json },
+    state_event_types: ((stateAll.json || []).map((e) => e.type)).sort(),
+    state_event_count: (stateAll.json || []).length,
+    account_data_cc_plotina_room_aliases: { status: accountData.status, body: accountData.json },
+  };
+  fs.writeFileSync(path.join(OUT, name), JSON.stringify(dump, null, 2) + "\n");
+  return dump;
 }
 
 async function main() {
@@ -173,6 +200,13 @@ async function main() {
   // Owner session: obtain a token for the API reads, then reset the alias.
   const ownerCtx = await browser.newContext();
   const owner = await ownerCtx.newPage();
+  // Console noise from the overlay itself must be empty on a working room;
+  // Element logs unrelated errors, so only overlay/page errors are asserted.
+  const consoleIssues = [];
+  owner.on("console", (msg) => {
+    if (msg.type() === "error") consoleIssues.push(msg.text());
+  });
+  owner.on("pageerror", (err) => consoleIssues.push("pageerror: " + err.message));
   await login(owner, OWNER_USER, OWNER_PASS);
   const token = await owner.evaluate(() => window.mxMatrixClientPeg.get().getAccessToken());
   const userId = await owner.evaluate(() => window.mxMatrixClientPeg.get().getUserId());
@@ -189,7 +223,23 @@ async function main() {
   }));
   if (!roomId) throw new Error("no room to work with");
 
+  // The QA defect was room-version specific: v12 ids carry no server part.
+  const idShape = roomId.includes(":") ? "v<=11 !localpart:server" : "v12 opaque";
+  console.log(`INFO room id: ${roomId} (${idShape})`);
+  if (EXPECT_OPAQUE) {
+    record("room id is an opaque v12 id (no server part)", !roomId.includes(":"), roomId);
+  }
+  await openRoom(owner, roomId);
+  const direct = await owner.evaluate(([id]) => window.plotinaDmAliases.isDirect(id), [roomId]);
+  record("room is recognised as a DM from room data, not from the id shape",
+    direct === true, `isDirect(${roomId})=${direct}`);
+
   const beforeHeader = await openRoom(owner, roomId);
+  const apiBase = { roomId, userId, token };
+  const apiBefore = await apiDump(apiBase, "api-before.json");
+  console.log(`INFO before: room v${apiBefore.room_version} state events=${apiBefore.state_event_count} ` +
+    `m.room.name=${apiBefore.state_m_room_name.status} account_data=` +
+    `${JSON.stringify(apiBefore.account_data_cc_plotina_room_aliases.body)}`);
   const beforeName = await clientName(owner, roomId);
   const beforeAliases = await aliases(owner);
   await shot(owner, "01-before-alias.png");
@@ -243,6 +293,10 @@ async function main() {
     `HTTP ${stateName.status} ${JSON.stringify(stateName.json).slice(0, 160)}`);
   record("alias lives in account data", accountData.status === 200 && accountData.json[roomId] === ALIAS,
     JSON.stringify(accountData.json));
+  const apiAfter = await apiDump(apiBase, "api-after-rename.json");
+  console.log(`INFO after rename: m.room.name=${apiAfter.state_m_room_name.status} ` +
+    `state events=${apiAfter.state_event_count} account_data=` +
+    `${JSON.stringify(apiAfter.account_data_cc_plotina_room_aliases.body)}`);
 
   // Negative control: the other account, fresh context and fresh device.
   const otherCtx = await browser.newContext();
@@ -286,12 +340,92 @@ async function main() {
   const restartCtx = await browser.newContext();
   const restart = await restartCtx.newPage();
   await login(restart, OWNER_USER, OWNER_PASS);
+  // Wait for the overlay to attach before reading its map: on a slow first
+  // sync `plotinaDmAliases` exists but has not read account data yet.
+  await restart.waitForFunction(
+    () => window.plotinaDmAliases && window.plotinaDmAliases.ready(),
+    null, { timeout: 90000 }).catch(() => {});
   const startAliases = await aliases(restart);
   const startHeader = await openRoom(restart, roomId);
   await shot(restart, "05-restart-fresh-device.png");
   record("alias applied at startup without action",
     startAliases && startAliases[roomId] === ALIAS && startHeader.trim() === ALIAS,
     `aliases=${JSON.stringify(startAliases)} header=${JSON.stringify(startHeader.trim())}`);
+
+  // FINDING-2: a group room must not be renamable for one account, and must
+  // not carry the pencil at all.
+  if (GROUP) {
+    const groupHeader = await openRoom(owner, GROUP);
+    const pencil = await owner.$(".plotina-alias-btn");
+    record("no alias UI on a group room", !pencil, `header=${JSON.stringify(groupHeader)}`);
+    const refused = await owner.evaluate(async ([id]) => {
+      try {
+        await window.plotinaDmAliases.setAlias(id, "Группа-для-меня");
+        return null;
+      } catch (err) {
+        return err.code || err.message;
+      }
+    }, [GROUP]);
+    const banner = await owner.$eval("#plotina-dm-alias-error", (el) => el.textContent)
+      .catch(() => "");
+    const groupData = await api(
+      `/_matrix/client/v3/user/${encodeURIComponent(userId)}/account_data/${ACCOUNT_DATA}`, token);
+    await shot(owner, "07-group-room-refused.png");
+    record("group alias is refused with a coded error and a visible message",
+      refused === "not_direct" && banner.length > 0 && !(GROUP in groupData.json),
+      `error=${JSON.stringify(refused)} banner=${JSON.stringify(banner.slice(0, 120))} ` +
+      `account_data=${JSON.stringify(groupData.json)}`);
+  }
+
+  // A malformed id must never be a silent no-op (the other half of DEFECT-1).
+  const invalid = await owner.evaluate(async () => {
+    if (!window.plotinaDmAliases) return "no-overlay";
+    try {
+      await window.plotinaDmAliases.setAlias("not a room id", "x");
+      return null;
+    } catch (err) {
+      return err.code || err.message;
+    }
+  });
+  const invalidBanner = await owner.$eval("#plotina-dm-alias-error", (el) => el.textContent)
+    .catch(() => "");
+  await shot(owner, "08-invalid-id-refused.png");
+  record("invalid room id is refused visibly",
+    invalid === "invalid_room_id" && invalidBanner.length > 0,
+    `error=${JSON.stringify(invalid)} banner=${JSON.stringify(invalidBanner.slice(0, 120))}`);
+
+  // Reset through the overlay's own button: back to the stock name, and the
+  // stored map is {} with no empty values (FINDING-3).
+  await openRoom(owner, roomId);
+  await owner.keyboard.press("Escape");
+  await owner.$eval(".plotina-alias-btn", (el) => el.click());
+  await owner.waitForSelector("#plotina-dm-alias-dialog input", { timeout: 10000 });
+  await owner.$eval('#plotina-dm-alias-dialog [data-role=reset]', (el) => el.click());
+  await owner.waitForTimeout(2500);
+  const resetHeader = (await owner.textContent(".mx_RoomHeader_heading") || "").trim();
+  const resetName = await clientName(owner, roomId);
+  const resetData = await api(
+    `/_matrix/client/v3/user/${encodeURIComponent(userId)}/account_data/${ACCOUNT_DATA}`, token);
+  await shot(owner, "09-after-reset.png");
+  const resetValues = Object.values(resetData.json || {}).map((v) => String(v));
+  record("reset restores the stock name", resetHeader !== ALIAS && resetName !== ALIAS,
+    `header=${JSON.stringify(resetHeader)} room.name=${JSON.stringify(resetName)}`);
+  record("reset leaves an empty map with no empty values",
+    resetData.status === 200 && Object.keys(resetData.json || {}).length === 0 &&
+    resetValues.every((v) => v.trim() !== ""),
+    `HTTP ${resetData.status} ${JSON.stringify(resetData.json)}`);
+  const apiReset = await apiDump(apiBase, "api-after-reset.json");
+  console.log(`INFO after reset: m.room.name=${apiReset.state_m_room_name.status} ` +
+    `state events=${apiReset.state_event_count} account_data=` +
+    `${JSON.stringify(apiReset.account_data_cc_plotina_room_aliases.body)}`);
+
+  const overlayErrors = consoleIssues.filter((line) =>
+    line.includes("plotina-dm-aliases") || line.startsWith("pageerror:"));
+  // The raw client log for the report: every console error the page produced.
+  fs.writeFileSync(path.join(OUT, "client-log.txt"),
+    (consoleIssues.length ? consoleIssues.join("\n") : "(no console errors)") + "\n");
+  record("no page errors and no overlay errors in the client log", overlayErrors.length === 0,
+    overlayErrors.length ? JSON.stringify(overlayErrors) : `0 of ${consoleIssues.length} console errors mention the overlay`);
 
   await browser.close();
   const failed = results.filter((r) => !r.ok);

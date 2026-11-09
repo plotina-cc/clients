@@ -33,9 +33,12 @@ config/element/
                           from prefers-color-scheme before the bundle loads
   plotina-dm-aliases.js   personal room names: room_id -> label map in account data
                           cc.plotina.room_aliases, applied over Room.calculateRoomName
-                          (see SPIKE-dm-aliases.md; ships in both clients)
+                          (see SPIKE-dm-aliases.md and FIX-dm-aliases-v12.md;
+                          ships in both clients)
   SPIKE-dm-aliases.md     spike report: route, proof, gaps, cost to production
-  spike-dm-aliases/       proof.mjs (Playwright), bundle-hooks.sh, logs, screenshots
+  FIX-dm-aliases-v12.md   post-QA fix: v12 opaque room ids, DM-only, empty reset
+  spike-dm-aliases/       proof.mjs (Playwright), bundle-hooks.sh, logs, screenshots;
+                          v12/ and v11/ hold the post-QA fix evidence
   plotina-icon.svg        login-header logo used before/without config
   plotina-icon-192.png    apple-touch-icon target (branding/icons/png/green-192.png)
   plotina-bg.png          welcome background (branding/icons/png/green-256.png)
@@ -152,6 +155,48 @@ runs both test suites, and prints the Dockerfile diff. Deploy only after both
 suites are green. On a failure, read the "Assumptions" table: a moved label or a
 changed `</head>` is a two-line fix, a changed constraint shape means looking at
 Element Call again.
+
+## Personal room names (DM aliases)
+
+`plotina-dm-aliases.js` gives every account personal names for its direct
+messages: a pencil in the open DM's header opens "Личное имя", and the label
+lives in account data `cc.plotina.room_aliases` as `{"<room_id>": "<label>"}`.
+Only the signed-in account sees it; the room's own name and state stay
+untouched (nothing writes a room name event), so the other participant and
+other clients keep seeing the real name. `SPIKE-dm-aliases.md` documents the
+route (`Room.calculateRoomName` wrapped through `window.mxMatrixClientPeg`) and
+what it costs; `FIX-dm-aliases-v12.md` records the post-QA fixes below.
+
+- **Both room-id shapes.** Room versions up to 11 use `!localpart:server`;
+  version 12 (Synapse's default since 1.162) uses an opaque `!<base64url>`
+  with no server part. The overlay treats any `!` id without whitespace or a
+  slash as a room id and decides what a room is from the room data
+  (`client.getRoom`, `m.direct`, joined members) — never from the id's shape.
+- **Personal dialogues only.** The pencil appears only for a DM, defined as a
+  room the account's `m.direct` lists or a room with exactly two joined
+  members. Setting a name on a group room is refused with a visible message;
+  a group's name is its own and is never masked locally.
+- **Refusals are visible.** An invalid id or a non-DM room rejects with a coded
+  `Error` (`invalid_room_id`, `unknown_room`, `not_direct`) and a banner, in
+  addition to the message inside the dialog. Nothing fails silently.
+- **Reset.** "Сбросить" drops the key from the map; every write is sanitised,
+  so removing the last alias stores `{}` and no entry ever holds an empty
+  value. The account-data event itself stays behind as `{}`: matrix-js-sdk 44
+  implements `deleteAccountData(type)` as `setAccountData(type, {})` and Matrix
+  gives clients no way to remove account data.
+- **Known seams** (unchanged from the spike): the browser tab title follows on
+  the next room switch, not instantly; a room upgrade does not migrate the
+  alias; other clients and server-side push/email know nothing about it.
+
+```bash
+# pure logic: both id shapes, the DM rule, the name hook, the empty reset
+node tests/dm_aliases.test.js plotina-dm-aliases.js
+# end to end on a real homeserver (v12: run it against Synapse >= 1.162 and
+# pass --expect-opaque 1 --group <id>)
+node spike-dm-aliases/proof.mjs --base http://127.0.0.1:8071 \
+  --homeserver http://127.0.0.1:18009 --owner alice:... --other bob:... \
+  --room '!opaqueRoomId' --group '!groupRoomId' --expect-opaque 1 --out /tmp/shots
+```
 
 ## Publish (CI)
 

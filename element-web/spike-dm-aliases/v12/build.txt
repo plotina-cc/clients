@@ -1,0 +1,23 @@
+Build of the webapp used for the v12 proof (2026-11-10).
+
+$ WORK=…/build SENTRY_DSN=<repo value> element-desktop/scripts/prepare-webapp.sh
+26: webapp version: v1.12.32
+32: branding: index.html: plotina-dm-aliases.js loads (relative src)
+42: ==> verify
+44: webapp ready: …/build/webapp (218M)   (exit 0)
+
+Upstream tarball is the pinned release, hash checked by the script against
+webapp.lock.json:
+  27599ca285d85edd841c04b5c662ce4e773f562bc98090b4b9e2d58cff6b308c  element-v1.12.32.tar.gz
+     == sha256 in element-desktop/webapp.lock.json
+
+Byte equality and determinism:
+  c2162b132bb4ae7a02e88f5a2b05d0979b1da804ceba39ebb9d204f1c716aacf  webapp/plotina-dm-aliases.js
+     == element-web/plotina-dm-aliases.js (the payload is copied, not rebuilt)
+  96e884c1c3581ad1d891e93daa87dd505e72618fb16edc6cfed49b11ec0e2674  webapp/index.html
+     == the same index.html sha QA measured on the spike branch (the overlay
+        tag has not moved; only the payload it loads changed)
+
+Served: (cd webapp && python3 -m http.server 8071 --bind 127.0.0.1); the only
+edit to the built tree was config.json's default_server_config repointed at the
+throwaway homeserver and the sentry object removed for the local run.

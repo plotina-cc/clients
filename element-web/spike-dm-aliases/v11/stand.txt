@@ -1,0 +1,13 @@
+Regression run on a room version 11 DM on the same stand (Synapse 1.164.1):
+the id keeps the "!localpart:server" shape, so this is the v<=11 path the
+original spike and the first QA run exercised.
+
+  DM     !LVdhfBDpYrvRqHicxI:localhost   room_version 11
+         members alice, bob; is_direct invite; listed in both m.direct maps
+  group  !x1bjMrsUU-PgPMGjzJh-f6IWkIdY-M6L7c7g4SI6Q2Q   room_version 12
+         (the same three-member group as the v12 run)
+
+Same webapp bytes as the v12 proof (`plotina-dm-aliases.js` sha256
+c2162b132bb4ae7a02e88f5a2b05d0979b1da804ceba39ebb9d204f1c716aacf), same
+homeserver, same accounts. Result: 17/17 checks passed (the v12-only
+"room id is opaque" check is not run without `--expect-opaque 1`).

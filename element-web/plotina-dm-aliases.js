@@ -41,15 +41,45 @@ UI: a pencil button in the open room's header opens a small dialog
 pattern as noise/boot.js and plotina-update-channel.js: locate by class,
 insert once, re-insert after re-renders.
 
+Room ids: "!localpart:server" (room versions up to 11) and the opaque
+"!<base64url>" of room version 12 have nothing in common but the leading "!".
+Synapse creates v12 rooms by default since 1.162, so production DMs are
+opaque and any format rule stricter than "starts with !, no whitespace or
+slash" silently hides the feature (the QA defect). Which room a request
+belongs to is therefore checked against the room data — the room object of
+this client and its m.direct/member list — not against an id shape.
+
+Only personal dialogues: the alias UI and setter apply to rooms this account
+has as a DM (listed in m.direct, or exactly two joined members). A group
+room's name is the room's own name; it is never masked locally (QA finding).
+
+Reset writes the map without the key, and every write is sanitised, so the
+stored object never carries empty values: removing the last alias leaves
+{}. The account data event itself stays behind as {}: matrix-js-sdk 44
+implements deleteAccountData(type) as setAccountData(type, {}), and Matrix
+has no client-side removal for account data.
+
 Test handle: window.plotinaDmAliases exposes the alias map plus set/clear/
-refresh so QA can drive the same code path the dialog uses.
+refresh so QA can drive the same code path the dialog uses. Invalid ids and
+non-DM rooms reject with a coded Error and a visible banner, never silence.
 */
 (function (root) {
   "use strict";
 
   var ACCOUNT_DATA_TYPE = "cc.plotina.room_aliases";
-  var ROOM_ID_RE = /^!.*:./;
+  var DIRECT_EVENT_TYPE = "m.direct";
   var CLIENT_POLL_MS = 250;
+
+  /**
+   * Room versions <= 11: "!localpart:server". Room version 12: opaque
+   * "!<base64url>" with no server part. The only shape both share is the
+   * leading "!" and the absence of whitespace and "/" — anything stricter
+   * (the old /^!.*:./) drops every v12 room, which is the QA defect.
+   */
+  function isRoomId(id) {
+    return typeof id === "string" && id.length > 1 && id.charAt(0) === "!" &&
+      !/[\s\/]/.test(id);
+  }
 
   var STRINGS = {
     ru: {
@@ -62,6 +92,9 @@ refresh so QA can drive the same code path the dialog uses.
       button: "Переименовать для себя",
       saved: "Имя сохранено",
       failed: "Не удалось сохранить имя: ",
+      invalid: "Некорректный id комнаты: ",
+      unknown: "Комната не найдена в этом клиенте — обновите страницу.",
+      notDirect: "Личное имя доступно только в личных диалогах.",
     },
     en: {
       title: "Personal name",
@@ -73,6 +106,9 @@ refresh so QA can drive the same code path the dialog uses.
       button: "Rename for myself",
       saved: "Name saved",
       failed: "Could not save the name: ",
+      invalid: "Invalid room id: ",
+      unknown: "This room is not in the current client — reload the page.",
+      notDirect: "A personal name is only available for direct messages.",
     },
   };
 
@@ -83,6 +119,10 @@ refresh so QA can drive the same code path the dialog uses.
 
   var state = {
     aliases: {},
+    // room_id -> user_id for this account's m.direct rooms; refreshed on
+    // every apply() and on m.direct changes. Used to answer "is this a DM?"
+    // without asking the id's shape.
+    direct: {},
     client: null,
     patched: false,
     started: false,
@@ -107,11 +147,25 @@ refresh so QA can drive the same code path the dialog uses.
     if (!content || typeof content !== "object") return out;
     Object.keys(content).forEach(function (roomId) {
       var value = content[roomId];
-      if (typeof value === "string" && value.trim() && ROOM_ID_RE.test(roomId)) {
-        out[roomId] = value.trim();
+      if (typeof value !== "string" || !value.trim()) return;
+      if (!isRoomId(roomId)) {
+        warnOnce(roomId);
+        return;
       }
+      out[roomId] = value.trim();
     });
     return out;
+  }
+
+  // A payload from a buggy version or another client must not spam the
+  // console on every sync; report each dropped key once, loudly enough to be
+  // visible in the client log as the "why is my alias gone" trace.
+  var warnedKeys = {};
+  function warnOnce(roomId) {
+    if (warnedKeys[roomId] || typeof console === "undefined" || !console.warn) return;
+    warnedKeys[roomId] = true;
+    console.warn("[plotina-dm-aliases] ignoring alias for a key that is not a " +
+      "room id: " + JSON.stringify(roomId));
   }
 
   function readAliases(c) {
@@ -136,28 +190,64 @@ refresh so QA can drive the same code path the dialog uses.
     return next;
   }
 
+  /**
+   * The name the overlay shows for a room, or null for "keep the room's own".
+   * Pure: a room only takes its alias when it is a personal dialogue, so a
+   * stale alias for a group room can never mask that room's real name.
+   */
+  function aliasFor(map, roomId, direct) {
+    if (!direct) return null;
+    var value = map && map[roomId];
+    if (typeof value !== "string") return null;
+    value = value.trim();
+    return value || null;
+  }
+
+  /**
+   * Why a change request must be refused, or null when it may go ahead.
+   * Pure, so the node tests pin both id shapes (v12 opaque included) and the
+   * DM-only rule without a browser. Clearing (blank name) is only checked for
+   * the id: a stale alias must stay removable even when the room is gone.
+   */
+  function aliasRejection(roomId, name, room) {
+    if (!isRoomId(roomId)) return "invalid_room_id";
+    var wanted = String(name === undefined || name === null ? "" : name).trim();
+    if (!wanted) return null;
+    if (!room || !room.known) return "unknown_room";
+    if (!room.direct) return "not_direct";
+    return null;
+  }
+
   /* --------------------------------------------------------------- SDK hook */
 
-  function patchRooms(c) {
-    var rooms = c.getRooms ? c.getRooms() : [];
-    if (!rooms || !rooms.length) return false;
-    var proto = Object.getPrototypeOf(rooms[0]);
+  /**
+   * Wrap Room.prototype.calculateRoomName once. The alias answer is supplied
+   * per room by *resolve*, so the hook itself is testable with a fake proto.
+   * ignoreRoomNameEvent=true is getDefaultRoomName()'s call and stays stock.
+   */
+  function installNameHook(proto, resolve) {
     if (!proto || typeof proto.calculateRoomName !== "function") return false;
-    if (proto.__plotinaRoomAliases) {
-      state.patched = true;
-      return true;
-    }
+    if (proto.__plotinaRoomAliases) return true;
     var original = proto.calculateRoomName;
     proto.calculateRoomName = function (userId, ignoreRoomNameEvent) {
       if (!ignoreRoomNameEvent) {
-        var alias = state.aliases[this.roomId];
-        if (typeof alias === "string" && alias) return alias;
+        var alias = resolve(this.roomId);
+        if (alias) return alias;
       }
       return original.apply(this, arguments);
     };
     proto.__plotinaRoomAliases = true;
-    state.patched = true;
     return true;
+  }
+
+  function patchRooms(c) {
+    var rooms = c.getRooms ? c.getRooms() : [];
+    if (!rooms || !rooms.length) return false;
+    var patched = installNameHook(Object.getPrototypeOf(rooms[0]), function (roomId) {
+      return aliasFor(state.aliases, roomId, isDirectRoom(roomId));
+    });
+    if (patched) state.patched = true;
+    return patched;
   }
 
   function recalculateRooms(c) {
@@ -174,11 +264,71 @@ refresh so QA can drive the same code path the dialog uses.
     }
   }
 
+  /* --------------------------------------------------------- DM detection */
+
+  /** m.direct content -> {room_id: user_id}; only room ids are kept. */
+  function readDirectRooms(c) {
+    var out = {};
+    if (!c || typeof c.getAccountData !== "function") return out;
+    var event = c.getAccountData(DIRECT_EVENT_TYPE);
+    var content = event && typeof event.getContent === "function" ? event.getContent() : null;
+    if (!content || typeof content !== "object") return out;
+    Object.keys(content).forEach(function (userId) {
+      var list = content[userId];
+      if (!Array.isArray(list)) return;
+      list.forEach(function (roomId) {
+        if (isRoomId(roomId)) out[roomId] = userId;
+      });
+    });
+    return out;
+  }
+
+  /** Joined member count of a room, or null when the client cannot say. */
+  function joinedCount(room) {
+    if (!room) return null;
+    try {
+      if (typeof room.getJoinedMemberCount === "function") {
+        var count = room.getJoinedMemberCount();
+        if (typeof count === "number") return count;
+      }
+      if (typeof room.getJoinedMembers === "function") {
+        var members = room.getJoinedMembers();
+        if (members) return members.length;
+      }
+    } catch (e) {
+      return null;
+    }
+    return null;
+  }
+
+  /**
+   * Is this room a personal dialogue for the signed-in account? Room data,
+   * not the id: v12 opaque ids carry no server part and no shape to test.
+   * A DM is a room m.direct lists, or a room with exactly two joined members
+   * (which is how Element itself presents one-to-one chats). Member data can
+   * arrive after the first name calculation; the SDK recalculates on member
+   * changes, and apply() recalculates on every sync.
+   */
+  function isDirectRoom(roomId) {
+    if (state.direct[roomId]) return true;
+    var c = state.client || client();
+    var room = c && typeof c.getRoom === "function" ? c.getRoom(roomId) : null;
+    return joinedCount(room) === 2;
+  }
+
+  /** What the client knows about a room, for aliasRejection(). */
+  function roomState(roomId) {
+    var c = state.client || client();
+    var room = c && typeof c.getRoom === "function" ? c.getRoom(roomId) : null;
+    return { known: !!(room || state.direct[roomId]), direct: isDirectRoom(roomId) };
+  }
+
   /** Swap the alias map in and repaint every room that might be affected. */
   function apply(aliases) {
     state.aliases = aliases;
     var c = state.client || client();
     if (!c) return;
+    state.direct = readDirectRooms(c);
     if (patchRooms(c)) recalculateRooms(c);
     var event = document.getElementById("plotina-dm-alias-dialog");
     if (event) syncDialog();
@@ -196,15 +346,41 @@ refresh so QA can drive the same code path the dialog uses.
   function writeAliases(next) {
     var c = state.client || client();
     if (!c) return Promise.reject(new Error("no Matrix client yet"));
-    return c.setAccountData(ACCOUNT_DATA_TYPE, next).then(function () {
+    // Write the sanitised map, never the caller's object: blank labels and
+    // keys that are not room ids must not reach the server (QA finding on
+    // reset), and removing the last alias writes {} with no empty values.
+    var clean = parseAliases(next);
+    return c.setAccountData(ACCOUNT_DATA_TYPE, clean).then(function () {
       // Apply locally at once; the accountData sync event re-reads the same
       // map, so this is idempotent rather than racy.
-      apply(parseAliases(next));
+      apply(clean);
       return state.aliases;
     });
   }
 
+  /** Coded error the UI can translate; the message is already human-facing. */
+  function aliasError(code, roomId) {
+    var s = t();
+    var messages = {
+      invalid_room_id: s.invalid + JSON.stringify(String(roomId)),
+      unknown_room: s.unknown,
+      not_direct: s.notDirect,
+    };
+    var err = new Error(messages[code] || code);
+    err.code = code;
+    return err;
+  }
+
   function setAlias(roomId, name) {
+    var rejection = aliasRejection(roomId, name, roomState(roomId));
+    if (rejection) {
+      // The QA defect was a silent no-op: the write went through, nothing
+      // changed on screen. A refused write now says why, in the dialog and in
+      // a banner, and still rejects so callers (the test handle) see it.
+      var err = aliasError(rejection, roomId);
+      showError(err.message);
+      return Promise.reject(err);
+    }
     return writeAliases(withAlias(state.aliases, roomId, name));
   }
 
@@ -235,9 +411,14 @@ refresh so QA can drive the same code path the dialog uses.
         }
       });
       c.on("accountData", function (event) {
-        if (event && typeof event.getType === "function" &&
-            event.getType() === ACCOUNT_DATA_TYPE) {
+        if (!event || typeof event.getType !== "function") return;
+        var type = event.getType();
+        if (type === ACCOUNT_DATA_TYPE) {
           apply(parseAliases(event.getContent ? event.getContent() : null));
+        } else if (type === DIRECT_EVENT_TYPE) {
+          // A room that just became (or stopped being) a DM changes whether
+          // its alias applies at all; re-read m.direct and repaint.
+          apply(state.aliases);
         }
       });
       c.on("sync", function (syncState) {
@@ -298,6 +479,10 @@ refresh so QA can drive the same code path the dialog uses.
     "#plotina-dm-alias-dialog button.plotina-alias-primary{background:#17795a;border-color:#17795a;",
     "color:#fff}",
     "#plotina-dm-alias-dialog .plotina-alias-status{margin-top:10px;font-size:12px;min-height:16px}",
+    "#plotina-dm-alias-error{position:fixed;top:16px;left:50%;transform:translateX(-50%);",
+    "z-index:10001;max-width:min(520px,92vw);padding:10px 14px;border-radius:8px;",
+    "background:#8a1f1f;color:#fff;font-size:13px;line-height:1.4;font-family:inherit;",
+    "box-shadow:0 8px 24px #0006}",
   ].join("");
 
   function injectStyle() {
@@ -322,12 +507,35 @@ refresh so QA can drive the same code path the dialog uses.
     } catch (e) {
       return null;
     }
-    return ROOM_ID_RE.test(id) ? id : null;
+    // v12 opaque ids are legitimate: a leading "!" is the whole contract.
+    // Whether the room is usable is checked against the room data below.
+    return isRoomId(id) ? id : null;
+  }
+
+  /** Visible refusal: a banner, auto-dismissed, never a silent no-op. */
+  function showError(message) {
+    if (!message || !document.body) return;
+    injectStyle();
+    var el = document.getElementById("plotina-dm-alias-error");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "plotina-dm-alias-error";
+      el.setAttribute("role", "alert");
+      document.body.appendChild(el);
+    }
+    el.textContent = message;
+    root.clearTimeout(showError.timer);
+    showError.timer = root.setTimeout(function () {
+      if (el.parentNode) el.parentNode.removeChild(el);
+    }, 8000);
   }
 
   function ensureHeaderButton() {
     var roomId = currentRoomId();
     if (!roomId) return;
+    // The alias is a personal-dialogue feature (QA finding): no pencil on a
+    // group room, where the name belongs to the room and to everyone in it.
+    if (!isDirectRoom(roomId)) return;
     var info = document.querySelector(".mx_RoomHeader_info, .mx_RoomHeader_name");
     if (!info) return;
     var existing = info.querySelector(".plotina-alias-btn");
@@ -348,7 +556,14 @@ refresh so QA can drive the same code path the dialog uses.
 
   function openDialog(roomId) {
     closeDialog();
-    if (!roomId) return;
+    if (!roomId) {
+      showError(t().invalid + JSON.stringify(String(roomId)));
+      return;
+    }
+    if (!isDirectRoom(roomId)) {
+      showError(t().notDirect);
+      return;
+    }
     state.dialogRoomId = roomId;
     injectStyle();
     var s = t();
@@ -448,6 +663,8 @@ refresh so QA can drive the same code path the dialog uses.
     aliases: function () {
       return state.aliases;
     },
+    /** Is the given room a DM for this account (m.direct or 2 members)? */
+    isDirect: isDirectRoom,
     refresh: refresh,
     setAlias: setAlias,
     clearAlias: clearAlias,
@@ -461,8 +678,13 @@ refresh so QA can drive the same code path the dialog uses.
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
       ACCOUNT_DATA_TYPE: ACCOUNT_DATA_TYPE,
+      DIRECT_EVENT_TYPE: DIRECT_EVENT_TYPE,
+      isRoomId: isRoomId,
       parseAliases: parseAliases,
       withAlias: withAlias,
+      aliasFor: aliasFor,
+      aliasRejection: aliasRejection,
+      installNameHook: installNameHook,
     };
     return;
   }

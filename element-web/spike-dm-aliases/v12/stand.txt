@@ -1,0 +1,26 @@
+Throwaway homeserver for the v12 proof (2026-11-10). Not golova, not
+plotina.cc; no production account, room or image was touched.
+
+Image:   matrixdotorg/synapse:latest
+         (label org.opencontainers.image.version = 1.164.1 — the fix needs
+         >= 1.162, where room version 12 is the default for new rooms)
+Config:  SYNAPSE_SERVER_NAME=localhost, report_stats off, generate defaults;
+         the only additions are rc_login limits raised so one proof run can log
+         the same accounts in four times from one address.
+Runtime: docker run -d --user 1001:1001 -p 127.0.0.1:18009:8008
+         -v …/stan/synapse2:/data matrixdotorg/synapse:latest
+
+Accounts (passwords are throwaway stand secrets, not used anywhere else):
+  alice  "Алиса"   alice-pass-1312
+  bob    "Даниил"  bob-pass-1312
+  carol  "QA"      carol-pass-1312
+
+Rooms (created through the client API, provisioning script stan/provision.py):
+  DM     !SXCZ-1RDqc_JxejRKA17NoOqnAUk2TuB9bBy9GMTIuo   room_version 12
+         members alice, bob; is_direct invite; alice's m.direct lists it
+  group  !x1bjMrsUU-PgPMGjzJh-f6IWkIdY-M6L7c7g4SI6Q2Q   room_version 12
+         name "QA Группа", members alice, bob, carol
+
+Both room ids are opaque: no ":" and no server part — exactly the shape the QA
+defect dropped. `GET /rooms/{id}/state` reports room_version 12 (api-*.json
+below include it on every dump).
