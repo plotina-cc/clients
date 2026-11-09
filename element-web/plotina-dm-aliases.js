@@ -10,7 +10,8 @@ participant sees the new name too. What we want is a name that lives in the
 account and nowhere else: a map room_id -> label in account data under
 cc.plotina.room_aliases, applied by the client when it renders the room.
 
-How it attaches without a rebuild (see element-web/README.md, "Patch routes"):
+How it attaches without a rebuild (see SPIKE-dm-aliases.md, "Как мы правим
+element-web"):
 
   * matrix-js-sdk v44 keeps the computed name in Room.name, an OWN property
     recomputed by Room.recalculate() -> Room.calculateRoomName(). So there is
@@ -18,13 +19,16 @@ How it attaches without a rebuild (see element-web/README.md, "Patch routes"):
     `window.mxMatrixClientPeg` (set by matrix-react-sdk's init, verified in the
     v1.12.32 bundle) is the way to reach a Room instance from outside. We take
     the prototype from the first room the client has, wrap calculateRoomName
-    once, and answer with the alias when the room has one. Every consumer
-    (room list tile, room header, tab title, reply context) reads Room.name,
-    so they all see the alias — no DOM rewriting, no race with React.
+    once, and answer with the alias when the room has one. The room list tile,
+    the room header, notifications and toasts all read Room.name, so they
+    follow without any DOM rewriting and without racing React.
+  * The browser tab title is the one surface that does NOT follow at once:
+    matrix-react-sdk recomputes it on room switches, so it picks the alias up
+    the next time the user changes room (measured; see SPIKE-dm-aliases.md §5).
   * Room.calculateRoomName also serves getDefaultRoomName() with
     ignoreRoomNameEvent=true; that call is left untouched, so "the default
     name of this room" keeps meaning the real one.
-  * Recaclulating is enough to repaint: Room.recalculate() emits Room.name,
+  * Recalculating is enough to repaint: Room.recalculate() emits Room.name,
     which is what matrix-react-sdk subscribes to. We call it for every room
     after the alias map changes and after the first sync.
 

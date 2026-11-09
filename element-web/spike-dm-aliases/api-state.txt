@@ -54,3 +54,11 @@
 {"label": "final-2", "who": "bob", "what": "state m.room.name", "http": 404, "body": "{\"errcode\":\"M_NOT_FOUND\",\"error\":\"M_NOT_FOUND: State event not found in room. room_id=!i2kHEuNKioA9a0Xrkn:spike.local event_type=m.room.name\"}"}
 {"label": "final-2", "who": "bob", "what": "state name/alias events", "http": 200, "body": []}
 {"label": "final-2", "who": "bob", "what": "state members", "http": 200, "body": [{"user_id": "@alice:spike.local", "displayname": "alice 🏳️‍⚧️"}, {"user_id": "@bob:spike.local", "displayname": "Даниил"}]}
+{"label": "final-3", "who": "alice", "what": "account_data cc.plotina.room_aliases", "http": 200, "body": {"!i2kHEuNKioA9a0Xrkn:spike.local": "Денчик"}}
+{"label": "final-3", "who": "alice", "what": "state m.room.name", "http": 404, "body": "{\"errcode\":\"M_NOT_FOUND\",\"error\":\"M_NOT_FOUND: State event not found in room. room_id=!i2kHEuNKioA9a0Xrkn:spike.local event_type=m.room.name\"}"}
+{"label": "final-3", "who": "alice", "what": "state name/alias events", "http": 200, "body": []}
+{"label": "final-3", "who": "alice", "what": "state members", "http": 200, "body": [{"user_id": "@alice:spike.local", "displayname": "alice 🏳️‍⚧️"}, {"user_id": "@bob:spike.local", "displayname": "Даниил"}]}
+{"label": "final-3", "who": "bob", "what": "account_data cc.plotina.room_aliases", "http": 200, "body": {"!i2kHEuNKioA9a0Xrkn:spike.local": "Алиса-для-Боба"}}
+{"label": "final-3", "who": "bob", "what": "state m.room.name", "http": 404, "body": "{\"errcode\":\"M_NOT_FOUND\",\"error\":\"M_NOT_FOUND: State event not found in room. room_id=!i2kHEuNKioA9a0Xrkn:spike.local event_type=m.room.name\"}"}
+{"label": "final-3", "who": "bob", "what": "state name/alias events", "http": 200, "body": []}
+{"label": "final-3", "who": "bob", "what": "state members", "http": 200, "body": [{"user_id": "@alice:spike.local", "displayname": "alice 🏳️‍⚧️"}, {"user_id": "@bob:spike.local", "displayname": "Даниил"}]}

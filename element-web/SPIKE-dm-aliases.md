@@ -136,7 +136,7 @@ Webapp — **собранный** `element-desktop/scripts/prepare-webapp.sh` (2
 `COPY` и Dockerfile-проверками (`test -s` + `count == 1`), а из готового
 `/app` вынуто и сверено — ровно один `<script src="/plotina-dm-aliases.js"
 defer>` (относительного нет), payload побайтово равен
-`element-web/plotina-dm-aliases.js` (17278 байт) — `spike-dm-aliases/web-image-check.txt`.
+`element-web/plotina-dm-aliases.js` (17527 байт) — `spike-dm-aliases/web-image-check.txt`.
 
 Прогон: `element-web/spike-dm-aliases/proof.mjs` (Playwright, три браузерных
 контекста, полный вывод — `spike-dm-aliases/proof.txt`):
