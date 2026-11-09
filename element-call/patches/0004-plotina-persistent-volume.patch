@@ -1,0 +1,1170 @@
+diff --git a/src/state/PersistentVolume.test.ts b/src/state/PersistentVolume.test.ts
+new file mode 100644
+index 0000000..916b0d9
+--- /dev/null
++++ b/src/state/PersistentVolume.test.ts
+@@ -0,0 +1,458 @@
++/*
++Copyright 2026 Element Creations Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE in the repository root for full details.
++*/
++
++import { type MatrixClient } from "matrix-js-sdk/lib/matrix";
++import { beforeEach, describe, expect, test, vi } from "vitest";
++
++import { constant } from "./Behavior";
++import { createVolumeControls } from "./VolumeControls";
++import { testScope } from "../utils/test";
++import {
++  ACCOUNT_DATA_TYPE,
++  LOCAL_STORAGE_KEY,
++  MAX_ENTRIES,
++  mergeVolumeMaps,
++  parseStoredVolumes,
++  PersistentVolumeStore,
++  persistentVolumeStore,
++  rememberParticipantVolume,
++  screenShareVolumeKey,
++  WRITE_DEBOUNCE_MS,
++  type SavedVoiceVolume,
++  type VoiceVolumeClient,
++  type VoiceVolumeEvent,
++  type VoiceVolumeMap,
++} from "./PersistentVolume";
++
++const ALICE = "@alice:example.org";
++
++interface FakeClient {
++  client: VoiceVolumeClient;
++  setAccountData: ReturnType<typeof vi.fn>;
++  emit(content: unknown): void;
++}
++
++/** A Matrix client that only knows the bits the store touches. */
++function mockClient(initial?: unknown): FakeClient {
++  const listeners = new Set<(event: VoiceVolumeEvent) => void>();
++  const writes: [string, unknown][] = [];
++  const setAccountData = vi.fn(async (type: string, content: unknown) => {
++    await Promise.resolve();
++    writes.push([type, content]);
++    return {};
++  });
++  const client: VoiceVolumeClient = {
++    getUserId: (): string => ALICE,
++    getAccountData: (type: string): { getContent(): unknown } | undefined =>
++      type === ACCOUNT_DATA_TYPE && initial !== undefined
++        ? { getContent: () => initial }
++        : undefined,
++    setAccountData,
++    on: (_event: string, listener: (event: VoiceVolumeEvent) => void): void => {
++      listeners.add(listener);
++    },
++    off: (
++      _event: string,
++      listener: (event: VoiceVolumeEvent) => void,
++    ): void => {
++      listeners.delete(listener);
++    },
++  };
++  return {
++    client,
++    setAccountData,
++    emit: (content: unknown): void => {
++      for (const listener of listeners) {
++        listener({
++          getType: () => ACCOUNT_DATA_TYPE,
++          getContent: () => content,
++        });
++      }
++    },
++  };
++}
++
++function storeWith(
++  client: FakeClient,
++  storage: Storage = window.localStorage,
++): PersistentVolumeStore {
++  return new PersistentVolumeStore({
++    client: client.client,
++    storage,
++    now: () => Date.now(),
++  });
++}
++
++beforeEach(() => {
++  window.localStorage.clear();
++});
++
++describe("mergeVolumeMaps", () => {
++  test("keeps keys only one side knows about", () => {
++    const merged = mergeVolumeMaps(
++      { [ALICE]: { volume: 0.5, muted: false, ts: 100 } },
++      { "@bob:example.org": { volume: 0.2, muted: false, ts: 50 } },
++    );
++    expect(Object.keys(merged).sort()).toEqual([ALICE, "@bob:example.org"]);
++  });
++
++  test("the newer write wins per key", () => {
++    const merged = mergeVolumeMaps(
++      { [ALICE]: { volume: 0.5, muted: false, ts: 100 } },
++      { [ALICE]: { volume: 0.8, muted: true, ts: 200 } },
++    );
++    expect(merged[ALICE]).toEqual({ volume: 0.8, muted: true, ts: 200 });
++  });
++
++  test("an older write does not overwrite the newer one", () => {
++    const merged = mergeVolumeMaps(
++      { [ALICE]: { volume: 0.5, muted: false, ts: 200 } },
++      { [ALICE]: { volume: 0.8, muted: true, ts: 100 } },
++    );
++    expect(merged[ALICE]).toEqual({ volume: 0.5, muted: false, ts: 200 });
++  });
++
++  test("a tie goes to the writer we merged in", () => {
++    const merged = mergeVolumeMaps(
++      { [ALICE]: { volume: 0.5, muted: false, ts: 100 } },
++      { [ALICE]: { volume: 0.8, muted: false, ts: 100 } },
++    );
++    expect(merged[ALICE].volume).toBe(0.8);
++  });
++});
++
++describe("parseStoredVolumes", () => {
++  test("broken JSON is a cold start, not an exception", () => {
++    expect(parseStoredVolumes("{not json")).toEqual({});
++    expect(parseStoredVolumes("[]")).toEqual({});
++    expect(parseStoredVolumes("null")).toEqual({});
++    expect(parseStoredVolumes(null)).toEqual({});
++  });
++
++  test("drops entries that are not about a Matrix user", () => {
++    expect(
++      parseStoredVolumes(
++        JSON.stringify({
++          "not-an-mxid": { volume: 0.5, muted: false, ts: 1 },
++          "@ok:example.org": { volume: 0.5, muted: false, ts: 1 },
++        }),
++      ),
++    ).toEqual({
++      "@ok:example.org": { volume: 0.5, muted: false, ts: 1 },
++    });
++  });
++
++  test("clamps volumes and treats a zero volume as muted", () => {
++    const parsed = parseStoredVolumes(
++      JSON.stringify({
++        "@a:example.org": { volume: 4, muted: false, ts: 1 },
++        "@b:example.org": { volume: -1, muted: false, ts: 1 },
++        "@c:example.org": { volume: 0, muted: false, ts: 1 },
++      }),
++    );
++    expect(parsed["@a:example.org"].volume).toBe(1);
++    expect(parsed["@b:example.org"]).toMatchObject({ volume: 0, muted: true });
++    expect(parsed["@c:example.org"]).toMatchObject({ volume: 0, muted: true });
++  });
++
++  test("drops entries whose volume is not a number", () => {
++    expect(
++      parseStoredVolumes(JSON.stringify({ [ALICE]: { volume: "loud" } })),
++    ).toEqual({});
++  });
++});
++
++describe("PersistentVolumeStore", () => {
++  test("nothing is remembered until the user adjusts somebody", () => {
++    const store = storeWith(mockClient());
++    expect(store.get(ALICE)).toEqual(null);
++  });
++
++  test("remembers the volume across a restart", () => {
++    storeWith(mockClient()).set(ALICE, 0.7);
++    // A restart is a fresh store reading the same cache.
++    expect(storeWith(mockClient()).get(ALICE)).toEqual({
++      volume: 0.7,
++      muted: false,
++    });
++  });
++
++  test("remembers muting, and the level to unmute back to", () => {
++    const store = storeWith(mockClient());
++    store.set(ALICE, 0.7);
++    store.set(ALICE, 0, true);
++    expect(store.get(ALICE)).toEqual({ volume: 0.7, muted: true });
++    expect(storeWith(mockClient()).get(ALICE)).toEqual({
++      volume: 0.7,
++      muted: true,
++    });
++  });
++
++  test("rejects volumes that are not numbers", () => {
++    const store = storeWith(mockClient());
++    store.set(ALICE, Number.NaN);
++    // @ts-expect-error - the point of the test is a value of the wrong type
++    store.set(ALICE, "0.5");
++    expect(store.get(ALICE)).toEqual(null);
++  });
++
++  test("clamps out-of-range volumes", () => {
++    const store = storeWith(mockClient());
++    store.set(ALICE, 12);
++    expect(store.get(ALICE)?.volume).toBe(1);
++    store.set(ALICE, -3);
++    expect(store.get(ALICE)).toMatchObject({ volume: 1, muted: true });
++  });
++
++  test("keeps the microphone and the screen share apart", () => {
++    const store = storeWith(mockClient());
++    store.set(ALICE, 0.4);
++    store.set(screenShareVolumeKey(ALICE), 0.9);
++    expect(store.get(ALICE)?.volume).toBe(0.4);
++    expect(store.get(screenShareVolumeKey(ALICE))?.volume).toBe(0.9);
++  });
++
++  test("writes account data once the slider settles", async () => {
++    vi.useFakeTimers();
++    try {
++      const client = mockClient();
++      const store = storeWith(client);
++      store.set(ALICE, 0.6);
++      store.set(ALICE, 0.7);
++      store.set(ALICE, 0.8);
++      expect(client.setAccountData).not.toHaveBeenCalled();
++      await vi.advanceTimersByTimeAsync(499);
++      expect(client.setAccountData).not.toHaveBeenCalled();
++      await vi.advanceTimersByTimeAsync(1);
++      expect(client.setAccountData).toHaveBeenCalledTimes(1);
++      expect(client.setAccountData).toHaveBeenCalledWith(ACCOUNT_DATA_TYPE, {
++        [ALICE]: { volume: 0.8, muted: false, ts: expect.any(Number) },
++      });
++    } finally {
++      vi.useRealTimers();
++    }
++  });
++
++  test("what the laptop saves is what the phone starts with", async () => {
++    vi.useFakeTimers();
++    try {
++      const laptop = mockClient();
++      storeWith(laptop).set(ALICE, 0.35);
++      await vi.advanceTimersByTimeAsync(WRITE_DEBOUNCE_MS);
++      const [type, content] = laptop.setAccountData.mock.calls[0] as [
++        string,
++        VoiceVolumeMap,
++      ];
++      expect(type).toBe(ACCOUNT_DATA_TYPE);
++      // The phone has never seen this account: its cache is empty, so all it
++      // has is the server's copy.
++      window.localStorage.clear();
++      expect(storeWith(mockClient(content)).get(ALICE)).toEqual({
++        volume: 0.35,
++        muted: false,
++      });
++    } finally {
++      vi.useRealTimers();
++    }
++  });
++
++  test("does not re-write a value it just applied from account data", async () => {
++    vi.useFakeTimers();
++    try {
++      const client = mockClient({
++        [ALICE]: { volume: 0.3, muted: false, ts: 10 },
++      });
++      storeWith(client);
++      await vi.advanceTimersByTimeAsync(1000);
++      expect(client.setAccountData).not.toHaveBeenCalled();
++    } finally {
++      vi.useRealTimers();
++    }
++  });
++
++  test("reads the server's copy at start", () => {
++    const client = mockClient({
++      [ALICE]: { volume: 0.3, muted: false, ts: 10 },
++    });
++    expect(storeWith(client).get(ALICE)).toEqual({ volume: 0.3, muted: false });
++  });
++
++  test("applies a change made on another device", () => {
++    const client = mockClient();
++    const store = storeWith(client);
++    const seen: SavedVoiceVolume[] = [];
++    store.onChange(ALICE, () => {
++      seen.push(store.get(ALICE)!);
++    });
++
++    client.emit({ [ALICE]: { volume: 0.2, muted: true, ts: 20 } });
++    expect(seen).toEqual([{ volume: 0.2, muted: true }]);
++    // …and the cache is updated for the next start.
++    expect(storeWith(mockClient()).get(ALICE)).toEqual({
++      volume: 0.2,
++      muted: true,
++    });
++  });
++
++  test("ignores junk in account data", () => {
++    const client = mockClient();
++    const store = storeWith(client);
++    store.set(ALICE, 0.5);
++    expect(() => {
++      client.emit("not a map");
++      client.emit({ [ALICE]: 42 });
++      client.emit({ "@x:example.org": { volume: "loud" } });
++    }).not.toThrow();
++    expect(store.get(ALICE)?.volume).toBe(0.5);
++  });
++
++  test(`keeps at most ${MAX_ENTRIES} entries, dropping the oldest`, async () => {
++    vi.useFakeTimers();
++    try {
++      const client = mockClient();
++      const store = storeWith(client);
++      let ts = 1000;
++      for (let i = 0; i < MAX_ENTRIES + 100; i++) {
++        vi.setSystemTime(ts++);
++        store.set(`@user${i}:example.org`, 0.5);
++      }
++      await vi.advanceTimersByTimeAsync(1000);
++      const written = client.setAccountData.mock.calls[0][1] as VoiceVolumeMap;
++      expect(Object.keys(written)).toHaveLength(MAX_ENTRIES);
++      // The newest entries survived, the oldest were evicted.
++      expect(written["@user99:example.org"]).toBeUndefined();
++      expect(written[`@user${MAX_ENTRIES + 99}:example.org`]).toBeDefined();
++    } finally {
++      vi.useRealTimers();
++    }
++  });
++
++  test("works from the cache when there is no account data, and survives a failed write", async () => {
++    vi.useFakeTimers();
++    try {
++      const client = mockClient();
++      client.setAccountData.mockRejectedValueOnce(
++        new Error("M_LIMIT_EXCEEDED"),
++      );
++      const store = storeWith(client);
++      store.set(ALICE, 0.6);
++      await vi.advanceTimersByTimeAsync(500);
++      expect(store.get(ALICE)?.volume).toBe(0.6);
++      expect(storeWith(mockClient()).get(ALICE)?.volume).toBe(0.6);
++    } finally {
++      vi.useRealTimers();
++    }
++  });
++
++  test("survives a corrupt cache", () => {
++    window.localStorage.setItem(LOCAL_STORAGE_KEY, "{oops");
++    const store = storeWith(mockClient());
++    expect(store.get(ALICE)).toEqual(null);
++    store.set(ALICE, 0.5);
++    expect(store.get(ALICE)?.volume).toBe(0.5);
++  });
++});
++
++describe("rememberParticipantVolume", () => {
++  test("restores the saved level into a fresh set of controls", () => {
++    const client = mockClient({
++      [ALICE]: { volume: 0.4, muted: false, ts: 10 },
++    });
++    window.matrixclient = client.client as unknown as MatrixClient;
++    const sink = vi.fn();
++    const scope = testScope();
++    const controls = createVolumeControls(scope, {
++      pretendToBeDisconnected$: constant(false),
++      sink$: constant(sink),
++    });
++    rememberParticipantVolume(scope, ALICE, controls);
++    expect(controls.playbackVolume$.value).toBe(0.4);
++    expect(sink).toHaveBeenLastCalledWith(0.4);
++  });
++
++  test("restores a muted participant without unmuting them", () => {
++    const client = mockClient({
++      [ALICE]: { volume: 0.4, muted: true, ts: 10 },
++    });
++    window.matrixclient = client.client as unknown as MatrixClient;
++    const scope = testScope();
++    const controls = createVolumeControls(scope, {
++      pretendToBeDisconnected$: constant(false),
++      sink$: constant(vi.fn()),
++    });
++    rememberParticipantVolume(scope, ALICE, controls);
++    expect(controls.playbackVolume$.value).toBe(0);
++    expect(controls.playbackMuted$.value).toBe(true);
++  });
++
++  test("saves what the user does with the slider", async () => {
++    vi.useFakeTimers();
++    try {
++      const client = mockClient();
++      window.matrixclient = client.client as unknown as MatrixClient;
++      const scope = testScope();
++      const controls = createVolumeControls(scope, {
++        pretendToBeDisconnected$: constant(false),
++        sink$: constant(vi.fn()),
++      });
++      rememberParticipantVolume(scope, "@slider:example.org", controls);
++      controls.adjustPlaybackVolume(0.3);
++      controls.adjustPlaybackVolume(0.25);
++      controls.commitPlaybackVolume();
++      await vi.advanceTimersByTimeAsync(500);
++      const written = client.setAccountData.mock.lastCall?.[1] as
++        | VoiceVolumeMap
++        | undefined;
++      expect(written?.["@slider:example.org"]).toEqual({
++        volume: 0.25,
++        muted: false,
++        ts: expect.any(Number),
++      });
++    } finally {
++      vi.useRealTimers();
++    }
++  });
++
++  test("does not record anything just because a tile appeared", async () => {
++    vi.useFakeTimers();
++    try {
++      const client = mockClient();
++      window.matrixclient = client.client as unknown as MatrixClient;
++      const scope = testScope();
++      const controls = createVolumeControls(scope, {
++        pretendToBeDisconnected$: constant(false),
++        sink$: constant(vi.fn()),
++      });
++      rememberParticipantVolume(scope, "@quiet:example.org", controls);
++      await vi.advanceTimersByTimeAsync(1000);
++      // Nobody was adjusted, so nothing is written for them.
++      expect(persistentVolumeStore().get("@quiet:example.org")).toBeNull();
++      expect(client.setAccountData).not.toHaveBeenCalled();
++    } finally {
++      vi.useRealTimers();
++    }
++  });
++
++  test("applies another device's change to the running call", () => {
++    const client = mockClient();
++    window.matrixclient = client.client as unknown as MatrixClient;
++    const scope = testScope();
++    const sink = vi.fn();
++    const controls = createVolumeControls(scope, {
++      pretendToBeDisconnected$: constant(false),
++      sink$: constant(sink),
++    });
++    rememberParticipantVolume(scope, "@other:example.org", controls);
++    expect(controls.playbackVolume$.value).toBe(1);
++
++    client.emit({
++      "@other:example.org": { volume: 0.15, muted: false, ts: 5 },
++    });
++    expect(controls.playbackVolume$.value).toBe(0.15);
++    expect(sink).toHaveBeenLastCalledWith(0.15);
++  });
++});
+diff --git a/src/state/PersistentVolume.ts b/src/state/PersistentVolume.ts
+new file mode 100644
+index 0000000..7424b0f
+--- /dev/null
++++ b/src/state/PersistentVolume.ts
+@@ -0,0 +1,607 @@
++/*
++Copyright 2026 Element Creations Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE in the repository root for full details.
++*/
++
++/**
++ * Plotina: remember the playback volume of a person in a call.
++ *
++ * Upstream keeps a participant's volume inside the ViewModel's scope, so it is
++ * lost as soon as that participant reconnects, rejoins, or joins from another
++ * device. This module keys the value by Matrix user ID instead (LiveKit's
++ * participant identity is the MXID), and keeps it in two layers:
++ *
++ *  - localStorage (`plotina_voice_volumes_v1`): a synchronous cache, so the
++ *    value is applied on the first render of the tile and still works with no
++ *    network at all.
++ *  - account data (`cc.plotina.voice_volumes`): the source of truth across
++ *    devices. Read on start and on every `accountData` event, written with a
++ *    500 ms debounce.
++ *
++ * Both layers hold the same map:
++ *
++ *     {
++ *       "@alice:example.org": { "volume": 0.7, "muted": false, "ts": 1730000000000 },
++ *       "@bob:example.org#screenshare": { "volume": 0.3, "muted": true, "ts": 1730000000000 }
++ *     }
++ *
++ * The key is the participant's MXID for their microphone and
++ * `mxid#screenshare` for their screen share audio, so the two can differ.
++ *
++ * `ts` is the writer's clock in milliseconds and decides which of two devices'
++ * values wins for the same key (last write wins); the maps are otherwise
++ * merged key by key, so adjusting one person on one device does not drop the
++ * entries for everyone the other device has already adjusted.
++ *
++ * This file deliberately has no runtime imports: the logic is plain data
++ * handling plus a duck-typed Matrix client, which keeps it testable on its own.
++ */
++
++import type { Observable } from "rxjs";
++
++import type { ObservableScope } from "./ObservableScope";
++
++/** localStorage key holding the cache of the whole map. */
++export const LOCAL_STORAGE_KEY = "plotina_voice_volumes_v1";
++
++/** account data event type holding the map that is synced across devices. */
++export const ACCOUNT_DATA_TYPE = "cc.plotina.voice_volumes";
++
++/** Suffix distinguishing a participant's screen share audio from their mic. */
++export const SCREEN_SHARE_KEY_SUFFIX = "#screenshare";
++
++/**
++ * How many entries we are willing to keep. Account data is an ordinary state
++ * event: unencrypted, visible to the homeserver, and bounded in size (servers
++ * commonly cap an event at 64 KiB), so the map cannot grow forever. 500
++ * entries is about 37 KiB with realistic MXIDs and covers far more people than
++ * anyone calls with; past that the oldest entries are dropped.
++ */
++export const MAX_ENTRIES = 500;
++
++/** How long we wait for the volume slider to settle before writing account data. */
++export const WRITE_DEBOUNCE_MS = 500;
++
++export interface VoiceVolumeEntry {
++  /** Playback volume, a scalar multiplier in the range 0..1. */
++  volume: number;
++  /** Whether playback is muted. The volume is kept for when it is unmuted. */
++  muted: boolean;
++  /** When this entry was written, in milliseconds since the epoch. */
++  ts: number;
++}
++
++export type VoiceVolumeMap = Record<string, VoiceVolumeEntry>;
++
++/** The value a ViewModel needs to apply, without the bookkeeping fields. */
++export interface SavedVoiceVolume {
++  volume: number;
++  muted: boolean;
++}
++
++/** The key under which a participant's screen share audio is remembered. */
++export function screenShareVolumeKey(mxid: string): string {
++  return `${mxid}${SCREEN_SHARE_KEY_SUFFIX}`;
++}
++
++/**
++ * An MXID, optionally followed by the screen share suffix. Anything else is
++ * dropped rather than stored: the account data map is not ours alone (another
++ * device, or a future version of this patch, may have written junk in it).
++ */
++function isVolumeKey(key: unknown): key is string {
++  return (
++    typeof key === "string" &&
++    /^@[^:\s]{1,255}:[^:\s]{1,255}(?:#screenshare)?$/.test(key)
++  );
++}
++
++/** Clamps a volume to 0..1 and rounds it to 3 decimals, or null if it is junk. */
++function clampVolume(value: unknown): number | null {
++  if (typeof value !== "number" || !Number.isFinite(value)) return null;
++  return Math.min(1, Math.max(0, Math.round(value * 1000) / 1000));
++}
++
++/**
++ * Validates one entry. An entry without a usable volume is dropped; a missing
++ * or nonsensical timestamp only means it sorts as the oldest, and a missing
++ * `muted` means "not muted".
++ */
++function normaliseEntry(raw: unknown): VoiceVolumeEntry | null {
++  if (typeof raw !== "object" || raw === null || Array.isArray(raw))
++    return null;
++  const candidate = raw as Record<string, unknown>;
++  const volume = clampVolume(candidate.volume);
++  if (volume === null) return null;
++  const ts =
++    typeof candidate.ts === "number" &&
++    Number.isFinite(candidate.ts) &&
++    candidate.ts > 0
++      ? candidate.ts
++      : 0;
++  return { volume, muted: candidate.muted === true || volume === 0, ts };
++}
++
++/** Keeps the newest `MAX_ENTRIES` entries, dropping the oldest by timestamp. */
++export function limitVolumeMap(map: VoiceVolumeMap): VoiceVolumeMap {
++  const keys = Object.keys(map);
++  if (keys.length <= MAX_ENTRIES) return map;
++  // Sort oldest first; ties break on the key so the result is deterministic.
++  keys.sort((a, b) => map[a].ts - map[b].ts || (a < b ? -1 : a > b ? 1 : 0));
++  const kept: VoiceVolumeMap = { ...map };
++  for (const key of keys.slice(0, keys.length - MAX_ENTRIES)) delete kept[key];
++  return kept;
++}
++
++/** Parses untrusted content (account data or a parsed cache) into a valid map. */
++export function parseVolumeMap(raw: unknown): VoiceVolumeMap {
++  const result: VoiceVolumeMap = {};
++  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
++    return result;
++  }
++  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
++    if (!isVolumeKey(key)) continue;
++    const entry = normaliseEntry(value);
++    if (entry) result[key] = entry;
++  }
++  return limitVolumeMap(result);
++}
++
++/** Parses the localStorage cache. Broken JSON is a cold start, not a crash. */
++export function parseStoredVolumes(
++  text: string | null | undefined,
++): VoiceVolumeMap {
++  if (typeof text !== "string" || text.length === 0) return {};
++  try {
++    return parseVolumeMap(JSON.parse(text));
++  } catch {
++    // A corrupt cache is thrown away: the account data copy refills it.
++    return {};
++  }
++}
++
++/**
++ * Merges a map received from another device into ours. Last write wins per
++ * key; on a tie the remote copy wins, because it is the one the other devices
++ * have already agreed on.
++ */
++export function mergeVolumeMaps(
++  local: VoiceVolumeMap,
++  remote: VoiceVolumeMap,
++): VoiceVolumeMap {
++  const merged: VoiceVolumeMap = { ...local };
++  for (const [key, entry] of Object.entries(remote)) {
++    const current = merged[key];
++    if (!current || entry.ts >= current.ts) merged[key] = entry;
++  }
++  return limitVolumeMap(merged);
++}
++
++interface StorageLike {
++  getItem(key: string): string | null;
++  setItem(key: string, value: string): void;
++}
++
++export interface VoiceVolumeEvent {
++  getType(): string;
++  getContent(): unknown;
++}
++
++/**
++ * The slice of MatrixClient we need. Structural rather than imported so that
++ * this module stays free of dependencies.
++ */
++export interface VoiceVolumeClient {
++  getUserId(): string | null;
++  getAccountData(type: string): { getContent(): unknown } | undefined;
++  setAccountData(type: string, content: object): Promise<unknown>;
++  on(event: string, listener: (event: VoiceVolumeEvent) => void): void;
++  off?(event: string, listener: (event: VoiceVolumeEvent) => void): void;
++}
++
++export interface PersistentVolumeOptions {
++  /**
++   * Where to cache, defaulting to `window.localStorage`. `null` disables the
++   * cache (useful for tests).
++   */
++  storage?: StorageLike | null;
++  /**
++   * The account to sync through, defaulting to `window.matrixclient`. Without
++   * a client there is no account to remember values for, so the store does
++   * nothing at all.
++   */
++  client?: VoiceVolumeClient | null;
++  now?: () => number;
++  debounceMs?: number;
++  onError?: (error: unknown) => void;
++}
++
++export class PersistentVolumeStore {
++  private readonly storageOption: StorageLike | null | undefined;
++  private readonly clientOption: VoiceVolumeClient | null | undefined;
++  private readonly clock: () => number;
++  private readonly debounceMs: number;
++  private readonly onError: (error: unknown) => void;
++
++  private entries: VoiceVolumeMap = {};
++  private started = false;
++  private client: VoiceVolumeClient | null = null;
++  private accountId: string | null = null;
++  private clientListener: ((event: VoiceVolumeEvent) => void) | null = null;
++  private writeTimer: ReturnType<typeof setTimeout> | undefined;
++  private flushHooksInstalled = false;
++  private readonly listeners = new Map<string, Set<() => void>>();
++
++  public constructor(options: PersistentVolumeOptions = {}) {
++    this.storageOption = options.storage;
++    this.clientOption = options.client;
++    this.clock = options.now ?? (() => Date.now());
++    this.debounceMs = options.debounceMs ?? WRITE_DEBOUNCE_MS;
++    this.onError = options.onError ?? (() => {});
++  }
++
++  /** The volume saved for `key`, or null if this person was never adjusted. */
++  public get(key: string): SavedVoiceVolume | null {
++    if (!this.start()) return null;
++    const entry = this.entries[key];
++    if (!entry) return null;
++    return { volume: entry.volume, muted: entry.muted || entry.volume === 0 };
++  }
++
++  /**
++   * Remembers the volume of `key`. Values outside 0..1 are clamped and junk is
++   * ignored. `muted` is implied by a volume of 0; the level is kept so that
++   * unmuting after a restart returns to where the user left it.
++   */
++  public set(key: string, volume: number, muted = false): void {
++    if (!this.start()) return;
++    if (!isVolumeKey(key)) return;
++    const clamped = clampVolume(volume);
++    if (clamped === null) return;
++
++    const previous = this.entries[key];
++    const previousVolume =
++      previous && previous.volume > 0 ? previous.volume : 1;
++    const entry: VoiceVolumeEntry =
++      muted || clamped === 0
++        ? {
++            volume: clamped > 0 ? clamped : previousVolume,
++            muted: true,
++            ts: this.clock(),
++          }
++        : { volume: clamped, muted: false, ts: this.clock() };
++
++    // Unchanged: nothing to cache, nothing to sync. This also stops an echo
++    // between two devices that keep re-applying each other's value.
++    if (
++      previous &&
++      previous.volume === entry.volume &&
++      previous.muted === entry.muted
++    ) {
++      return;
++    }
++
++    this.entries = limitVolumeMap({ ...this.entries, [key]: entry });
++    this.persistLocal();
++    this.scheduleWrite();
++  }
++
++  /** Writes a pending change to account data immediately. */
++  public async flush(): Promise<void> {
++    if (this.writeTimer !== undefined) {
++      clearTimeout(this.writeTimer);
++      this.writeTimer = undefined;
++    }
++    await this.writeAccountData();
++  }
++
++  /**
++   * Calls `listener` when `key` changes on another device, so the change can be
++   * applied to a call that is already running. Returns an unsubscribe function.
++   */
++  public onChange(key: string, listener: () => void): () => void {
++    // Subscribing is a statement of interest in this key, so make sure we are
++    // listening to the account before a change can arrive.
++    this.start();
++    let set = this.listeners.get(key);
++    if (!set) {
++      set = new Set();
++      this.listeners.set(key, set);
++    }
++    set.add(listener);
++    return (): void => {
++      set.delete(listener);
++      if (set.size === 0) this.listeners.delete(key);
++    };
++  }
++
++  public dispose(): void {
++    if (this.writeTimer !== undefined) {
++      clearTimeout(this.writeTimer);
++      this.writeTimer = undefined;
++    }
++    this.detachClient();
++    this.listeners.clear();
++    this.started = false;
++    this.accountId = null;
++    this.entries = {};
++  }
++
++  /**
++   * Loads the cache and attaches to the account, once. Returns false when there
++   * is no client yet: the caller retries on its next call, which is what makes
++   * this work whether the client is created before or after the first tile.
++   */
++  private start(): boolean {
++    if (!this.started) {
++      this.started = true;
++      this.entries = parseStoredVolumes(this.readLocal());
++      this.installFlushHooks();
++    }
++    return this.ensureClient() !== null;
++  }
++
++  /**
++   * Follows the client the app is signed in with. It can appear after the first
++   * tile (the client is initialised asynchronously) and it changes on logout or
++   * when a host hands us another one, so this is checked on every call.
++   */
++  private ensureClient(): VoiceVolumeClient | null {
++    const resolved = this.resolveClient();
++    if (resolved && resolved !== this.client) {
++      const account = resolved.getUserId();
++      this.detachClient();
++      // Another account on the same browser: its volumes are its own, so the
++      // cache we hold for the previous one is not merged into it — and the
++      // cache is emptied too, or the next start would read it back.
++      if (
++        this.accountId !== null &&
++        account !== null &&
++        account !== this.accountId
++      ) {
++        this.entries = {};
++        this.persistLocal();
++      }
++      this.accountId = account;
++      this.client = resolved;
++      this.subscribe(resolved);
++      // Whichever the server has already synced may be newer than our cache.
++      this.readAccountData(resolved);
++    }
++    return this.client;
++  }
++
++  private detachClient(): void {
++    if (this.client && this.clientListener) {
++      const listener = this.clientListener;
++      if (this.client.off) this.client.off("accountData", listener);
++    }
++    this.client = null;
++    this.clientListener = null;
++  }
++
++  private resolveClient(): VoiceVolumeClient | null {
++    if (this.clientOption !== undefined) return this.clientOption ?? null;
++    if (typeof window === "undefined") return null;
++    const client = (window as unknown as { matrixclient?: VoiceVolumeClient })
++      .matrixclient;
++    return client ?? null;
++  }
++
++  private storage(): StorageLike | null {
++    if (this.storageOption !== undefined) return this.storageOption ?? null;
++    if (typeof window === "undefined") return null;
++    try {
++      return window.localStorage;
++    } catch {
++      // Storage can be unavailable (Safari private mode throws on access);
++      // the store then simply has no cache.
++      return null;
++    }
++  }
++
++  private readLocal(): string | null {
++    const storage = this.storage();
++    if (!storage) return null;
++    try {
++      return storage.getItem(LOCAL_STORAGE_KEY);
++    } catch {
++      return null;
++    }
++  }
++
++  private persistLocal(): void {
++    const storage = this.storage();
++    if (!storage) return;
++    try {
++      storage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(this.entries));
++    } catch {
++      // Out of quota is not worth failing a call over; account data still has
++      // the value once sync resumes.
++    }
++  }
++
++  private subscribe(client: VoiceVolumeClient): void {
++    const listener = (event: VoiceVolumeEvent): void => {
++      this.handleAccountData(event);
++    };
++    this.clientListener = listener;
++    try {
++      client.on("accountData", listener);
++    } catch (error) {
++      this.onError(error);
++    }
++  }
++
++  /** Reads the server's copy that sync has already delivered, if any. */
++  private readAccountData(client: VoiceVolumeClient): void {
++    try {
++      const event = client.getAccountData(ACCOUNT_DATA_TYPE);
++      if (event) {
++        this.handleAccountData({
++          getType: () => ACCOUNT_DATA_TYPE,
++          getContent: () => event.getContent(),
++        });
++      }
++    } catch (error) {
++      this.onError(error);
++    }
++  }
++
++  private handleAccountData(event: VoiceVolumeEvent): void {
++    try {
++      if (event.getType() !== ACCOUNT_DATA_TYPE) return;
++      this.mergeRemote(parseVolumeMap(event.getContent()));
++    } catch (error) {
++      // Account data is written by other devices as well; anything unexpected
++      // in it must not take the call down.
++      this.onError(error);
++    }
++  }
++
++  private mergeRemote(remote: VoiceVolumeMap): void {
++    const previous = this.entries;
++    const merged = mergeVolumeMaps(previous, remote);
++    const changed = Object.keys(merged).filter((key) => {
++      const before = previous[key];
++      const after = merged[key];
++      return (
++        !before ||
++        before.volume !== after.volume ||
++        before.muted !== after.muted
++      );
++    });
++    this.entries = merged;
++    if (changed.length === 0) return;
++    this.persistLocal();
++    // Deliberately no write back to account data: this value came from there.
++    for (const key of changed) {
++      const listeners = this.listeners.get(key);
++      if (!listeners) continue;
++      for (const listener of listeners) {
++        try {
++          listener();
++        } catch (error) {
++          this.onError(error);
++        }
++      }
++    }
++  }
++
++  private scheduleWrite(): void {
++    if (this.writeTimer !== undefined) clearTimeout(this.writeTimer);
++    this.writeTimer = setTimeout(() => {
++      this.writeTimer = undefined;
++      void this.writeAccountData();
++    }, this.debounceMs);
++  }
++
++  private async writeAccountData(): Promise<void> {
++    const client = this.client;
++    if (!client) return;
++    try {
++      await client.setAccountData(
++        ACCOUNT_DATA_TYPE,
++        limitVolumeMap(this.entries),
++      );
++    } catch (error) {
++      // The server may refuse the write (size, rate limit) or the client may
++      // be logging out. localStorage still holds the value and the next change
++      // tries again.
++      this.onError(error);
++    }
++  }
++
++  /**
++   * A change made in the last 500 ms would otherwise be lost if the tab is
++   * closed, which is exactly the "reopen the app" case this patch is for.
++   */
++  private installFlushHooks(): void {
++    if (this.flushHooksInstalled || typeof window === "undefined") return;
++    this.flushHooksInstalled = true;
++    window.addEventListener("pagehide", () => {
++      void this.flush();
++    });
++  }
++}
++
++/** The controls of a VolumeControls ViewModel, as far as this module cares. */
++export interface VolumeControlsLike {
++  adjustPlaybackVolume(value: number): void;
++  commitPlaybackVolume(): void;
++  togglePlaybackMuted(): void;
++}
++
++/**
++ * Applies the volume saved for `key` to a fresh set of volume controls.
++ *
++ * A no-op when nothing was ever saved, which is what keeps a participant
++ * nobody has adjusted at upstream's default of 1.0. The sequence mirrors what
++ * a user does with the slider: set the level, commit it, then mute if that is
++ * how they left it, so unmuting returns to the saved level rather than to 1.0.
++ */
++export function applyPersistedVolume(
++  key: string,
++  controls: VolumeControlsLike,
++  store: PersistentVolumeStore,
++): void {
++  const saved = store.get(key);
++  if (!saved) return;
++  if (saved.volume > 0) {
++    controls.adjustPlaybackVolume(saved.volume);
++    controls.commitPlaybackVolume();
++  }
++  if (saved.muted || saved.volume === 0) controls.togglePlaybackMuted();
++}
++
++/**
++ * Restores the saved volume into `controls`, then keeps the store and the
++ * controls in step for the duration of the scope: a change made here is
++ * remembered for the next call, and a change made on another device is applied
++ * to the call that is already running.
++ */
++export function rememberParticipantVolume(
++  scope: ObservableScope,
++  key: string,
++  controls: VolumeControlsLike & { playbackVolume$: Observable<number> },
++): void {
++  const store = persistentVolumeStore();
++  applyPersistedVolume(key, controls, store);
++  // Skip the value the Behavior replays on subscription: it is either the
++  // default 1.0 (this person has never been adjusted — recording that would
++  // fill the account data map with everyone in every call) or the restore we
++  // have just applied. Only what changes afterwards is worth remembering.
++  let subscribed = false;
++  controls.playbackVolume$.pipe(scope.bind()).subscribe((volume) => {
++    if (!subscribed) {
++      subscribed = true;
++      return;
++    }
++    store.set(key, volume, volume === 0);
++  });
++  scope.onEnd(
++    store.onChange(key, () => applyPersistedVolume(key, controls, store)),
++  );
++}
++
++let defaultStore: PersistentVolumeStore | undefined;
++
++/**
++ * The store the app uses: localStorage for the cache and `window.matrixclient`
++ * for the account. Created lazily, because the client only exists once the app
++ * has initialised, and the client is resolved lazily again on every call for
++ * the same reason.
++ */
++export function persistentVolumeStore(): PersistentVolumeStore {
++  defaultStore ??= new PersistentVolumeStore({
++    // A failed sync must never take a call down: the cache still holds the
++    // value and the next change tries again.
++    onError: (error: unknown) => {
++      // eslint-disable-next-line no-console -- the only channel that does not add a dependency to this module
++      console.warn("[plotina] could not sync voice volume", error);
++    },
++  });
++  return defaultStore;
++}
+diff --git a/src/state/media/RemoteScreenShareViewModel.ts b/src/state/media/RemoteScreenShareViewModel.ts
+index 8c46aeb..bf5fb24 100644
+--- a/src/state/media/RemoteScreenShareViewModel.ts
++++ b/src/state/media/RemoteScreenShareViewModel.ts
+@@ -17,6 +17,10 @@ import {
+ } from "./ScreenShareViewModel";
+ import { type ObservableScope } from "../ObservableScope";
+ import { createVolumeControls, type VolumeControls } from "../VolumeControls";
++import {
++  rememberParticipantVolume,
++  screenShareVolumeKey,
++} from "../PersistentVolume";
+ import { observeTrackReference$ } from "../observeTrackReference";
+ 
+ export interface RemoteScreenShareViewModel
+@@ -41,19 +45,28 @@ export function createRemoteScreenShare(
+   scope: ObservableScope,
+   { pretendToBeDisconnected$, ...inputs }: RemoteScreenShareInputs,
+ ): RemoteScreenShareViewModel {
+-  return {
+-    ...createBaseScreenShare(scope, inputs),
+-    ...createVolumeControls(scope, {
+-      pretendToBeDisconnected$,
+-      sink$: scope.behavior(
+-        inputs.participant$.pipe(
+-          map(
+-            (p) => (volume) =>
+-              p?.setVolume(volume, Track.Source.ScreenShareAudio),
+-          ),
++  const volumeControls = createVolumeControls(scope, {
++    pretendToBeDisconnected$,
++    sink$: scope.behavior(
++      inputs.participant$.pipe(
++        map(
++          (p) => (volume) =>
++            p?.setVolume(volume, Track.Source.ScreenShareAudio),
+         ),
+       ),
+-    }),
++    ),
++  });
++  // Plotina: the screen share's audio level is remembered separately from the
++  // same person's microphone, keyed by MXID plus the source.
++  rememberParticipantVolume(
++    scope,
++    screenShareVolumeKey(inputs.userId),
++    volumeControls,
++  );
++
++  return {
++    ...createBaseScreenShare(scope, inputs),
++    ...volumeControls,
+     local: false,
+     videoEnabled$: scope.behavior(
+       pretendToBeDisconnected$.pipe(map((disconnected) => !disconnected)),
+diff --git a/src/state/media/RemoteUserMediaViewModel.ts b/src/state/media/RemoteUserMediaViewModel.ts
+index 6daa381..3fd53ed 100644
+--- a/src/state/media/RemoteUserMediaViewModel.ts
++++ b/src/state/media/RemoteUserMediaViewModel.ts
+@@ -12,6 +12,7 @@ import { logger } from "matrix-js-sdk/lib/logger";
+ 
+ import { type Behavior } from "../Behavior";
+ import { createVolumeControls, type VolumeControls } from "../VolumeControls";
++import { rememberParticipantVolume } from "../PersistentVolume";
+ import {
+   type BaseUserMediaInputs,
+   type BaseUserMediaViewModel,
+@@ -60,14 +61,19 @@ export function createRemoteUserMedia(
+     logger.info(`[RemoteUserMedia ${inputs.id}] waitingForMedia=${waiting}`);
+   });
+ 
++  const volumeControls = createVolumeControls(scope, {
++    pretendToBeDisconnected$,
++    sink$: scope.behavior(
++      inputs.participant$.pipe(map((p) => (volume) => p?.setVolume(volume))),
++    ),
++  });
++  // Plotina: remember this person's volume by MXID, across reconnects and
++  // devices. A no-op when nothing was saved.
++  rememberParticipantVolume(scope, inputs.userId, volumeControls);
++
+   return {
+     ...baseUserMedia,
+-    ...createVolumeControls(scope, {
+-      pretendToBeDisconnected$,
+-      sink$: scope.behavior(
+-        inputs.participant$.pipe(map((p) => (volume) => p?.setVolume(volume))),
+-      ),
+-    }),
++    ...volumeControls,
+     local: false,
+     speaking$: scope.behavior(
+       pretendToBeDisconnected$.pipe(

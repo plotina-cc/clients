@@ -102,7 +102,7 @@ Out of scope on purpose, and asserted so in the tests:
 ## Tests
 
 ```bash
-python3 -m unittest discover -s element-call/tests          # 47 tests, ~3 s
+python3 -m unittest discover -s element-call/tests          # 66 tests, ~6 s
 EC_SKIP_NETWORK=1 python3 -m unittest discover -s element-call/tests   # fixtures only
 ```
 
@@ -111,6 +111,12 @@ it asserts are the counters a real build asserts. `tests/test_tarball_integratio
 release tarball named in `pins.env` (~40 MB, cached under the system temp dir), checks its sha256,
 unpacks it, runs `inject-noise.py` and `branding.py` over it in the order `build.sh` does and checks
 the result — including that a partly-reverted literal makes `--check` fail.
+
+`tests/test_volume_persistence.py` covers `patches/0004`: it applies every patch to the pinned
+upstream source (a ~6 MB archive, cached under the system temp dir), and runs the store the patch
+adds under plain node (`tests/volume_store_probe.mjs`, no node_modules — the store has no runtime
+imports on purpose) for the merge, limit, corruption and restart rules. See
+[VOLUME-PERSISTENCE.md](./VOLUME-PERSISTENCE.md).
 
 ## Patches
 
@@ -121,6 +127,7 @@ the result — including that a partly-reverted literal makes `--check` fail.
 | `0001-plotina-dfn-track-processor.patch` | the bridge that attaches the DeepFilterNet3 track processor (`src/plotina/dfn.ts`) |
 | `0002-plotina-sentry.patch` | early error reporting (`src/plotina/sentry.ts`, `src/main.tsx`) |
 | `0003-plotina-login-terms-guard.patch` | `useInteractiveRegistration`: a `/register` error without `params` (MAS) must not throw inside the `catch` |
+| `0004-plotina-persistent-volume.patch` | remember each participant's playback volume by MXID, and its screen share's separately, in localStorage + account data (`src/state/PersistentVolume.ts`) — see [VOLUME-PERSISTENCE.md](./VOLUME-PERSISTENCE.md) |
 
 ## Error reporting
 
