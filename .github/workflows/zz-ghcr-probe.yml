@@ -29,13 +29,26 @@ jobs:
           import base64, json, sys
 
           raw = json.load(open(sys.argv[1]))["token"]
-          print("raw prefix:", raw[:12], "length:", len(raw))
           decoded = base64.b64decode(raw).decode()
-          parts = decoded.split("_", 2)
-          print("decoded prefix:", parts[0], "parts:", len(parts))
-          jwt = parts[-1]
+          jwt = decoded.split("_", 2)[-1]
           payload = jwt.split(".")[1]
           payload += "=" * (-len(payload) % 4)
-          claims = json.loads(base64.urlsafe_b64decode(payload))
-          print("access:", json.dumps(claims.get("access"), indent=2))
+          print("claims:", json.dumps(json.loads(base64.urlsafe_b64decode(payload)), indent=2)[:1500])
           PY
+
+      # A push-permission probe that writes nothing: the registry answers a blob
+      # upload POST with 202 when the token may push and 401/403 when it may not.
+      # No session is completed, so no manifest and no package version is made.
+      - name: Can this token push?
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          bearer="$(curl -sS -u "${GITHUB_ACTOR}:${TOKEN}" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:plotina-cc/element-web:pull,push" | jq -r .token)"
+          echo "tags list (read): $(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "Authorization: Bearer ${bearer}" \
+            https://ghcr.io/v2/plotina-cc/element-web/tags/list)"
+          echo "upload POST (write): $(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${bearer}" \
+            https://ghcr.io/v2/plotina-cc/element-web/blobs/uploads/)"
