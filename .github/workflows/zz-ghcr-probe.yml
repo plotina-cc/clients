@@ -22,19 +22,25 @@ jobs:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          curl -fsS -u "${GITHUB_ACTOR}:${TOKEN}" \
-            "https://ghcr.io/token?service=ghcr.io&scope=repository:plotina-cc/element-web:pull,push" \
-            -o "$RUNNER_TEMP/token.json"
-          python3 - "$RUNNER_TEMP/token.json" <<'PY'
+          echo "actor=${GITHUB_ACTOR}"
+          code="$(curl -sS -o "$RUNNER_TEMP/basic.json" -w '%{http_code}' \
+            -u "${GITHUB_ACTOR}:${TOKEN}" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:plotina-cc/element-web:pull,push")"
+          echo "basic auth: http ${code}"
+          head -c 400 "$RUNNER_TEMP/basic.json"; echo
+          code2="$(curl -sS -o "$RUNNER_TEMP/bearer.json" -w '%{http_code}' \
+            -H "Authorization: Bearer ${TOKEN}" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:plotina-cc/element-web:pull,push")"
+          echo "bearer: http ${code2}"
+          head -c 400 "$RUNNER_TEMP/bearer.json"; echo
+          python3 - "$RUNNER_TEMP/bearer.json" <<'PY'
           import base64, json, sys
-          token = json.load(open(sys.argv[1]))["token"]
-          payload = token.split(".")[1]
-          payload += "=" * (-len(payload) % 4)
-          claims = json.loads(base64.urlsafe_b64decode(payload))
-          print(json.dumps(claims.get("access"), indent=2))
+          body = json.load(open(sys.argv[1]))
+          token = body.get("token") or ""
+          print("token length:", len(token))
+          if token.count(".") == 2:
+              payload = token.split(".")[1]
+              payload += "=" * (-len(payload) % 4)
+              claims = json.loads(base64.urlsafe_b64decode(payload))
+              print("access:", json.dumps(claims.get("access"), indent=2))
           PY
-
-      - name: Docker login
-        run: |
-          set -euo pipefail
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
