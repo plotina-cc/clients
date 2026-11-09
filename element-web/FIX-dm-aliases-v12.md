@@ -172,11 +172,12 @@ console.error (15 строк с трейсами), **ни одна не про �
 момент переключения конфига между стендами и одно `ERR_CERT_AUTHORITY_INVALID`
 (внешний ресурс). Ни `pageerror`, ни сообщений `plotina-dm-aliases` нет.
 
-Скриншоты прогона (приложены к задаче, в git не кладутся — бинарь):
+Скриншоты прогона (в git, `spike-dm-aliases/v12/shots/`):
 `01-before-alias.png`, `02-dialog.png`, `03-after-alias.png` (список
 «Денчик, QA Группа» + заголовок «Денчик»), `04-second-account.png`,
 `05-restart-fresh-device.png`, `06-second-account-own-alias.png`,
 `07-group-room-refused.png`, `08-invalid-id-refused.png`, `09-after-reset.png`.
+Прогон v11 — `spike-dm-aliases/v11/shots/`.
 
 Известный шов (без изменений с спайка): подпись вкладки браузера обновляется на
 следующем переключении комнаты; в прогоне это измерено и записано как INFO, а
