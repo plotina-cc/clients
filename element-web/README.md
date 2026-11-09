@@ -148,6 +148,32 @@ suites are green. On a failure, read the "Assumptions" table: a moved label or a
 changed `</head>` is a two-line fix, a changed constraint shape means looking at
 Element Call again.
 
+## Publish (CI)
+
+`build-element-web.yml` builds this image on every pull request and on every
+push to `main`, and smoke-tests the result (`scripts/smoke-image.sh`); those runs
+never touch the registry. Publishing is a separate job behind the `ghcr-publish`
+environment, so it happens only after a reviewer approves the run:
+
+```
+ghcr.io/plotina-cc/element-web:sha-<commit>     every publish, immutable
+ghcr.io/plotina-cc/element-web:<release tag>    when a v*-plotina-web.* tag is pushed
+ghcr.io/plotina-cc/element-web:latest           only when a dispatch asks for it
+```
+
+```bash
+gh workflow run build-element-web.yml --ref main -f publish=true
+```
+
+The run stops at "Waiting for review"; approve it there and the digest
+(`sha256:...`) lands in the run summary and on the package page. A release tag
+(`v1.12.32-plotina-web.1`) asks for the same publish and holds at the same gate.
+
+Pin the deploy to the digest, never to `latest`. CI does not deploy: the image is
+served from golova, which pulls the digest by hand. If the package stays private,
+the host needs a `read:packages` login; making it public (org → Packages →
+element-web → visibility) removes that step.
+
 ## Deploy and rollback
 
 `stack/docker-compose.yml` references the built tag. Rollback is a one-line

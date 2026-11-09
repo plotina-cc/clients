@@ -1,0 +1,23 @@
+---
+# House rules for the GitHub Actions files. Kept close to the defaults so the
+# linter still catches structural mistakes; the three exclusions are properties
+# of Actions YAML, not of our style:
+#
+#   line-length  several workflows carry long shell one-liners and URLs on a
+#                single line on purpose — breaking them would only hide the
+#                command that actually runs;
+#   truthy       `on:` is a workflow key, not a boolean;
+#   document-start  none of the workflows open with `---`, GitHub neither needs
+#                nor expects it.
+extends: default
+
+rules:
+  line-length: disable
+  truthy: disable
+  document-start: disable
+  comments:
+    min-spaces-from-content: 1
+  braces:
+    max-spaces-inside: 1
+  brackets:
+    max-spaces-inside: 1

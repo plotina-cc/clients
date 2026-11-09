@@ -9,6 +9,12 @@ name: Validate Plotina X configuration
 on:
   workflow_dispatch:
 
+# The repository default is read-and-write (the GHCR publish in
+# build-element-web.yml needs packages: write), so every workflow states its own
+# scope: this one only checks out and configures Gradle.
+permissions:
+  contents: read
+
 jobs:
   configure:
     runs-on: ubuntu-latest
