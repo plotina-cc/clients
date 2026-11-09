@@ -81,7 +81,7 @@ Run from `element-call/` with the sources of the pinned tag plus the patch serie
 `build.py --mode source` does):
 
 ```bash
-npx vitest run --project=unit        # 802 passed | 9 skipped, 99 files
+npx vitest run --project=unit        # 803 passed | 9 skipped, 99 files
 npx tsc --noEmit                     # clean
 npx oxlint src/state src/tile src/utils/test.ts
 python3 -m unittest discover -s element-call/tests   # 83 tests, OK
@@ -99,6 +99,8 @@ The new coverage, in `src/state/media/RemoteScreenShareViewModel.test.ts` and on
 - a reconnect (new participant, new publication) applies the stored choice;
 - a publication that only arrives after the viewer hid the stream is
   unsubscribed when it does;
+- showing the stream again after the publisher's track ended does not throw, and
+  a re-share afterwards is shown rather than hidden;
 - a restart (new store, same cache) applies it too;
 - a choice delivered as account data from another device reaches the running call;
 - the store rejects junk keys, does not read a visibility entry as a volume, and writes the choice

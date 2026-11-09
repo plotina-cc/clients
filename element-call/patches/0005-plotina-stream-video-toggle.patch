@@ -413,10 +413,10 @@ index 7424b0f..7c9663a 100644
        // The server may refuse the write (size, rate limit) or the client may
 diff --git a/src/state/media/RemoteScreenShareViewModel.test.ts b/src/state/media/RemoteScreenShareViewModel.test.ts
 new file mode 100644
-index 0000000..6689612
+index 0000000..c74d188
 --- /dev/null
 +++ b/src/state/media/RemoteScreenShareViewModel.test.ts
-@@ -0,0 +1,291 @@
+@@ -0,0 +1,333 @@
 +/*
 +Copyright 2026 Element Creations Ltd.
 +
@@ -637,6 +637,48 @@ index 0000000..6689612
 +
 +    expect(reopened.videoVisible$.value).toBe(false);
 +    expect(second.setSubscribed).toHaveBeenCalledWith(false);
++  });
++
++  test("showing it again after the track ended does not throw", () => {
++    // The publisher stops sharing (or their track ends) while this viewer has
++    // the stream hidden: there is no publication left to subscribe to.
++    let current: RemoteTrackPublication | undefined;
++    const participant = mockRemoteParticipant({
++      getTrackPublication: () => current as RemoteTrackPublication,
++      setVolume: vi.fn(),
++    });
++    const vm = mockRemoteScreenShare(rtcMembership, {}, participant);
++    const ended = fakePublication();
++    current = ended.publication;
++    (
++      participant as unknown as {
++        emit: (event: string, ...args: unknown[]) => void;
++      }
++    ).emit("trackPublished", ended.publication, participant);
++
++    vm.setVideoVisible(false);
++    expect(ended.setSubscribed).toHaveBeenCalledWith(false);
++
++    current = undefined;
++    (
++      participant as unknown as {
++        emit: (event: string, ...args: unknown[]) => void;
++      }
++    ).emit("trackUnpublished", ended.publication, participant);
++
++    // Showing it again must not throw with nothing to subscribe to.
++    expect(() => vm.setVideoVisible(true)).not.toThrow();
++    expect(vm.videoVisible$.value).toBe(true);
++
++    // …and a share that comes back afterwards is shown, not hidden.
++    const restarted = fakePublication();
++    current = restarted.publication;
++    (
++      participant as unknown as {
++        emit: (event: string, ...args: unknown[]) => void;
++      }
++    ).emit("trackPublished", restarted.publication, participant);
++    expect(restarted.setSubscribed).toHaveBeenLastCalledWith(true);
 +  });
 +
 +  test("hiding before the track arrives applies when it does", () => {
