@@ -242,6 +242,63 @@ def ensure_theme_boot(root: Path, relative: bool) -> list[str]:
 
 
 # --------------------------------------------------------------------------
+# 3b. Personal room names (SPIKE-dm-aliases.md): plotina-dm-aliases.js keeps
+# a room_id -> label map in account data cc.plotina.room_aliases and makes
+# Room.calculateRoomName answer with it, so a DM can be renamed for one
+# account without writing m.room.name into the room. The payload is inert
+# until window.mxMatrixClientPeg appears, so its tag only has to be in the
+# document; </head> is the anchor both clients can guarantee.
+# --------------------------------------------------------------------------
+DM_ALIASES_FILE = "plotina-dm-aliases.js"
+
+
+def dm_aliases_tag(relative: bool) -> str:
+    """The <script> tag for the alias overlay: absolute on web, relative here."""
+    src = DM_ALIASES_FILE if relative else f"/{DM_ALIASES_FILE}"
+    return f'<script src="{src}" defer></script>'
+
+
+def inject_dm_aliases_tag(html: str, relative: bool) -> str:
+    """Anchor the alias overlay tag directly before </head>, exactly once.
+
+    Idempotent: both tag forms are stripped first and the chosen one is
+    re-inserted, so a second run is byte-identical and a client flip
+    (absolute -> relative) converges.
+    """
+    for tag in (dm_aliases_tag(True), dm_aliases_tag(False)):
+        html = html.replace(tag, "")
+    tag = dm_aliases_tag(relative)
+    if "</head>" not in html:
+        raise BrandingError("index.html: no </head> to anchor the "
+                            f"{DM_ALIASES_FILE} tag; upstream layout moved")
+    return html.replace("</head>", tag + "</head>", 1)
+
+
+def ensure_dm_aliases(root: Path, relative: bool) -> list[str]:
+    """root/plotina-dm-aliases.js exists and index.html loads it.
+
+    Same contract as ensure_theme_boot: the caller places the payload (web:
+    Dockerfile COPY, desktop: branding.py copying it from ../element-web),
+    this verifies the file and wires the tag.
+    """
+    payload = root / DM_ALIASES_FILE
+    if not payload.is_file():
+        raise BrandingError(f"{payload} missing; the DM alias payload must be "
+                            "placed at the webapp root before this runs (web: "
+                            "the Dockerfile COPYs it, desktop: branding.py "
+                            "copies it from ../element-web)")
+    index = root / "index.html"
+    if not index.is_file():
+        raise BrandingError(f"{index} missing; {root} is not an Element webapp root")
+    html = index.read_text(encoding="utf-8")
+    patched = inject_dm_aliases_tag(html, relative=relative)
+    if patched != html:
+        index.write_text(patched, encoding="utf-8")
+    return [f"index.html: {DM_ALIASES_FILE} loads "
+            f"({'relative' if relative else 'absolute'} src)"]
+
+
+# --------------------------------------------------------------------------
 # 4. Russian strings the upstream ru locale still lacks for the
 # after-new-login verification dialog (keys per element-web's hierarchical
 # i18n JSON). Inserted only where absent: once Crowdin ships its own

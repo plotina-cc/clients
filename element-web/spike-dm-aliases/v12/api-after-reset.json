@@ -1,0 +1,27 @@
+{
+  "at": "2026-11-09T21:40:52.823Z",
+  "room_id": "!SXCZ-1RDqc_JxejRKA17NoOqnAUk2TuB9bBy9GMTIuo",
+  "room_version": "12",
+  "id_has_server_part": false,
+  "state_m_room_name": {
+    "status": 404,
+    "body": {
+      "errcode": "M_NOT_FOUND",
+      "error": "Event not found."
+    }
+  },
+  "state_event_types": [
+    "m.room.create",
+    "m.room.guest_access",
+    "m.room.history_visibility",
+    "m.room.join_rules",
+    "m.room.member",
+    "m.room.member",
+    "m.room.power_levels"
+  ],
+  "state_event_count": 7,
+  "account_data_cc_plotina_room_aliases": {
+    "status": 200,
+    "body": {}
+  }
+}

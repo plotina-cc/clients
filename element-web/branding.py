@@ -88,6 +88,7 @@ from webapp_fixes import (
     MODAL_STYLE_ID,
     NOISE_TAGS,
     REQUIRED_CUSTOM_SHEETS,
+    DM_ALIASES_FILE,
     THEME_INIT_FILE,
     TIMELINE_TEXT,
     TIMELINE_TEXT_FIXED,
@@ -96,6 +97,8 @@ from webapp_fixes import (
     add_missing as _add_missing,
     apply_locales as rebrand_locales,
     apply_theme_css,
+    dm_aliases_tag,
+    inject_dm_aliases_tag,
     inject_modal_style,
     inject_theme_boot_tag,
     patch_theme_css as rebrand_theme_custom,
@@ -118,6 +121,8 @@ TOUCH_LINK = f'<link rel="apple-touch-icon" sizes="192x192" href="{ICON_192}">'
 # LOCALE_OVERRIDES come unchanged from webapp_fixes.py; see there for the
 # THEME-FIX.md / THEMES.md background of each fix.)
 THEME_INIT_TAG = theme_boot_tag(relative=False)
+# Same for the DM alias overlay: /app is the site root on the web image.
+DM_ALIASES_TAG = dm_aliases_tag(relative=False)
 
 
 def fail(message: str) -> NoReturn:
@@ -167,6 +172,7 @@ def rebrand_index(html: str) -> str:
     # byte-stable; the assertions below still pin the end state.
     html = inject_modal_style(html)
     html = inject_theme_boot_tag(html, relative=False)
+    html = inject_dm_aliases_tag(html, relative=False)
 
     for expected in (
         f"<title>{BRAND}</title>",
@@ -179,6 +185,7 @@ def rebrand_index(html: str) -> str:
         f"{BRAND} requires JavaScript to be enabled.",
         MODAL_BLOCK,
         THEME_INIT_TAG,
+        DM_ALIASES_TAG,
     ):
         if expected not in html:
             raise BrandingError(f"index.html: {expected!r} missing after rebrand")
@@ -188,6 +195,9 @@ def rebrand_index(html: str) -> str:
     if html.count(THEME_INIT_TAG) != 1:
         raise BrandingError("index.html: the theme bootstrap tag is not present "
                             "exactly once")
+    if html.count(DM_ALIASES_TAG) != 1:
+        raise BrandingError("index.html: the DM alias overlay tag is not present "
+                            "exactly once")
     for forbidden in (
         "<title>Element</title>",
         'content="Element"',
@@ -195,6 +205,7 @@ def rebrand_index(html: str) -> str:
         "vector-icons/",
         "app.element.io",
         "Element requires JavaScript",
+        'src="plotina-dm-aliases.js"',
     ):
         if forbidden in html:
             raise BrandingError(f"index.html: {forbidden!r} survived the rebrand")
@@ -246,6 +257,9 @@ def apply(app: Path) -> list[str]:
     init_js = app / THEME_INIT_FILE
     if not init_js.is_file():
         raise BrandingError(f"{init_js} missing; the Dockerfile COPYs it first")
+    aliases_js = app / DM_ALIASES_FILE
+    if not aliases_js.is_file():
+        raise BrandingError(f"{aliases_js} missing; the Dockerfile COPYs it first")
 
     before = index.read_text(encoding="utf-8")
     noise_tag = NOISE_TAGS

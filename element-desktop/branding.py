@@ -190,6 +190,15 @@ def apply_web_fixes(webapp: Path) -> list[str]:
     shutil.copyfile(theme_src, webapp / webapp_fixes.THEME_INIT_FILE)
     (webapp / webapp_fixes.THEME_INIT_FILE).chmod(0o644)
 
+    # Both overlay payloads live in ../element-web so the relative tags
+    # resolve under vector://vector/webapp/; copy them into the webapp root.
+    aliases_src = ELEMENT_WEB / webapp_fixes.DM_ALIASES_FILE
+    if not aliases_src.is_file():
+        sys.exit(f"branding: {aliases_src} missing; the DM alias payload "
+                 "lives in ../element-web for both clients")
+    shutil.copyfile(aliases_src, webapp / webapp_fixes.DM_ALIASES_FILE)
+    (webapp / webapp_fixes.DM_ALIASES_FILE).chmod(0o644)
+
     # config.json points branding.welcome_background_url at /plotina-bg.png
     # (absolute on the web, where /app is the site root). apply-noise.py
     # rewrites that URL to the relative form for vector://, so the file has to
@@ -213,6 +222,7 @@ def apply_web_fixes(webapp: Path) -> list[str]:
         "index.html: plotina-modal-a11y style injected (exactly once, after the bundle/theme links)",
     ]
     actions.extend(webapp_fixes.ensure_theme_boot(webapp, relative=True))
+    actions.extend(webapp_fixes.ensure_dm_aliases(webapp, relative=True))
     actions.extend(webapp_fixes.apply_theme_css(webapp))
     actions.extend(webapp_fixes.apply_locales(webapp / "i18n"))
     return actions

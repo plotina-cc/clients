@@ -1,0 +1,23 @@
+== webapp: element-desktop/.build/webapp-upstream-extract
+== bundle: 7fef2be0ae8530458db3
+
+== window.mxMatrixClientPeg (matrix-react-sdk init.tsx, element-web v1.12.32)
+matrixClient.startClient(t),o.vF.log("MatrixClientPeg: MatrixClient started")}};window.mxMatrixClientPeg||(window.mxMatrixClientPeg=T)},"./src/Modal.tsx"(e,t,n){"use strict
+
+== source maps that carry the matrix-js-sdk Room model
+   2847.js (2.5M)
+   4544.js (428K)
+
+== room.ts facts the hook relies on (from the map's sourcesContent)
+   matrix-js-sdk/src/models/room.ts
+       387  public name: string;
+      3367  public recalculate(): void {
+      3397  this.name = this.calculateRoomName(this.myUserId);
+      3404  this.emit(RoomEvent.Name, this);
+      3660  private calculateRoomName(userId: string, ignoreRoomNameEvent = false): string {
+   matrix-js-sdk/src/models/room.ts
+       387  public name: string;
+      3367  public recalculate(): void {
+      3397  this.name = this.calculateRoomName(this.myUserId);
+      3404  this.emit(RoomEvent.Name, this);
+      3660  private calculateRoomName(userId: string, ignoreRoomNameEvent = false): string {

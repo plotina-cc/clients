@@ -1,0 +1,14 @@
+PASS stock name before rename: header="Даниил" room.name="Даниил" aliases={}
+PASS header takes the alias: header="Денчик"
+PASS room list takes the alias: list=["Денчик","spike.local Admin Room"]
+PASS Room.name takes the alias: room.name="Денчик"
+PASS advertised alias map: {"!i2kHEuNKioA9a0Xrkn:spike.local":"Денчик"}
+INFO tab title: after rename="Plotina Spike [1] | Даниил" after 8s="Plotina Spike [1] | Даниил" after a room switch="Plotina Spike [1] | Денчик"
+INFO room settings name field reads m.room.name state: unaffected by the alias
+PASS m.room.name still absent: HTTP 404 {"errcode":"M_NOT_FOUND","error":"M_NOT_FOUND: State event not found in room. room_id=!i2kHEuNKioA9a0Xrkn:spike.local event_type=m.room.name"}
+PASS alias lives in account data: {"!i2kHEuNKioA9a0Xrkn:spike.local":"Денчик"}
+PASS second account does not see the alias: header="alice 🏳️‍⚧️" room.name="alice 🏳️‍⚧️" aliases={}
+PASS alias is per account, both directions: other header="Алиса-для-Боба" other account_data={"!i2kHEuNKioA9a0Xrkn:spike.local":"Алиса-для-Боба"} owner room.name="Денчик"
+PASS alias applied at startup without action: aliases={"!i2kHEuNKioA9a0Xrkn:spike.local":"Денчик"} header="Денчик"
+
+10/10 checks passed; shots in /home/hermes/clients/.worktrees/t_b6d8c35f/element-web/spike-dm-aliases
