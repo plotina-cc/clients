@@ -413,10 +413,10 @@ index 7424b0f..7c9663a 100644
        // The server may refuse the write (size, rate limit) or the client may
 diff --git a/src/state/media/RemoteScreenShareViewModel.test.ts b/src/state/media/RemoteScreenShareViewModel.test.ts
 new file mode 100644
-index 0000000..323151f
+index 0000000..6689612
 --- /dev/null
 +++ b/src/state/media/RemoteScreenShareViewModel.test.ts
-@@ -0,0 +1,268 @@
+@@ -0,0 +1,291 @@
 +/*
 +Copyright 2026 Element Creations Ltd.
 +
@@ -637,6 +637,29 @@ index 0000000..323151f
 +
 +    expect(reopened.videoVisible$.value).toBe(false);
 +    expect(second.setSubscribed).toHaveBeenCalledWith(false);
++  });
++
++  test("hiding before the track arrives applies when it does", () => {
++    // A screen share ViewModel exists as soon as the publisher starts sharing,
++    // but the publication can reach this client a moment later.
++    let current: RemoteTrackPublication | undefined;
++    const participant = mockRemoteParticipant({
++      getTrackPublication: () => current as RemoteTrackPublication,
++      setVolume: vi.fn(),
++    });
++    const vm = mockRemoteScreenShare(rtcMembership, {}, participant);
++
++    vm.setVideoVisible(false);
++    const { publication, setSubscribed } = fakePublication();
++    current = publication;
++    (
++      participant as unknown as {
++        emit: (event: string, ...args: unknown[]) => void;
++      }
++    ).emit("trackPublished", publication, participant);
++
++    expect(vm.videoVisible$.value).toBe(false);
++    expect(setSubscribed).toHaveBeenCalledWith(false);
 +  });
 +
 +  test("a choice made on another device reaches the running call", () => {

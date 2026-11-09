@@ -1,0 +1,462 @@
+/*
+Live proof for patches/0005-plotina-stream-video-toggle.patch.
+
+Three browser contexts in one Element Call (Synapse + LiveKit + lk-jwt-service
+behind the upstream docker-compose-dev.yml nginx, *.m.localhost):
+
+  sharer  - publishes a synthetic screen share (canvas video + 440 Hz audio)
+  viewer  - hides that stream with the new toggle
+  control - stays untouched (negative control)
+
+"Hidden" is measured with WebRTC getStats() on every RTCPeerConnection the page
+creates, so it means the SFU stopped sending the share, not that a div was
+hidden. The script writes evidence.json plus screenshots into EVIDENCE_DIR and
+exits non-zero if any check failed.
+
+Usage, from element-call/tests/live:
+
+  BASE_URL=https://localhost:3443/ EVIDENCE_DIR=$PWD/out \
+    node stream_video_toggle_proof.mjs
+
+Needs @playwright/test with its chromium; the bundle under BASE_URL must be a
+build of the pinned tag with the whole patch series applied
+(`build.py --mode source`), served with serve_bundle.mjs or any HTTPS server.
+*/
+import { mkdirSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+// Playwright lives in the Element Call source tree this harness drives, not in
+// this repository, so let the caller point at a module that can resolve it:
+//   PLAYWRIGHT_FROM=/path/to/ec/src/package.json node stream_video_toggle_proof.mjs
+const requireFrom = createRequire(
+  process.env.PLAYWRIGHT_FROM ?? fileURLToPath(import.meta.url),
+);
+const { chromium } = requireFrom("@playwright/test");
+
+const BASE_URL = process.env.BASE_URL ?? "https://localhost:3443/";
+const OUT =
+  process.env.EVIDENCE_DIR ??
+  join(dirname(fileURLToPath(import.meta.url)), "out");
+mkdirSync(OUT, { recursive: true });
+
+const evidence = {
+  started: new Date().toISOString(),
+  baseUrl: BASE_URL,
+  steps: [],
+};
+const say = (msg, extra) => {
+  console.log(msg + (extra ? " " + JSON.stringify(extra) : ""));
+  evidence.steps.push({ t: Date.now(), msg, ...(extra ? { extra } : {}) });
+};
+
+const waitForAny = async (page, ids, timeout = 60_000) => {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    for (const id of ids) {
+      if (await page.getByTestId(id).isVisible().catch(() => false)) return id;
+    }
+    await page.waitForTimeout(250);
+  }
+  throw new Error(`none of ${ids.join(", ")} appeared at ${page.url()}`);
+};
+
+const joinCall = async (page, name, url = BASE_URL) => {
+  await page.goto(url);
+  const landing = await waitForAny(page, [
+    "home_displayName",
+    "joincall_displayName",
+    "lobby_joinCall",
+  ]);
+  if (landing === "home_displayName") {
+    await page.getByTestId("home_callName").click();
+    await page.getByTestId("home_callName").fill("StreamToggle");
+    await page.getByTestId("home_displayName").click();
+    await page.getByTestId("home_displayName").fill(name);
+    await page.getByTestId("home_go").click();
+  } else if (landing === "joincall_displayName") {
+    await page.getByTestId("joincall_displayName").click();
+    await page.getByTestId("joincall_displayName").fill(name);
+    await page.getByTestId("joincall_joincall").click();
+  }
+  await page.getByTestId("lobby_joinCall").click({ timeout: 60_000 });
+  await page.getByTestId("incall_leave").waitFor({ timeout: 60_000 });
+  return page.url();
+};
+
+/** A screen "share" whose video is a 640x360 canvas at 10 fps and whose audio
+ * is a 440 Hz tone: enough for LiveKit to publish real ScreenShare and
+ * ScreenShareAudio tracks through the SFU. */
+const patchDisplayMedia = async (page) => {
+  await page.addInitScript(() => {
+    navigator.mediaDevices.getDisplayMedia = async () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 640;
+      canvas.height = 360;
+      const ctx = canvas.getContext("2d");
+      let frame = 0;
+      const paint = () => {
+        ctx.fillStyle = frame++ % 2 === 0 ? "#2b2b40" : "#402b40";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#fff";
+        ctx.font = "32px sans-serif";
+        ctx.fillText(`stream frame ${frame}`, 40, 180);
+        requestAnimationFrame(paint);
+      };
+      paint();
+      const audioContext = new AudioContext();
+      const oscillator = audioContext.createOscillator();
+      oscillator.frequency.value = 440;
+      const destination = audioContext.createMediaStreamDestination();
+      oscillator.connect(destination);
+      oscillator.start();
+      return new MediaStream([
+        ...canvas.captureStream(10).getVideoTracks(),
+        ...destination.stream.getAudioTracks(),
+      ]);
+    };
+  });
+};
+
+/** Records every RTCPeerConnection the app creates so stats can be read later. */
+const instrument = async (page) => {
+  await page.addInitScript(() => {
+    const Original = window.RTCPeerConnection;
+    const pcs = [];
+    window.__pcs = pcs;
+    window.RTCPeerConnection = new Proxy(Original, {
+      construct(target, args) {
+        const pc = new target(...args);
+        pcs.push(pc);
+        return pc;
+      },
+    });
+  });
+};
+
+const sample = (page) =>
+  page.evaluate(async () => {
+    const result = [];
+    for (const pc of window.__pcs ?? []) {
+      let stats;
+      try {
+        stats = await pc.getStats();
+      } catch {
+        continue;
+      }
+      stats.forEach((r) => {
+        if (r.type === "inbound-rtp")
+          result.push({
+            kind: r.kind,
+            ssrc: r.ssrc,
+            mid: r.mid,
+            bytes: r.bytesReceived ?? 0,
+            frames: r.framesDecoded ?? 0,
+            fps: r.framesPerSecond ?? 0,
+            w: r.frameWidth ?? 0,
+            h: r.frameHeight ?? 0,
+            packetsLost: r.packetsLost ?? 0,
+          });
+      });
+      result.push({
+        transceivers: pc.getTransceivers().map((t) => ({
+          mid: t.mid,
+          dir: t.direction,
+          cur: t.currentDirection,
+          trackMuted: t.receiver?.track?.muted ?? null,
+          trackState: t.receiver?.track?.readyState ?? null,
+        })),
+      });
+    }
+    return result;
+  });
+
+/** Two samples `ms` apart; returns per-ssrc deltas and the transceiver snapshot. */
+const measure = async (page, label, ms = 2500) => {
+  const a = await sample(page);
+  await page.waitForTimeout(ms);
+  const b = await sample(page);
+  const tracks = new Map();
+  for (const entry of a)
+    if (entry.kind) tracks.set(entry.ssrc, { ...entry, base: true });
+  for (const entry of b) {
+    if (!entry.kind) continue;
+    const before = tracks.get(entry.ssrc);
+    tracks.set(entry.ssrc, {
+      kind: entry.kind,
+      ssrc: entry.ssrc,
+      w: entry.w,
+      h: entry.h,
+      fps: entry.fps,
+      bytesDelta: entry.bytes - (before?.bytes ?? entry.bytes),
+      framesDelta: entry.frames - (before?.frames ?? entry.frames),
+      packetsLost: entry.packetsLost,
+    });
+  }
+  const transceivers = b.find((e) => e.transceivers)?.transceivers ?? [];
+  const out = {
+    label,
+    windowMs: ms,
+    tracks: [...tracks.values()].filter((t) => !t.base),
+    transceivers,
+  };
+  say(`measure ${label}`, out);
+  return out;
+};
+
+const videoTracks = (m) => m.tracks.filter((t) => t.kind === "video");
+const audioTracks = (m) => m.tracks.filter((t) => t.kind === "audio");
+/**
+ * The screen share, as opposed to the participants' cameras: the synthetic
+ * share is a 640x360 canvas at 10 fps, while the fake cameras arrive as
+ * 320x180 layers at 20 fps.
+ */
+const shareTracks = (m) => videoTracks(m).filter((t) => t.w >= 600 && t.h >= 340);
+const shareFrames = (m) =>
+  shareTracks(m).reduce((sum, t) => sum + t.framesDelta, 0);
+const audioBytesTotal = (m) =>
+  audioTracks(m).reduce((sum, t) => sum + t.bytesDelta, 0);
+
+const browser = await chromium.launch({
+  args: [
+    "--use-fake-ui-for-media-stream",
+    "--use-fake-device-for-media-stream",
+    "--mute-audio",
+    "--host-resolver-rules=MAP *.m.localhost 127.0.0.1, MAP m.localhost 127.0.0.1",
+  ],
+});
+
+const newParticipant = async (label) => {
+  const context = await browser.newContext({
+    ignoreHTTPSErrors: true,
+    permissions: ["microphone", "camera"],
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(45_000);
+  const logs = [];
+  page.on("console", (m) => logs.push(`${m.type()}: ${m.text()}`));
+  page.on("pageerror", (e) => logs.push(`pageerror: ${e.message}`));
+  await instrument(page);
+  return { label, context, page, logs };
+};
+
+let failure;
+let sharerProbe, viewerProbe, controlProbe;
+try {
+  const sharer = await newParticipant("sharer");
+  const viewer = await newParticipant("viewer");
+  const control = await newParticipant("control");
+  sharerProbe = sharer;
+  viewerProbe = viewer;
+  controlProbe = control;
+
+  await patchDisplayMedia(sharer.page);
+
+  const roomUrl = await joinCall(sharer.page, "Sharer");
+  say("sharer joined", { roomUrl });
+  await joinCall(viewer.page, "Viewer", roomUrl);
+  await joinCall(control.page, "Control", roomUrl);
+  say("viewer and control joined");
+
+  // Publish the synthetic screen share (video + audio). The footer hides itself
+  // when the pointer is idle, so wake it and retry.
+  const startShare = async () => {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await sharer.page.mouse.move(640, 360);
+      await sharer.page.mouse.move(660, 380);
+      await sharer.page.waitForTimeout(300);
+      await sharer.page.getByTestId("incall_screenshare").click();
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        const checked = await sharer.page
+          .getByTestId("incall_screenshare")
+          .getAttribute("aria-checked");
+        if (checked === "true") return;
+        await sharer.page.waitForTimeout(250);
+      }
+      say("screenshare click did not take", { attempt });
+    }
+    throw new Error("could not start a screen share");
+  };
+  await startShare();
+  say("sharer is publishing a screen share");
+
+  // EC puts a lone remote share in the spotlight by itself; the toggle lives in
+  // that tile's corner, next to upstream's volume button.
+  for (const p of [viewer, control]) {
+    await p.page
+      .getByRole("button", { name: "Screen share visibility" })
+      .waitFor({ state: "attached", timeout: 90_000 });
+  }
+  await viewer.page.waitForTimeout(4000);
+
+  const beforeHideViewer = await measure(viewer.page, "viewer/before-hide");
+  const beforeHideControl = await measure(control.page, "control/before-hide");
+  const beforeHideSharer = await measure(sharer.page, "sharer/before-hide");
+
+  if (shareFrames(beforeHideViewer) < 5)
+    throw new Error(
+      `viewer receives no screen-share video before hiding: ${JSON.stringify(beforeHideViewer.tracks)}`,
+    );
+
+  await viewer.page.screenshot({ path: join(OUT, "01-viewer-receiving.png") });
+
+  // Hide it: tile corner menu -> "Don't show this stream".
+  await viewer.page.mouse.move(640, 360);
+  await viewer.page.mouse.move(660, 380);
+  await viewer.page
+    .getByRole("button", { name: "Screen share visibility" })
+    .click();
+  const hideItem = viewer.page.getByRole("menuitemcheckbox", {
+    name: "Don't show this stream",
+  });
+  await hideItem.waitFor({ state: "visible", timeout: 20_000 });
+  say("menu open", { ariaChecked: await hideItem.getAttribute("aria-checked") });
+  await viewer.page.screenshot({ path: join(OUT, "02-viewer-menu.png") });
+  await hideItem.click();
+  await viewer.page.waitForTimeout(3000);
+
+  const hiddenText = await viewer.page
+    .getByText("Stream hidden")
+    .isVisible()
+    .catch(() => false);
+  say("viewer tile says stream hidden", { hiddenText });
+  await viewer.page.screenshot({ path: join(OUT, "03-viewer-hidden.png") });
+
+  const afterHideViewer = await measure(viewer.page, "viewer/after-hide");
+  const afterHideControl = await measure(control.page, "control/while-viewer-hid");
+  const afterHideSharer = await measure(sharer.page, "sharer/while-viewer-hid");
+
+  // Negative control: the other viewer is unaffected.
+  if (shareFrames(afterHideControl) <= 0)
+    throw new Error("control viewer stopped receiving the stream as well");
+  // The share's audio keeps playing for the viewer who hid the video.
+  if (audioBytesTotal(afterHideViewer) <= 0)
+    throw new Error("viewer lost audio along with the video");
+
+  // The menu is a checkbox menu: it stays open after a click, so a second toggle
+  // is the same item again; when it is closed, the corner button opens it.
+  const setVisibility = async (wantHidden, label) => {
+    const item = viewer.page.getByRole("menuitemcheckbox", {
+      name: "Don't show this stream",
+    });
+    if (!(await item.isVisible().catch(() => false))) {
+      await viewer.page.mouse.move(640, 360);
+      await viewer.page.mouse.move(660, 380);
+      await viewer.page
+        .getByRole("button", { name: "Screen share visibility" })
+        .click();
+      await item.waitFor({ state: "visible", timeout: 20_000 });
+    }
+    const checked = (await item.getAttribute("aria-checked")) === "true";
+    say(`${label}: menu opened`, { checked });
+    if (checked !== wantHidden) await item.click();
+    await viewer.page.keyboard.press("Escape");
+    await viewer.page.waitForTimeout(1000);
+  };
+
+  // Show it again, in the same call.
+  await setVisibility(false, "show again");
+  await viewer.page.waitForTimeout(3000);
+  const afterShowViewer = await measure(viewer.page, "viewer/after-show");
+  await viewer.page.screenshot({ path: join(OUT, "04-viewer-shown-again.png") });
+
+  // Restart: hide, reload the page, rejoin, the choice must come back from the
+  // store (localStorage + account data), not from component state.
+  await setVisibility(true, "hide before reload");
+  await viewer.page.waitForTimeout(2500);
+  say("hidden again before reload");
+
+  await viewer.page.reload();
+  await viewer.page.getByTestId("lobby_joinCall").waitFor({ timeout: 90_000 });
+  await viewer.page.getByTestId("lobby_joinCall").click({ timeout: 60_000 });
+  await viewer.page
+    .getByRole("button", { name: "Screen share visibility" })
+    .waitFor({ state: "attached", timeout: 90_000 });
+  await viewer.page.waitForTimeout(5000);
+  const afterReloadHidden = await viewer.page
+    .getByText("Stream hidden")
+    .isVisible()
+    .catch(() => false);
+  const reloadMeasure = await measure(viewer.page, "viewer/after-reload");
+  await viewer.page.screenshot({ path: join(OUT, "05-viewer-after-reload.png") });
+  say("after reload", { hiddenText: afterReloadHidden });
+
+  // Persisted choice, read back from the page.
+  const stored = await viewer.page.evaluate(() => ({
+    cache: localStorage.getItem("plotina_voice_volumes_v1"),
+  }));
+  say("localStorage cache", stored);
+
+  // The SFU-side view, straight from LiveKit's own log lines in this page.
+  const livekitLogs = viewer.logs.filter((l) =>
+    /Unsubscribed|Subscribed|screen_share|account_data\/cc\.plotina/.test(l),
+  );
+
+  evidence.result = {
+    viewerBeforeHide: beforeHideViewer,
+    viewerAfterHide: afterHideViewer,
+    controlBeforeHide: beforeHideControl,
+    controlWhileViewerHid: afterHideControl,
+    sharerBeforeHide: beforeHideSharer,
+    sharerWhileViewerHid: afterHideSharer,
+    viewerAfterShow: afterShowViewer,
+    viewerAfterReload: reloadMeasure,
+    ui: {
+      hiddenTextAfterToggle: hiddenText,
+      hiddenTextAfterReload: afterReloadHidden,
+    },
+    stored,
+    livekitLogs,
+    checks: {
+      viewerReceivedBefore: shareFrames(beforeHideViewer) >= 5,
+      viewerStoppedAfterHide: shareFrames(afterHideViewer) === 0,
+      viewerShareTrackGone: shareTracks(afterHideViewer).length === 0,
+      viewerAudioKeptAfterHide: audioBytesTotal(afterHideViewer) > 0,
+      controlUnaffected: shareFrames(afterHideControl) > 0,
+      sharerUnaffected: shareFrames(afterHideSharer) > 0,
+      viewerResumedAfterShow: shareFrames(afterShowViewer) >= 5,
+      hiddenAfterReload: afterReloadHidden === true,
+      stillHiddenAfterReload: shareFrames(reloadMeasure) === 0,
+      livekitLoggedUnsubscribe: livekitLogs.some((l) =>
+        /Unsubscribed: video screen_share/.test(l),
+      ),
+      livekitLoggedResubscribe: livekitLogs.some((l) =>
+        /Subscribed: video screen_share/.test(l),
+      ),
+      accountDataWrite: livekitLogs.some((l) =>
+        /account_data\/cc\.plotina/.test(l),
+      ),
+    },
+  };
+  say("checks", evidence.result.checks);
+  if (Object.values(evidence.result.checks).some((ok) => !ok))
+    failure = new Error("a live check failed: see evidence.json");
+} catch (error) {
+  failure = error;
+  say("FAILED", { error: String(error?.stack ?? error) });
+  for (const p of [sharerProbe, viewerProbe, controlProbe]) {
+    if (!p) continue;
+    try {
+      await p.page.screenshot({ path: join(OUT, `fail-${p.label}.png`) });
+      const text = await p.page.evaluate(() =>
+        (document.body.innerText ?? "").replace(/\n+/g, " | ").slice(0, 800),
+      );
+      say(`state of ${p.label}`, {
+        url: p.page.url(),
+        text,
+        logs: p.logs.slice(-25),
+      });
+    } catch (e) {
+      say(`could not inspect ${p.label}`, { error: String(e) });
+    }
+  }
+} finally {
+  evidence.finished = new Date().toISOString();
+  evidence.failure = failure ? String(failure?.stack ?? failure) : null;
+  writeFileSync(join(OUT, "evidence.json"), JSON.stringify(evidence, null, 2));
+  await browser.close();
+}
+
+if (failure) process.exitCode = 1;

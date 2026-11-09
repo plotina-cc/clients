@@ -81,7 +81,7 @@ Run from `element-call/` with the sources of the pinned tag plus the patch serie
 `build.py --mode source` does):
 
 ```bash
-npx vitest run --project=unit        # 801 passed | 9 skipped, 99 files
+npx vitest run --project=unit        # 802 passed | 9 skipped, 99 files
 npx tsc --noEmit                     # clean
 npx oxlint src/state src/tile src/utils/test.ts
 python3 -m unittest discover -s element-call/tests   # 83 tests, OK
@@ -97,6 +97,8 @@ The new coverage, in `src/state/media/RemoteScreenShareViewModel.test.ts` and on
 - `setVolume` is not called by hiding, and the share's playback volume/mute do not change;
 - with two shares, hiding one does not touch the other's publication;
 - a reconnect (new participant, new publication) applies the stored choice;
+- a publication that only arrives after the viewer hid the stream is
+  unsubscribed when it does;
 - a restart (new store, same cache) applies it too;
 - a choice delivered as account data from another device reaches the running call;
 - the store rejects junk keys, does not read a visibility entry as a volume, and writes the choice
@@ -106,18 +108,85 @@ The new coverage, in `src/state/media/RemoteScreenShareViewModel.test.ts` and on
 `node_modules` (18 cases), and `tests/test_stream_video_toggle.py` applies the whole series to the
 pinned tag before running it, so the probe runs against the file that ships.
 
-## What was not verified
+## Live proof
 
-There was no live two-party SFU call in this task: the behaviour is verified at ViewModel/store
-level with real `rxjs`, in the tile's DOM tests, and in the production bundle (the new strings and
-`setSubscribed` are in `dist/assets/index-*.js`). The manual check that closes the gap:
+Run on 2026-11-10 against a local stand — Synapse + `lk-jwt-service` + LiveKit SFU
+behind the upstream `docker-compose-dev.yml` nginx (`synapse.m.localhost`,
+`matrix-rtc.m.localhost`), with Element Call served from the production bundle this
+patch series builds (`vite build`, then a static HTTPS server) and three browser
+contexts in one call: a sharer, a viewer and a control viewer that never touches
+the toggle. Numbers are WebRTC `getStats()` deltas over a 2.5 s window, not
+screenshots: the share is the 640x360 inbound video (a canvas at 10 fps), the two
+320x180 @ 20 fps tracks are the participants' (fake) cameras.
+
+| measurement | viewer, before hiding | viewer, while hidden | control viewer, same moment | viewer, after showing again |
+| :-- | :-- | :-- | :-- | :-- |
+| `inbound-rtp` video 640x360 | 1 track, 25 frames | **0 tracks** | 1 track, 22 frames | 1 track, 25 frames |
+| audio (`inbound-rtp`, 3 streams) | 15.3 / 15.3 / 18.9 KB | 16.3 / 14.8 / 15.1 KB | 14.5 / 14.0 / 12.5 KB | 18.7 / 15.4 / 14.7 KB |
+| camera layers 320x180 | 2 tracks, 50 frames each | unchanged | unchanged | unchanged |
+
+So hiding removes the track from the subscription — the inbound stream disappears
+from the peer connection entirely (it is not a paused or blanked video element) —
+while every audio stream and the other viewer's copy of the same share keep
+flowing. Showing it again brings the share back inside the same call, on a new
+inbound stream (new SSRC), without leaving or reconnecting.
+
+The client's own LiveKit log in the viewer's page, in order:
+
+```
+[RemoteTracks] Subscribed:   video screen_share TR_VSEWTHmuuLPwcE of @<sharer>:synapse.m.localhost
+[RemoteTracks] Unsubscribed: video screen_share TR_VSEWTHmuuLPwcE of @<sharer>:synapse.m.localhost
+PUT .../account_data/cc.plotina.voice_volumes 200
+[RemoteTracks] Subscribed:   video screen_share TR_...  (after showing again)
+```
+
+Restart: after reloading the viewer's page and rejoining the lobby, the tile came
+back as "Stream hidden" with no 640x360 inbound track at all, and the choice was
+in the cache as
+`{"@<sharer>:synapse.m.localhost#screenshare-video":{"visible":false,"ts":...}}`
+— the same account data event as the volumes, so a second device applies it too.
+
+`tests/live/stream_video_toggle_proof.mjs` is the harness that produced this (it
+asserts all of the above and exits non-zero on a mismatch);
+`tests/live/serve_bundle.mjs` is the static HTTPS server it needs:
+
+```bash
+# 1. a bundle of the pinned tag with the whole series applied
+#    (build.py --mode source does this; any production build of it works)
+# 2. serve it over HTTPS with the stand's certificate
+node element-call/tests/live/serve_bundle.mjs <dist> 3443 <cert dir>   # key.pem + cert.pem
+# 3. drive three browsers through the toggle
+BASE_URL=https://localhost:3443/ EVIDENCE_DIR=/tmp/stream-proof \
+  PLAYWRIGHT_FROM=<ec source tree>/package.json \
+  node element-call/tests/live/stream_video_toggle_proof.mjs
+```
+
+The evidence file and screenshots from the run are attached to the task
+(`t_f1c04868`): `evidence.json`, `01-viewer-receiving.png`, `02-viewer-menu.png`,
+`03-viewer-hidden.png`, `04-viewer-shown-again.png`, `05-viewer-after-reload.png`.
+
+### What the live run showed about the UI
+
+- With one remote share in a call, EC puts the share in the spotlight by itself,
+  so the corner button is there without the viewer changing layout. The button is
+  next to the volume button and is present even when the share has no audio (the
+  volume button is not, because it is gated on `audioEnabled`).
+- The toggle menu stays open after a click — it is a `ToggleMenuItem`, and the
+  checked state is the feedback. Hiding keeps the tile in place with the avatar
+  and "Stream hidden", so the same menu is always reachable to bring it back.
+- In the grid layout the control is not shown: the tile chrome in grid is not the
+  spotlight tile. Upstream's own per-share volume button is grid-less for the same
+  reason, and this patch follows it rather than inventing a second control there.
+
+## Manual check, if the stand has to be rebuilt
 
 1. two accounts in one call, A shares a screen with audio;
 2. as B, open the stream's corner menu → "Don't show this stream";
-3. B's tile shows "Stream hidden", B's console logs `setSubscribed` on the `ScreenShare`
-   publication, and `chrome://webrtc-internals` shows the screen-share video track removed;
-4. A's voice and the share's audio still play for B, and another participant's stream (if any) is
-   unaffected;
+3. B's tile shows "Stream hidden", B's console logs `Unsubscribed: video
+   screen_share`, and `chrome://webrtc-internals` shows the share's inbound video
+   stream gone;
+4. A's voice and the share's audio still play for B, and another participant's
+   stream (if any) is unaffected;
 5. reload B: the stream stays hidden; toggle it back and it renders again.
 
 ## Rollback
