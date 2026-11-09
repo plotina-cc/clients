@@ -22,25 +22,20 @@ jobs:
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          echo "actor=${GITHUB_ACTOR}"
-          code="$(curl -sS -o "$RUNNER_TEMP/basic.json" -w '%{http_code}' \
+          curl -sS -o "$RUNNER_TEMP/basic.json" \
             -u "${GITHUB_ACTOR}:${TOKEN}" \
-            "https://ghcr.io/token?service=ghcr.io&scope=repository:plotina-cc/element-web:pull,push")"
-          echo "basic auth: http ${code}"
-          head -c 400 "$RUNNER_TEMP/basic.json"; echo
-          code2="$(curl -sS -o "$RUNNER_TEMP/bearer.json" -w '%{http_code}' \
-            -H "Authorization: Bearer ${TOKEN}" \
-            "https://ghcr.io/token?service=ghcr.io&scope=repository:plotina-cc/element-web:pull,push")"
-          echo "bearer: http ${code2}"
-          head -c 400 "$RUNNER_TEMP/bearer.json"; echo
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:plotina-cc/element-web:pull,push"
           python3 - "$RUNNER_TEMP/basic.json" <<'PY'
           import base64, json, sys
-          body = json.load(open(sys.argv[1]))
-          token = body.get("token") or ""
-          print("token length:", len(token))
-          if token.count(".") == 2:
-              payload = token.split(".")[1]
-              payload += "=" * (-len(payload) % 4)
-              claims = json.loads(base64.urlsafe_b64decode(payload))
-              print("access:", json.dumps(claims.get("access"), indent=2))
+
+          raw = json.load(open(sys.argv[1]))["token"]
+          print("raw prefix:", raw[:12], "length:", len(raw))
+          decoded = base64.b64decode(raw).decode()
+          parts = decoded.split("_", 2)
+          print("decoded prefix:", parts[0], "parts:", len(parts))
+          jwt = parts[-1]
+          payload = jwt.split(".")[1]
+          payload += "=" * (-len(payload) % 4)
+          claims = json.loads(base64.urlsafe_b64decode(payload))
+          print("access:", json.dumps(claims.get("access"), indent=2))
           PY
