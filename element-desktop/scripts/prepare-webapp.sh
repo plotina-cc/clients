@@ -165,10 +165,18 @@ count() {  # occurrences of a literal string in a file (grep -c counts lines)
 }
 test -s "$DEST/plotina-theme.js"
 cmp -s "$DEST/plotina-theme.js" "$REPO_ROOT/element-web/plotina-theme.js"
+# Personal room names (SPIKE-dm-aliases.md): payload byte-identical to the
+# shared source, tagged exactly once, relative for vector://.
+test -s "$DEST/plotina-dm-aliases.js"
+cmp -s "$DEST/plotina-dm-aliases.js" "$REPO_ROOT/element-web/plotina-dm-aliases.js"
+[ "$(count '<script src="plotina-dm-aliases.js" defer></script>' "$DEST/index.html")" -eq 1 ]
 # Relative src only: vector://vector/webapp/ never serves a root-absolute path.
 [ "$(count '<script src="plotina-theme.js"></script>' "$DEST/index.html")" -eq 1 ]
 if grep -q 'src="/plotina-theme.js"' "$DEST/index.html"; then
   echo "prepare-webapp: root-absolute plotina-theme.js src in the desktop webapp" >&2; exit 1
+fi
+if grep -q 'src="/plotina-dm-aliases.js"' "$DEST/index.html"; then
+  echo "prepare-webapp: root-absolute plotina-dm-aliases.js src in the desktop webapp" >&2; exit 1
 fi
 # The modal a11y block lands exactly once and carries no margin override
 # (stock auto margins pin the auth footer to the viewport bottom).

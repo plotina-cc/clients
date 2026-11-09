@@ -185,7 +185,10 @@ states the same):
   because the shell serves the webapp from `vector://vector/webapp/` — the
   same rule as the noise tags;
 - the missing `ru` verification strings merged into `i18n/ru.*.json`, only
-  where absent.
+  where absent;
+- `plotina-dm-aliases.js`, the account-data alias overlay for personal room
+  names (`SPIKE-dm-aliases.md`): same payload in both trees, tagged once in
+  `index.html`, absolute src on the web and relative here.
 
 The guards are `tests/test_webapp_fixes.py` (it feeds identical CSS/HTML
 through both entry points and asserts byte-identical fix output) and the

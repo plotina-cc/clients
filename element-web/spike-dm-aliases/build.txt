@@ -1,0 +1,21 @@
+== prepare-webapp.sh (element-desktop/scripts/prepare-webapp.sh, SENTRY_DSN = local test key)
+==> webapp for v1.12.32
+==> noise layer
+==> noise assets
+==> config
+==> overlay
+==> branding
+branding: index.html: plotina-modal-a11y style injected (exactly once, after the bundle/theme links)
+branding: index.html: plotina-theme.js loads before bundles/*/bundle.js (relative src)
+branding: index.html: plotina-dm-aliases.js loads (relative src)
+==> update channel overlay
+==> licence
+==> verify
+webapp ready: /home/hermes/clients/.worktrees/t_b6d8c35f/element-desktop/.build/webapp (218M)
+
+== built index.html: alias tag
+plotina-dm-aliases.js" defer>
+count: 1
+
+== payload byte-identical to element-web/plotina-dm-aliases.js
+cmp: identical (17527 bytes)

@@ -168,6 +168,8 @@ class WebappFixture(unittest.TestCase):
             # tree must NOT have them: branding.py copies plotina-theme.js
             # itself and gets the icons from --icons.
             shutil.copyfile(WEB_THEME_JS, webapp / "plotina-theme.js")
+            shutil.copyfile(REPO / "element-web" / "plotina-dm-aliases.js",
+                            webapp / "plotina-dm-aliases.js")
             shutil.copyfile(REPO_ICONS / "plotina-green.svg",
                             webapp / "plotina-icon.svg")
             shutil.copyfile(REPO_ICONS / "png" / "green-512.png",
@@ -318,6 +320,7 @@ class DesktopFixesTest(WebappFixture):
     def test_second_run_is_byte_stable(self) -> None:
         paths = [self.webapp / "index.html",
                  self.webapp / "plotina-theme.js",
+                 self.webapp / "plotina-dm-aliases.js",
                  self.webapp / "i18n" / RU_NAME]
         paths += [self.webapp / "bundles" / BUNDLE / n
                   for n in ("theme-light-custom.css", "theme-dark-custom.css")]
@@ -400,6 +403,22 @@ class ParityTest(WebappFixture):
                 self.assertEqual(html.count(tag), 1)
                 self.assertEqual(html.count(other), 0)
                 self.assertIn(tag + BUNDLE_SCRIPT, html)
+
+    def test_dm_alias_overlay_same_payload_both_clients(self) -> None:
+        # SPIKE-dm-aliases.md: one payload for both clients, tagged once in
+        # each, and only the src form differs (vector:// needs it relative).
+        rel = '<script src="plotina-dm-aliases.js" defer></script>'
+        abs_ = '<script src="/plotina-dm-aliases.js" defer></script>'
+        source = REPO / "element-web" / "plotina-dm-aliases.js"
+        for tree, tag, other in ((self.web_tree, abs_, rel),
+                                 (self.desktop_tree, rel, abs_)):
+            with self.subTest(tree=tree.name):
+                payload = tree / "plotina-dm-aliases.js"
+                self.assertEqual(payload.read_bytes(), source.read_bytes())
+                html = (tree / "index.html").read_text(encoding="utf-8")
+                self.assertEqual(html.count(tag), 1)
+                self.assertEqual(html.count(other), 0)
+                self.assertIn(tag + "</head>", html)
 
     def test_both_scripts_consume_the_same_module(self) -> None:
         # Not two copies of the logic: both branding scripts resolve the SAME
