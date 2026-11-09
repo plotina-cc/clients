@@ -359,6 +359,7 @@ refresh so QA can drive the same code path the dialog uses.
     wrap.querySelector("h3").textContent = s.title;
     wrap.querySelector("p").textContent = s.hint;
     wrap.querySelector("input").placeholder = s.placeholder;
+    wrap.querySelector("input").setAttribute("aria-label", s.title);
     wrap.querySelector('[data-role="save"]').textContent = s.save;
     wrap.querySelector('[data-role="reset"]').textContent = s.reset;
     wrap.querySelector('[data-role="cancel"]').textContent = s.cancel;

@@ -17,6 +17,6 @@ LOG="${1:-/tmp/prepare-webapp2.log}"
   echo "== payload byte-identical to element-web/plotina-dm-aliases.js"
   cmp "$B/plotina-dm-aliases.js" "$ROOT/element-web/plotina-dm-aliases.js"
   printf 'cmp: identical (%s bytes)\n' "$(wc -c < "$ROOT/element-web/plotina-dm-aliases.js")"
-} > "$EV/build.log"
+} > "$EV/build.txt"
 
-cat "$EV/build.log"
+cat "$EV/build.txt"

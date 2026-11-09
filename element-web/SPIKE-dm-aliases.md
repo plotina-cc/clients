@@ -4,8 +4,8 @@
 (`cc.plotina.room_aliases`), применяется в списке комнат и в заголовке открытой
 комнаты, `m.room.name` при этом не меняется, второй аккаунт ничего не видит.
 Проверено на собранном `prepare-webapp.sh` webapp с локальным одноразовым
-homeserver-ом: 9/9 автоматических проверок (`spike-dm-aliases/proof.log`), пять
-скриншотов, ответы API до/после (`spike-dm-aliases/api-state.log`).
+homeserver-ом: 10/10 автоматических проверок (`spike-dm-aliases/proof.txt`), шесть
+скриншотов, ответы API до/после (`spike-dm-aliases/api-state.txt`).
 
 Дата: 2026-11-10. Ветка `wt/spike-dm-aliases`. Внешний лимит спайка не менялся
 (апстрим не трогали, релизов и деплоев нет).
@@ -128,11 +128,17 @@ homeserver-ом: 9/9 автоматических проверок (`spike-dm-al
 (не golova, не plotina.cc, продакшн не тронут), два аккаунта `alice`/`bob`,
 настоящий DM (`is_direct`, invite+join), у `bob` displayname «Даниил».
 Webapp — **собранный** `element-desktop/scripts/prepare-webapp.sh` (218 МБ,
-`webapp ready`, все проверки скрипта прошли, `spike-dm-aliases/build.log`),
+`webapp ready`, все проверки скрипта прошли, `spike-dm-aliases/build.txt`),
 раздан локально на `127.0.0.1:8092`.
 
+Ветка Element Web тоже проверена сборкой: Docker-образ собрался с новым
+`COPY` и Dockerfile-проверками (`test -s` + `count == 1`), а из готового
+`/app` вынуто и сверено — ровно один `<script src="/plotina-dm-aliases.js"
+defer>` (относительного нет), payload побайтово равен
+`element-web/plotina-dm-aliases.js` (16589 байт) — `spike-dm-aliases/web-image-check.txt`.
+
 Прогон: `element-web/spike-dm-aliases/proof.mjs` (Playwright, три браузерных
-контекста, полный вывод — `spike-dm-aliases/proof.log`):
+контекста, полный вывод — `spike-dm-aliases/proof.txt`):
 
 ```
 PASS stock name before rename: header="Даниил" room.name="Даниил" aliases={}
@@ -143,9 +149,11 @@ PASS advertised alias map: {"!i2kHEuNKioA9a0Xrkn:spike.local":"Денчик"}
 PASS m.room.name still absent: HTTP 404 M_NOT_FOUND: State event not found
 PASS alias lives in account data: {"!i2kHEuNKioA9a0Xrkn:spike.local":"Денчик"}
 PASS second account does not see the alias: header="alice 🏳️‍⚧️" aliases={}
+PASS alias is per account, both directions: other header="Алиса-для-Боба"
+     other account_data={"!i2k…":"Алиса-для-Боба"} owner room.name="Денчик"
 PASS alias applied at startup without action: aliases={…"Денчик"} header="Денчик"
 
-9/9 checks passed
+10/10 checks passed
 ```
 
 Скриншоты (`spike-dm-aliases/`):
@@ -157,9 +165,11 @@ PASS alias applied at startup without action: aliases={…"Денчик"} header
 | `03-after-alias.png` | «Денчик» в заголовке и в списке комнат |
 | `04-second-account.png` | второй аккаунт в том же room: имя не изменилось |
 | `05-restart-fresh-device.png` | новое устройство: алиас применился без действий |
+| `06-second-account-own-alias.png` | второй аккаунт переименовал комнату **у себя** («Алиса-для-Боба»); у владельца осталось «Денчик» |
 
-Состояние комнаты до/после (`spike-dm-aliases/api-state.log`, оба аккаунта,
-метки `before-evidence` / `after-rename`):
+Состояние комнаты до/после (`spike-dm-aliases/api-state.txt`, оба аккаунта,
+метки `before-evidence` / `after-rename` / `after-both-aliases` — последняя уже
+после того, как второй аккаунт поставил свой собственный алиас):
 
 ```
 account_data cc.plotina.room_aliases  alice: 200 {"!i2k…":"Денчик"}   bob: 404 M_NOT_FOUND
@@ -168,9 +178,12 @@ state name/alias events               []                              []
 state members                         Даниил / alice 🏳️‍⚧️            Даниил / alice 🏳️‍⚧️
 ```
 
+(в метке `after-both-aliases` у bob-а в account data свой
+`{"!i2k…":"Алиса-для-Боба"}`, а `m.room.name` по-прежнему 404 у обоих)
+
 То есть `m.room.name` не появлялся вообще (комната и до спайка жила без него —
-имя было производным от displayname), а алиас существует только в account data
-аккаунта `alice`.
+имя было производным от displayname), а «Денчик» существует только в account
+data аккаунта `alice`: у `bob` в собственной карте про него ничего нет.
 
 Дополнительно проверено:
 
@@ -249,7 +262,7 @@ PLAYWRIGHT_MODULE=file://$PWD/../e2e/node_modules/playwright/index.mjs \
 `spike-dm-aliases/bundle-hooks.sh <webapp>` заново печатает доказательства по
 бандлу (хук `window.mxMatrixClientPeg` и факты из `room.ts`), если понадобится
 перепроверить точку подключения на новом апстриме. `spike-dm-aliases/build-evidence.sh`
-пере-собирает `build.log` из свежего прогона `prepare-webapp.sh`.
+пере-собирает `build.txt` из свежего прогона `prepare-webapp.sh`.
 
 ## 8. Что не вышло / отдельные заметки
 
@@ -274,6 +287,11 @@ PLAYWRIGHT_MODULE=file://$PWD/../e2e/node_modules/playwright/index.mjs \
 - Скриншоты из ad-hoc браузерного харнесса периодически отдавали устаревший
   кадр (общий `/tmp/shot.png` на несколько сессий) — поэтому доказательный
   прогон сделан Playwright-скриптом, который сам пишет файлы.
+- Локальная сборка Docker-образа Element Web требует gitignored-ассетов
+  `noise/dfn/` (~24 МБ): в чистом worktree их нет, `Dockerfile` падает на
+  `COPY noise/dfn/`. Это существующее свойство репозитория (CI их подкладывает
+  так же, как `scripts/build-image.sh` копирует `../noise` в контекст);
+  для спайка ассеты взяты из основного чекаута, в git ничего не добавлено.
 
 ## 9. Соблюдение запретов
 

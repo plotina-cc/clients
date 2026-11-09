@@ -127,10 +127,20 @@ async function dismissNotices(page) {
 }
 
 async function openRoom(page, roomId) {
-  await page.evaluate((id) => { location.hash = "#/room/" + id; }, roomId);
-  await page.waitForSelector(".mx_RoomHeader_heading", { timeout: 60000 });
-  await page.waitForTimeout(1500);
-  return page.textContent(".mx_RoomHeader_heading");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.evaluate((id) => { location.hash = "#/home"; }, roomId);
+    await page.waitForTimeout(800);
+    await page.evaluate((id) => { location.hash = "#/room/" + id; }, roomId);
+    try {
+      await page.waitForSelector(".mx_RoomHeader_heading", { timeout: 20000 });
+      await page.waitForTimeout(1200);
+      return page.textContent(".mx_RoomHeader_heading");
+    } catch (err) {
+      if (attempt === 2) throw err;
+      await page.waitForTimeout(2000);
+    }
+  }
+  return null;
 }
 
 async function roomListNames(page) {
@@ -231,6 +241,15 @@ async function main() {
   const otherCtx = await browser.newContext();
   const other = await otherCtx.newPage();
   await login(other, OTHER_USER, OTHER_PASS);
+  // Start from a clean slate for the other account too: a previous run may
+  // have left its own alias behind, and the control is "sees the stock name".
+  const otherToken0 = await other.evaluate(() => window.mxMatrixClientPeg.get().getAccessToken());
+  const otherUserId0 = await other.evaluate(() => window.mxMatrixClientPeg.get().getUserId());
+  await api(`/_matrix/client/v3/user/${encodeURIComponent(otherUserId0)}/account_data/${ACCOUNT_DATA}`,
+    otherToken0, "PUT", {});
+  await other.reload({ waitUntil: "domcontentloaded" });
+  await dismissNotices(other);
+  await other.waitForTimeout(3000);
   const otherHeader = await openRoom(other, roomId);
   const otherAliases = await aliases(other);
   const otherName = await clientName(other, roomId);
@@ -238,6 +257,23 @@ async function main() {
   record("second account does not see the alias",
     otherHeader.trim() !== ALIAS && (otherAliases === null || !(roomId in otherAliases)),
     `header=${JSON.stringify(otherHeader.trim())} room.name=${JSON.stringify(otherName)} aliases=${JSON.stringify(otherAliases)}`);
+
+  // Isolation both ways: the other account renames the same room for itself
+  // and the owner's view must not move.
+  const otherToken = await other.evaluate(() => window.mxMatrixClientPeg.get().getAccessToken());
+  const otherUserId = await other.evaluate(() => window.mxMatrixClientPeg.get().getUserId());
+  const otherLabel = "Алиса-для-Боба";
+  await other.evaluate(([id, label]) => window.plotinaDmAliases.setAlias(id, label), [roomId, otherLabel]);
+  await other.waitForTimeout(2500);
+  const otherHeader2 = (await other.textContent(".mx_RoomHeader_heading")).trim();
+  const otherData = await api(
+    `/_matrix/client/v3/user/${encodeURIComponent(otherUserId)}/account_data/${ACCOUNT_DATA}`, otherToken);
+  const ownerNameAfterOther = await clientName(owner, roomId);
+  await shot(other, "06-second-account-own-alias.png");
+  record("alias is per account, both directions",
+    otherHeader2 === otherLabel && otherData.json[roomId] === otherLabel && ownerNameAfterOther === ALIAS,
+    `other header=${JSON.stringify(otherHeader2)} other account_data=${JSON.stringify(otherData.json)} ` +
+    `owner room.name=${JSON.stringify(ownerNameAfterOther)}`);
 
   // Startup path: a new owner device reads the alias from account data.
   const restartCtx = await browser.newContext();
