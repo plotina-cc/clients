@@ -121,6 +121,17 @@ refresh so QA can drive the same code path the dialog uses.
     }
   }
 
+  /** Immutable update: returns a copy of *map* with one room set or removed. */
+  function withAlias(map, roomId, name) {
+    var next = {};
+    Object.keys(map || {}).forEach(function (key) {
+      next[key] = map[key];
+    });
+    if (name && String(name).trim()) next[roomId] = String(name).trim();
+    else delete next[roomId];
+    return next;
+  }
+
   /* --------------------------------------------------------------- SDK hook */
 
   function patchRooms(c) {
@@ -190,13 +201,7 @@ refresh so QA can drive the same code path the dialog uses.
   }
 
   function setAlias(roomId, name) {
-    var next = {};
-    Object.keys(state.aliases).forEach(function (key) {
-      next[key] = state.aliases[key];
-    });
-    if (name && String(name).trim()) next[roomId] = String(name).trim();
-    else delete next[roomId];
-    return writeAliases(next);
+    return writeAliases(withAlias(state.aliases, roomId, name));
   }
 
   function clearAlias(roomId) {
@@ -443,6 +448,20 @@ refresh so QA can drive the same code path the dialog uses.
     setAlias: setAlias,
     clearAlias: clearAlias,
   };
+
+  /* ------------------------------------------------------------ node tests */
+
+  // CommonJS export for element-web/tests/dm_aliases.test.js: the pure pieces
+  // only. node has no DOM and no Matrix client, so the browser entry point
+  // below is skipped there (branding_test.py wires the test into the suite).
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+      ACCOUNT_DATA_TYPE: ACCOUNT_DATA_TYPE,
+      parseAliases: parseAliases,
+      withAlias: withAlias,
+    };
+    return;
+  }
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", start);

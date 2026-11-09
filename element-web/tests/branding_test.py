@@ -466,6 +466,22 @@ class NodeThemeLogicTest(unittest.TestCase):
         self.assertIn("ALL OK", proc.stdout)
 
 
+@unittest.skipUnless(shutil.which("node"), "node not installed")
+class NodeDmAliasesLogicTest(unittest.TestCase):
+    """plotina-dm-aliases.js pure map handling: account data content is
+    sanitised on read (strings only, trimmed, room ids only) and updates are
+    immutable, so a malformed payload from another device cannot break the
+    overlay or corrupt the stored map."""
+
+    def test_alias_map_logic(self) -> None:
+        proc = subprocess.run(
+            ["node", str(HERE / "dm_aliases.test.js"),
+             str(WEBAPP / "plotina-dm-aliases.js")],
+            capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, msg=proc.stdout + proc.stderr)
+        self.assertIn("ALL OK", proc.stdout)
+
+
 class LocaleTest(AppFixture):
     def test_missing_strings_added(self) -> None:
         self.brand()

@@ -127,17 +127,21 @@ async function dismissNotices(page) {
 }
 
 async function openRoom(page, roomId) {
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    // The device-verification prompt can land after the first sync, i.e.
+    // after login() already drained the earlier ones; keep draining.
+    await dismissNotices(page);
     await page.evaluate((id) => { location.hash = "#/home"; }, roomId);
     await page.waitForTimeout(800);
     await page.evaluate((id) => { location.hash = "#/room/" + id; }, roomId);
     try {
       await page.waitForSelector(".mx_RoomHeader_heading", { timeout: 20000 });
+      await dismissNotices(page);
       await page.waitForTimeout(1200);
       return page.textContent(".mx_RoomHeader_heading");
     } catch (err) {
-      if (attempt === 2) throw err;
-      await page.waitForTimeout(2000);
+      if (attempt === 3) throw err;
+      await page.waitForTimeout(2500);
     }
   }
   return null;
@@ -193,11 +197,14 @@ async function main() {
     `header=${JSON.stringify(beforeHeader)} room.name=${JSON.stringify(beforeName)} aliases=${JSON.stringify(beforeAliases)}`);
 
   // Rename through the overlay's own UI: pencil in the header -> dialog.
-  await owner.click(".plotina-alias-btn");
+  // Clicked through the DOM: Element sometimes leaves a floating-ui popover
+  // over the header, which would swallow a synthetic mouse click.
+  await owner.keyboard.press("Escape");
+  await owner.$eval(".plotina-alias-btn", (el) => el.click());
   await owner.waitForSelector("#plotina-dm-alias-dialog input", { timeout: 10000 });
   await shot(owner, "02-dialog.png");
   await owner.fill("#plotina-dm-alias-dialog input", ALIAS);
-  await owner.click("#plotina-dm-alias-dialog [data-role=save]");
+  await owner.$eval('#plotina-dm-alias-dialog [data-role=save]', (el) => el.click());
   await owner.waitForTimeout(2500);
 
   const afterHeader = await owner.textContent(".mx_RoomHeader_heading");

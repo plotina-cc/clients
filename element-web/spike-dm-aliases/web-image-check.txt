@@ -1,5 +1,5 @@
 alias tag occurrences in /app/index.html: 1
 relative tag occurrences (must be 0): 0
-payload bytes in /app: 16589
+payload bytes in /app: 17278
 payload identical to element-web/plotina-dm-aliases.js: yes
 tag line: <script src="/plotina-dm-aliases.js" defer></script>

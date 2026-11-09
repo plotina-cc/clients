@@ -117,6 +117,7 @@ homeserver-ом: 10/10 автоматических проверок (`spike-dm-
 | `element-desktop/branding.py` | копирует payload из `../element-web` в webapp и вызывает `ensure_dm_aliases(relative=True)` |
 | `element-desktop/scripts/prepare-webapp.sh` | `cmp` payload с исходником, `count == 1`, запрет root-absolute src |
 | `element-web/tests/branding_test.py` | `DmAliasesTest`: тег, идемпотентность, падение без payload, COPY в Dockerfile, «оверлей не пишет состояние» |
+| `element-web/tests/dm_aliases.test.js` | node-тесты чистых функций: разбор account data (только строки, trim, только `room_id`) и иммутабельное обновление карты — 9 проверок |
 | `element-desktop/tests/test_webapp_fixes.py` | паритет: одинаковые байты в обоих деревьях, разные только формы src, стабильность при повторном прогоне |
 
 Проверки-счётчики в стиле репозитория: и в Docker-образе, и в
@@ -135,7 +136,7 @@ Webapp — **собранный** `element-desktop/scripts/prepare-webapp.sh` (2
 `COPY` и Dockerfile-проверками (`test -s` + `count == 1`), а из готового
 `/app` вынуто и сверено — ровно один `<script src="/plotina-dm-aliases.js"
 defer>` (относительного нет), payload побайтово равен
-`element-web/plotina-dm-aliases.js` (16589 байт) — `spike-dm-aliases/web-image-check.txt`.
+`element-web/plotina-dm-aliases.js` (17278 байт) — `spike-dm-aliases/web-image-check.txt`.
 
 Прогон: `element-web/spike-dm-aliases/proof.mjs` (Playwright, три браузерных
 контекста, полный вывод — `spike-dm-aliases/proof.txt`):
@@ -282,8 +283,9 @@ PLAYWRIGHT_MODULE=file://$PWD/../e2e/node_modules/playwright/index.mjs \
   `branding_test.py` в него не попадает (preflight при этом зелёный:
   `preflight: ok`). Это существующая особенность, не менял; свои тесты гонял
   явно: `python3 -m unittest discover -s element-web/tests -p '*_test.py'`
-  → 51 тест, единственное падение — то самое пре-существующее.
-  `element-desktop`: 128 тестов, `OK`.
+  → 52 теста, единственное падение — то самое пре-существующее.
+  `element-desktop`: 128 тестов, `OK`. `element-web/tests/run.sh` (60 тестов)
+  красный ровно из-за него же — на `HEAD` тоже.
 - Скриншоты из ad-hoc браузерного харнесса периодически отдавали устаревший
   кадр (общий `/tmp/shot.png` на несколько сессий) — поэтому доказательный
   прогон сделан Playwright-скриптом, который сам пишет файлы.
