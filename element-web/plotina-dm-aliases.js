@@ -124,11 +124,14 @@ refresh so QA can drive the same code path the dialog uses.
   /* --------------------------------------------------------------- SDK hook */
 
   function patchRooms(c) {
-    if (state.patched) return true;
     var rooms = c.getRooms ? c.getRooms() : [];
     if (!rooms || !rooms.length) return false;
     var proto = Object.getPrototypeOf(rooms[0]);
     if (!proto || typeof proto.calculateRoomName !== "function") return false;
+    if (proto.__plotinaRoomAliases) {
+      state.patched = true;
+      return true;
+    }
     var original = proto.calculateRoomName;
     proto.calculateRoomName = function (userId, ignoreRoomNameEvent) {
       if (!ignoreRoomNameEvent) {
@@ -248,6 +251,17 @@ refresh so QA can drive the same code path the dialog uses.
     state.started = true;
     attach(c);
     startUi();
+
+    // Element can replace the MatrixClient in place (account switch, logout
+    // then login without a reload). The alias map and the prototype patch
+    // belong to whatever client object is current, so follow it.
+    root.setInterval(function () {
+      var current = client();
+      if (current && current !== state.client) {
+        state.patched = false;
+        attach(current);
+      }
+    }, 2000);
   }
 
   /* -------------------------------------------------------------------- UI */
@@ -275,7 +289,6 @@ refresh so QA can drive the same code path the dialog uses.
     "#plotina-dm-alias-dialog button.plotina-alias-primary{background:#17795a;border-color:#17795a;",
     "color:#fff}",
     "#plotina-dm-alias-dialog .plotina-alias-status{margin-top:10px;font-size:12px;min-height:16px}",
-    ".plotina-alias-btn{}",
   ].join("");
 
   function injectStyle() {

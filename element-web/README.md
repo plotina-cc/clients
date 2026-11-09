@@ -31,6 +31,11 @@ config/element/
   manifest.json           Plotina PWA manifest
   plotina-theme.js        first-visit theme bootstrap: seeds mx_local_settings.theme
                           from prefers-color-scheme before the bundle loads
+  plotina-dm-aliases.js   personal room names: room_id -> label map in account data
+                          cc.plotina.room_aliases, applied over Room.calculateRoomName
+                          (see SPIKE-dm-aliases.md; ships in both clients)
+  SPIKE-dm-aliases.md     spike report: route, proof, gaps, cost to production
+  spike-dm-aliases/       proof.mjs (Playwright), bundle-hooks.sh, logs, screenshots
   plotina-icon.svg        login-header logo used before/without config
   plotina-icon-192.png    apple-touch-icon target (branding/icons/png/green-192.png)
   plotina-bg.png          welcome background (branding/icons/png/green-256.png)
