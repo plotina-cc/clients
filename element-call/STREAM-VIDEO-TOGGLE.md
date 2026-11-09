@@ -114,18 +114,22 @@ pinned tag before running it, so the probe runs against the file that ships.
 
 Run on 2026-11-10 against a local stand — Synapse + `lk-jwt-service` + LiveKit SFU
 behind the upstream `docker-compose-dev.yml` nginx (`synapse.m.localhost`,
-`matrix-rtc.m.localhost`), with Element Call served from the production bundle this
-patch series builds (`vite build`, then a static HTTPS server) and three browser
-contexts in one call: a sharer, a viewer and a control viewer that never touches
-the toggle. Numbers are WebRTC `getStats()` deltas over a 2.5 s window, not
-screenshots: the share is the 640x360 inbound video (a canvas at 10 fps), the two
-320x180 @ 20 fps tracks are the participants' (fake) cameras.
+`matrix-rtc.m.localhost`), with Element Call from `build.py --mode source` on this
+branch (`plotina-element-call.tar.gz`, sha256
+`f2214baccc7c18597c10712bd084155309421e9d06fbdafc74a13bbe612bd490`) served by
+`tests/live/serve_bundle.mjs`, and three browser contexts in one call: a sharer, a
+viewer and a control viewer that never touches the toggle. Numbers are WebRTC
+`getStats()` deltas over a 2.5 s window, not screenshots. The share is identified
+by difference, not by pixel size: LiveKit picks the simulcast layer per subscriber,
+so the same share came as 640x360 here and as 320x180 for the control viewer in one
+run (the camera layers are 320x180 @ 20 fps).
 
 | measurement | viewer, before hiding | viewer, while hidden | control viewer, same moment | viewer, after showing again |
 | :-- | :-- | :-- | :-- | :-- |
-| `inbound-rtp` video 640x360 | 1 track, 25 frames | **0 tracks** | 1 track, 22 frames | 1 track, 25 frames |
-| audio (`inbound-rtp`, 3 streams) | 15.3 / 15.3 / 18.9 KB | 16.3 / 14.8 / 15.1 KB | 14.5 / 14.0 / 12.5 KB | 18.7 / 15.4 / 14.7 KB |
-| camera layers 320x180 | 2 tracks, 50 frames each | unchanged | unchanged | unchanged |
+| video streams received | 3 (share + 2 cameras) | **2 — the share is gone** | 3 (share + 2 cameras) | 3 again |
+| share (`640x360`, 10 fps) | 25 frames, 77.8 KB | — (no such stream) | 25 frames, 76.0 KB | 25 frames, 81.1 KB |
+| audio (3 streams) | 6.8 / 18.9 / 6.0 KB | 9.2 / 18.9 / 6.0 KB | 9.2 / 18.9 / 11.6 KB | 11.5 / 18.9 / 11.6 KB |
+| cameras (`320x180`, 20 fps) | 2 streams, 51 frames each | unchanged, 50 frames | unchanged | unchanged |
 
 So hiding removes the track from the subscription — the inbound stream disappears
 from the peer connection entirely (it is not a paused or blanked video element) —

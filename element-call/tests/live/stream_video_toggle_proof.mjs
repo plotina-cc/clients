@@ -208,13 +208,15 @@ const measure = async (page, label, ms = 2500) => {
 const videoTracks = (m) => m.tracks.filter((t) => t.kind === "video");
 const audioTracks = (m) => m.tracks.filter((t) => t.kind === "audio");
 /**
- * The screen share, as opposed to the participants' cameras: the synthetic
- * share is a 640x360 canvas at 10 fps, while the fake cameras arrive as
- * 320x180 layers at 20 fps.
+ * The share is identified by difference, not by pixel size: LiveKit picks the
+ * simulcast layer per viewer, so the same share arrives as 640x360 for one
+ * viewer and 320x180 for another (and its size can equal the cameras'). What
+ * does not vary is that the viewer receives exactly one more video stream
+ * before hiding than after, and that stream is the only one that changes.
  */
-const shareTracks = (m) => videoTracks(m).filter((t) => t.w >= 600 && t.h >= 340);
-const shareFrames = (m) =>
-  shareTracks(m).reduce((sum, t) => sum + t.framesDelta, 0);
+const videoCount = (m) => videoTracks(m).filter((t) => t.framesDelta > 0).length;
+const totalVideoFrames = (m) =>
+  videoTracks(m).reduce((sum, t) => sum + t.framesDelta, 0);
 const audioBytesTotal = (m) =>
   audioTracks(m).reduce((sum, t) => sum + t.bytesDelta, 0);
 
@@ -295,9 +297,9 @@ try {
   const beforeHideControl = await measure(control.page, "control/before-hide");
   const beforeHideSharer = await measure(sharer.page, "sharer/before-hide");
 
-  if (shareFrames(beforeHideViewer) < 5)
+  if (videoCount(beforeHideViewer) < 3)
     throw new Error(
-      `viewer receives no screen-share video before hiding: ${JSON.stringify(beforeHideViewer.tracks)}`,
+      `viewer does not receive the share plus both cameras before hiding: ${JSON.stringify(beforeHideViewer.tracks)}`,
     );
 
   await viewer.page.screenshot({ path: join(OUT, "01-viewer-receiving.png") });
@@ -328,9 +330,15 @@ try {
   const afterHideControl = await measure(control.page, "control/while-viewer-hid");
   const afterHideSharer = await measure(sharer.page, "sharer/while-viewer-hid");
 
-  // Negative control: the other viewer is unaffected.
-  if (shareFrames(afterHideControl) <= 0)
-    throw new Error("control viewer stopped receiving the stream as well");
+  // Negative control: the other viewer still receives every stream it had,
+  // including the share.
+  if (
+    videoCount(afterHideControl) !== videoCount(beforeHideControl) ||
+    totalVideoFrames(afterHideControl) <= 0
+  )
+    throw new Error(
+      `control viewer lost a stream as well: ${JSON.stringify({ before: beforeHideControl.tracks, after: afterHideControl.tracks })}`,
+    );
   // The share's audio keeps playing for the viewer who hid the video.
   if (audioBytesTotal(afterHideViewer) <= 0)
     throw new Error("viewer lost audio along with the video");
@@ -410,15 +418,23 @@ try {
     stored,
     livekitLogs,
     checks: {
-      viewerReceivedBefore: shareFrames(beforeHideViewer) >= 5,
-      viewerStoppedAfterHide: shareFrames(afterHideViewer) === 0,
-      viewerShareTrackGone: shareTracks(afterHideViewer).length === 0,
+      viewerReceivedBefore: videoCount(beforeHideViewer) >= 3,
+      viewerStoppedAfterHide:
+        videoCount(afterHideViewer) === videoCount(beforeHideViewer) - 1,
+      viewerShareTrackGone:
+        videoTracks(afterHideViewer).length ===
+        videoTracks(beforeHideViewer).length - 1,
       viewerAudioKeptAfterHide: audioBytesTotal(afterHideViewer) > 0,
-      controlUnaffected: shareFrames(afterHideControl) > 0,
-      sharerUnaffected: shareFrames(afterHideSharer) > 0,
-      viewerResumedAfterShow: shareFrames(afterShowViewer) >= 5,
+      controlUnaffected:
+        videoCount(afterHideControl) === videoCount(beforeHideControl) &&
+        totalVideoFrames(afterHideControl) > 0,
+      sharerUnaffected: totalVideoFrames(afterHideSharer) > 0,
+      viewerResumedAfterShow:
+        videoCount(afterShowViewer) === videoCount(beforeHideViewer),
       hiddenAfterReload: afterReloadHidden === true,
-      stillHiddenAfterReload: shareFrames(reloadMeasure) === 0,
+      stillHiddenAfterReload:
+        videoCount(reloadMeasure) === videoCount(beforeHideViewer) - 1 &&
+        totalVideoFrames(reloadMeasure) > 0,
       livekitLoggedUnsubscribe: livekitLogs.some((l) =>
         /Unsubscribed: video screen_share/.test(l),
       ),
