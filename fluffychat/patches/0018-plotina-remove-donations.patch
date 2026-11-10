@@ -25,10 +25,18 @@ index 6959bce..34b7b10 100644
      "interactiveVerification": "Интерактивная верификация",
      "waitingForKeys": "Ожидание ключей... Пожалуйста оставьте другое устройство активным.",
 diff --git a/lib/pages/chat_list/client_chooser_button.dart b/lib/pages/chat_list/client_chooser_button.dart
-index 7c89307..39069db 100644
+index 7c89307..097c090 100644
 --- a/lib/pages/chat_list/client_chooser_button.dart
 +++ b/lib/pages/chat_list/client_chooser_button.dart
-@@ -201,11 +201,6 @@ class ClientChooserButton extends StatelessWidget {
+@@ -10,7 +10,6 @@ import 'package:fluffychat/widgets/matrix.dart';
+ import 'package:go_router/go_router.dart';
+ import 'package:material_ui/material_ui.dart';
+ import 'package:matrix/matrix.dart' hide Result;
+-import 'package:url_launcher/url_launcher_string.dart';
+ 
+ import '../../utils/fluffy_share.dart';
+ import 'chat_list.dart';
+@@ -201,11 +200,6 @@ class ClientChooserButton extends StatelessWidget {
          case SettingsAction.invite:
            FluffyShare.shareInviteLink(context);
            break;
@@ -40,7 +48,7 @@ index 7c89307..39069db 100644
          case SettingsAction.settings:
            context.go('/rooms/settings');
            break;
-@@ -225,7 +220,6 @@ enum SettingsAction {
+@@ -225,7 +219,6 @@ enum SettingsAction {
    newGroup,
    setStatus,
    invite,

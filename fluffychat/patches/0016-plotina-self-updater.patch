@@ -927,10 +927,10 @@ index 0000000..509154a
 +}
 diff --git a/lib/pages/updater/update_channel_selector.dart b/lib/pages/updater/update_channel_selector.dart
 new file mode 100644
-index 0000000..ae3bb9c
+index 0000000..7e27294
 --- /dev/null
 +++ b/lib/pages/updater/update_channel_selector.dart
-@@ -0,0 +1,181 @@
+@@ -0,0 +1,180 @@
 +// SPDX-FileCopyrightText: 2026 Plotina
 +//
 +// SPDX-License-Identifier: AGPL-3.0-or-later
@@ -977,7 +977,6 @@ index 0000000..ae3bb9c
 +    : l10n.updateChannelStable;
 +
 +Future<void> showUpdateChannelDialog(BuildContext context) async {
-+  final l10n = L10n.of(context);
 +  final before = PlotinaUpdater.channelProvider();
 +  var selected = before;
 +
