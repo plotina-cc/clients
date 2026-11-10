@@ -24,8 +24,9 @@ on:
     inputs:
       tag:
         description: 'Release tag whose Windows installer is checked, e.g. v1.12.32-plotina-desktop.46'
-        required: true
+        required: false
         type: string
+        default: ''
       from_tag:
         description: 'Optional older release tag to install first and update from, e.g. v1.12.32-plotina-desktop.45 (empty = fresh install only)'
         required: false
@@ -36,11 +37,22 @@ on:
         required: false
         type: string
         default: '30'
+      artifact_run_id:
+        description: 'QA branch mode: Actions run id whose plotina-desktop-windows artifact is installed, exercised and uninstalled instead of a published release'
+        required: false
+        type: string
+        default: ''
+      expected_sha:
+        description: 'QA branch mode: commit the artifact must have been built from (checked against the run head)'
+        required: false
+        type: string
+        default: ''
 
-run-name: "QA windows release ${{ inputs.tag }}${{ inputs.from_tag != '' && format(' (update from {0})', inputs.from_tag) || '' }}"
+run-name: "QA windows ${{ inputs.artifact_run_id != '' && format('branch artifact of run {0}', inputs.artifact_run_id) || inputs.tag }}${{ inputs.from_tag != '' && format(' (update from {0})', inputs.from_tag) || '' }}"
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: qa-windows-release-${{ inputs.tag }}-${{ inputs.from_tag }}
@@ -52,6 +64,7 @@ env:
 jobs:
   windows-release:
     name: windows release installer QA
+    if: inputs.tag != ''
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -520,3 +533,433 @@ jobs:
           path: qa-evidence/
           if-no-files-found: warn
           retention-days: 30
+  # ---------------------------------------------------------------------------
+  # QA branch mode (`artifact_run_id`): verify a BRANCH build on a real Windows
+  # runner instead of a published release - the release path above installs the
+  # published asset only. This job installs the NSIS package built from a branch
+  # by build-element-desktop.yml (artifact of the given run, provenance checked
+  # against expected_sha), proves every protocol scheme is registered AND opens
+  # the app, uninstalls it, then asserts: the scheme keys are gone (and nothing
+  # under HKCU\Software\Classes still names the removed directory), the user
+  # profile survived, shortcuts and the Programs-and-features entry are gone, and
+  # no process is left hanging. Nothing is published: the only write is the
+  # evidence artifact.
+  #
+  # This job exists only on the QA branch; qa-windows-release.yml on the default
+  # branch stays the release harness.
+  windows-uninstall:
+    name: windows branch uninstall QA
+    if: inputs.artifact_run_id != ''
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Download the branch-built installer and prove its provenance
+        shell: pwsh
+        env:
+          RUN_ID: ${{ inputs.artifact_run_id }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          $EV = Join-Path $env:GITHUB_WORKSPACE 'qa-evidence-uninstall'
+          New-Item -ItemType Directory -Force -Path $EV | Out-Null
+          $log = Join-Path $EV 'events.log'
+
+          function Check([string]$id, [bool]$ok, [string]$detail) {
+              $verdict = if ($ok) { 'PASS' } else { 'FAIL' }
+              $line = 'CHECK|{0}|{1}|{2}' -f $id, $verdict, $detail
+              Write-Host $line
+              Add-Content -Path $log -Value $line
+          }
+
+          $runId = $env:RUN_ID
+          $wantSha = $env:EXPECTED_SHA
+          if (-not $runId) { throw 'artifact_run_id is empty' }
+
+          $meta = (gh run view $runId --repo $env:GITHUB_REPOSITORY --json headSha,headBranch,workflowName,conclusion,event,displayTitle,url | ConvertFrom-Json)
+          $meta | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $EV 'run-provenance.json') -Encoding utf8
+          $desc = 'run={0} workflow={1} branch={2} sha={3} conclusion={4} event={5}' -f $runId, $meta.workflowName, $meta.headBranch, $meta.headSha, $meta.conclusion, $meta.event
+          Write-Host $desc
+          Check 'artifact:provenance' (($meta.conclusion -eq 'success') -and ($wantSha -eq '' -or $meta.headSha -eq $wantSha)) $desc
+          if ($meta.conclusion -ne 'success') { throw ('run ' + $runId + ' did not succeed: ' + $meta.conclusion) }
+          if ($wantSha -and ($meta.headSha -ne $wantSha)) { throw ('run ' + $runId + ' built ' + $meta.headSha + ', expected ' + $wantSha) }
+
+          gh run download $runId --repo $env:GITHUB_REPOSITORY -n plotina-desktop-windows -D pkg
+          $setups = @(Get-ChildItem 'pkg' -Filter 'Plotina-Desktop-*-setup.exe' -File)
+          if ($setups.Count -ne 1) { throw ('artifact should carry exactly one versioned setup exe, found ' + $setups.Count) }
+          $setup = $setups[0]
+
+          $latest = Get-Content (Join-Path 'pkg' 'latest.yml') -Raw
+          Copy-Item (Join-Path 'pkg' 'latest.yml') (Join-Path $EV 'latest.yml') -Force
+          $version = [regex]::Match($latest, '(?m)^version:\s*(\S+)\s*$').Groups[1].Value
+          $path = [regex]::Match($latest, '(?m)^path:\s*(\S+)\s*$').Groups[1].Value
+          $sha512 = [regex]::Match($latest, '(?m)^sha512:\s*(\S+)\s*$').Groups[1].Value
+          $size = [regex]::Match($latest, '(?m)^\s+size:\s*(\d+)').Groups[1].Value
+
+          $algo = [System.Security.Cryptography.SHA512]::Create()
+          $stream = [System.IO.File]::OpenRead($setup.FullName)
+          try { $digest = $algo.ComputeHash($stream) } finally { $stream.Dispose(); $algo.Dispose() }
+          $computed = [Convert]::ToBase64String($digest)
+          $bytes = (Get-Item $setup.FullName).Length
+          $vi = (Get-Item $setup.FullName).VersionInfo
+
+          $detail = 'version={0} path={1} setup={2} bytes={3} sha512match={4} FileVersion={5}' -f $version, $path, $setup.Name, $bytes, ($computed -eq $sha512), $vi.FileVersion
+          Write-Host $detail
+          Write-Host ('latest.yml sha512=' + $sha512)
+          Write-Host ('computed   sha512=' + $computed)
+          Check 'artifact:sha512' (($computed -eq $sha512) -and ($bytes -eq [int64]$size) -and ($path -eq $setup.Name)) $detail
+
+      - name: Install, exercise the protocol schemes, uninstall, verify
+        id: uninst
+        continue-on-error: true
+        shell: pwsh
+        env:
+          RUN_ID: ${{ inputs.artifact_run_id }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          $EV = Join-Path $env:GITHUB_WORKSPACE 'qa-evidence-uninstall'
+          New-Item -ItemType Directory -Force -Path $EV | Out-Null
+          Start-Transcript -Path (Join-Path $EV 'transcript.txt') | Out-Null
+          $log = Join-Path $EV 'events.log'
+          $script:failures = New-Object System.Collections.Generic.List[string]
+
+          function Log([string]$m) {
+              $line = 'EVID|{0}|{1}' -f (Get-Date).ToString('o'), $m
+              Write-Host $line
+              Add-Content -Path $log -Value $line
+          }
+          function Check([string]$id, [bool]$ok, [string]$detail) {
+              $verdict = if ($ok) { 'PASS' } else { 'FAIL' }
+              $line = 'CHECK|{0}|{1}|{2}' -f $id, $verdict, $detail
+              Write-Host $line
+              Add-Content -Path $log -Value $line
+              if (-not $ok) { $script:failures.Add(($id + ': ' + $detail)) }
+          }
+          function RegQuery([string]$key) {
+              return (& reg.exe query $key /s 2>&1 | Out-String)
+          }
+          function RegDefaultOf([string]$key) {
+              $out = (& reg.exe query $key /ve 2>&1 | Out-String)
+              $m = [regex]::Match($out, '(?m)^\s+\(Default\)\s+REG_[A-Z_]+\s+(.*?)\s*$')
+              if ($m.Success) { return $m.Groups[1].Value } else { return '' }
+          }
+          function SchemeState([string]$scheme) {
+              $key = 'HKCU:\Software\Classes\' + $scheme
+              $cmdKey = $key + '\shell\open\command'
+              $hasKey = Test-Path $key
+              $hasCmd = Test-Path $cmdKey
+              $cmd = ''
+              if ($hasCmd) { $cmd = RegDefaultOf ('HKCU\Software\Classes\{0}\shell\open\command' -f $scheme) }
+              return [pscustomobject]@{ Scheme = $scheme; KeyExists = $hasKey; CommandExists = $hasCmd; Command = $cmd }
+          }
+          function Kill-App {
+              $procs = @(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue)
+              if ($procs.Count -gt 0) {
+                  Log ('KILL ' + (($procs | ForEach-Object { $_.Id }) -join ','))
+                  & taskkill.exe /IM Plotina-Desktop.exe /F /T 2>&1 | ForEach-Object { Log ('  ' + $_) }
+                  $deadline = (Get-Date).AddSeconds(30)
+                  while ((Get-Date) -lt $deadline) {
+                      if (@(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue).Count -eq 0) { break }
+                      Start-Sleep -Seconds 2
+                  }
+              }
+          }
+          function Wait-Window([int]$seconds) {
+              $deadline = (Get-Date).AddSeconds($seconds)
+              while ((Get-Date) -lt $deadline) {
+                  $p = @(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
+                  if ($p.Count -ge 1) { return $p[0] }
+                  Start-Sleep -Seconds 2
+              }
+              return $null
+          }
+          function Shot([string]$name) {
+              try {
+                  Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+                  $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+                  $b = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+                  $g = [System.Drawing.Graphics]::FromImage($b)
+                  $g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+                  $b.Save((Join-Path $EV ($name + '.png')), [System.Drawing.Imaging.ImageFormat]::Png)
+                  $g.Dispose(); $b.Dispose()
+                  Log ('SCREENSHOT ' + $name + '.png')
+              } catch { Log ('SCREENSHOT ' + $name + ' failed: ' + $_.Exception.Message) }
+          }
+
+          $schemes = @('element', 'io.element.desktop', 'cc.plotina.element')
+          $lnkDirs = @(
+              (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'),
+              (Join-Path $env:USERPROFILE 'Desktop'),
+              (Join-Path $env:PUBLIC 'Desktop')
+          )
+          $uninstallRoots = @(
+              'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+              'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+              'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall'
+          )
+
+          function Get-PlotinaLnk {
+              $res = @()
+              foreach ($d in $lnkDirs) {
+                  if (-not (Test-Path $d)) { continue }
+                  $res += @(Get-ChildItem $d -Filter '*.lnk' -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'Plotina|Element' })
+              }
+              return $res
+          }
+          function Get-PlotinaPrograms {
+              $res = @()
+              foreach ($r in $uninstallRoots) {
+                  if (-not (Test-Path $r)) { continue }
+                  foreach ($k in @(Get-ChildItem $r -ErrorAction SilentlyContinue)) {
+                      $dn = $null
+                      try { $dn = (Get-ItemProperty -Path $k.PSPath -ErrorAction SilentlyContinue).DisplayName } catch { }
+                      if ($dn -and ($dn -match 'Plotina|Element')) {
+                          $res += [pscustomobject]@{ Path = $k.PSPath; DisplayName = $dn }
+                      }
+                  }
+              }
+              return $res
+          }
+          function Write-List([string]$file, [object[]]$items) {
+              $text = if ($items.Count -gt 0) { (($items | ForEach-Object { if ($_ -is [string]) { $_ } else { $_.FullName } }) -join "`n") } else { '(none)' }
+              Set-Content -Path (Join-Path $EV $file) -Value $text -Encoding utf8
+          }
+
+          $hardFail = $null
+          try {
+              # ---------- 1. install ----------
+              $setups = @(Get-ChildItem 'pkg' -Filter 'Plotina-Desktop-*-setup.exe' -File)
+              if ($setups.Count -ne 1) { throw ('expected exactly one setup exe in pkg, found ' + $setups.Count) }
+              $setup = $setups[0]
+              Log ('INSTALLER ' + $setup.Name + ' ' + $setup.Length + ' bytes')
+              $sw = [Diagnostics.Stopwatch]::StartNew()
+              $proc = Start-Process -FilePath $setup.FullName -ArgumentList '/S' -Wait -PassThru
+              $sw.Stop()
+              Check 'install:exit' ($proc.ExitCode -eq 0) ('exit=' + $proc.ExitCode + ' elapsed=' + [int]$sw.Elapsed.TotalSeconds + 's')
+
+              $roots = @(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Directory -Filter 'Plotina*' -ErrorAction SilentlyContinue)
+              Check 'install:dir' ($roots.Count -eq 1) ('install dirs: ' + (($roots | ForEach-Object { $_.Name }) -join ', '))
+              if ($roots.Count -eq 0) { throw 'no Plotina* install dir under %LOCALAPPDATA%\Programs; nothing to exercise' }
+              $root = $roots[0].FullName
+              Log ('INSTALL ROOT ' + $root)
+              $exe = Join-Path $root 'Plotina-Desktop.exe'
+              Check 'install:exe' (Test-Path $exe) $exe
+              $vi = (Get-Item $exe).VersionInfo
+              Check 'install:version' (-not [string]::IsNullOrWhiteSpace($vi.FileVersion)) ('FileVersion=' + $vi.FileVersion + ' ProductVersion=' + $vi.ProductVersion)
+
+              $uninstallers = @(Get-ChildItem $root -Filter 'Uninstall*.exe' -File -ErrorAction SilentlyContinue)
+              Check 'install:uninstaller' ($uninstallers.Count -ge 1) (($uninstallers | ForEach-Object { $_.Name }) -join ', ')
+              if ($uninstallers.Count -eq 0) { throw ('no Uninstall*.exe in ' + $root) }
+              $uninst = $uninstallers[0]
+
+              # ---------- 2. the uninstaller must actually carry the hook ----------
+              # A clean registry after uninstall could also come from electron-builder's own
+              # unregister step, so prove the Plotina hook is compiled into this uninstaller.
+              $bytes = [IO.File]::ReadAllBytes($uninst.FullName)
+              $asc = [Text.Encoding]::ASCII.GetString($bytes)
+              $uni = [Text.Encoding]::Unicode.GetString($bytes)
+              $hint = 'Plotina: removed the'
+              Check 'uninstaller:hook-compiled' ($asc.Contains($hint) -or $uni.Contains($hint)) ('string "' + $hint + '" embedded in ' + $uninst.Name)
+              $missingScheme = @()
+              foreach ($s in $schemes) { if (-not ($asc.Contains($s) -or $uni.Contains($s))) { $missingScheme += $s } }
+              Check 'uninstaller:hook-schemes' ($missingScheme.Count -eq 0) ('scheme names embedded in the uninstaller; missing: ' + (($missingScheme -join ', ') -replace '^$', '(none)'))
+
+              # ---------- 3. state right after the install ----------
+              foreach ($s in $schemes) {
+                  $st = SchemeState $s
+                  Set-Content -Path (Join-Path $EV ('registry-after-install-' + $s + '.txt')) -Value ('== HKCU\Software\Classes\' + $s + "`n" + (RegQuery ('HKCU\Software\Classes\' + $s))) -Encoding utf8
+                  Log ('PROTOCOL after install ' + $s + ' key=' + $st.KeyExists + ' command=' + $st.Command)
+              }
+
+              # ---------- 4. first launch: the app registers its schemes at startup ----------
+              $p = Start-Process -FilePath $exe -PassThru
+              Log ('LAUNCH ' + $exe + ' pid=' + $p.Id)
+              $w = Wait-Window 180
+              if ($null -eq $w) {
+                  Check 'app:launch' $false 'no Plotina-Desktop window within 180s of a plain launch'
+                  throw 'the installed app never opened a window, so the runtime protocol keys cannot be produced'
+              }
+              Check 'app:launch' $true ('pid=' + $w.Id + ' title=' + $w.MainWindowTitle)
+              Shot '01-installed-window'
+
+              # ---------- 5. user profile data that must SURVIVE the uninstall ----------
+              $dataDirs = @()
+              foreach ($base in @($env:APPDATA, $env:LOCALAPPDATA)) {
+                  $dataDirs += @(Get-ChildItem $base -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'Plotina|Element' -and $_.FullName -notmatch '\\Programs\\' })
+              }
+              $dataBefore = @()
+              foreach ($d in $dataDirs) {
+                  $marker = Join-Path $d.FullName 'qa-uninstall-marker.txt'
+                  Set-Content -Path $marker -Value ('qa marker written before the uninstall at ' + (Get-Date).ToString('o')) -Encoding utf8
+                  $files = @(Get-ChildItem $d.FullName -Recurse -File -ErrorAction SilentlyContinue)
+                  $sum = ($files | Measure-Object -Property Length -Sum).Sum
+                  if ($null -eq $sum) { $sum = 0 }
+                  $dataBefore += [pscustomobject]@{ Path = $d.FullName; Files = $files.Count; Bytes = [int64]$sum; Marker = (Test-Path $marker) }
+              }
+              $dataText = ($dataBefore | ForEach-Object { '{0} files={1} bytes={2} marker={3}' -f $_.Path, $_.Files, $_.Bytes, $_.Marker }) -join "`n"
+              Set-Content -Path (Join-Path $EV 'userdata-before.txt') -Value ($dataText -replace '^$', '(none)') -Encoding utf8
+              Check 'keep:userdata-found' ($dataBefore.Count -ge 1) (($dataBefore | ForEach-Object { $_.Path }) -join ' | ')
+
+              # ---------- 6. shortcuts and the Programs-and-features entry before the uninstall ----------
+              $lnkBefore = @(Get-PlotinaLnk)
+              Write-List 'shortcuts-before.txt' $lnkBefore
+              Log ('SHORTCUTS before: ' + (($lnkBefore | ForEach-Object { $_.FullName }) -join ' | '))
+              $progBefore = @(Get-PlotinaPrograms)
+              Set-Content -Path (Join-Path $EV 'programs-before.txt') -Value (($progBefore | ForEach-Object { '{0}  [{1}]' -f $_.DisplayName, $_.Path }) -join "`n") -Encoding utf8
+              Log ('PROGRAMS before: ' + (($progBefore | ForEach-Object { $_.DisplayName }) -join ' | '))
+              Check 'install:programs-entry' ($progBefore.Count -ge 1) (($progBefore | ForEach-Object { $_.DisplayName }) -join ' | ')
+
+              # ---------- 7. every scheme is registered AND opens the app ----------
+              foreach ($s in $schemes) {
+                  $st = SchemeState $s
+                  $into = ($st.Command -ne '') -and ($st.Command -like ('*' + $root + '*'))
+                  Log ('PROTOCOL before uninstall ' + $s + ' key=' + $st.KeyExists + ' command=' + $st.Command)
+                  Check ('protocol:registry:' + $s) ($st.CommandExists -and $into) ('key=' + $st.KeyExists + ' command=' + $st.Command)
+                  Set-Content -Path (Join-Path $EV ('registry-before-uninstall-' + $s + '.txt')) -Value ('== HKCU\Software\Classes\' + $s + "`n" + (RegQuery ('HKCU\Software\Classes\' + $s))) -Encoding utf8
+
+                  Kill-App
+                  Start-Sleep -Seconds 2
+                  $uri = $s + '://plotina.test/qa-registration'
+                  Log ('PROTOCOL launch ' + $uri)
+                  $err = ''
+                  try { Start-Process $uri | Out-Null } catch { $err = $_.Exception.Message }
+                  if ($err -ne '') {
+                      Check ('protocol:launch:' + $s) $false ('Start-Process ' + $uri + ' failed: ' + $err)
+                      continue
+                  }
+                  $win = Wait-Window 180
+                  if ($null -eq $win) {
+                      Check ('protocol:launch:' + $s) $false ('no Plotina-Desktop window within 180s of ' + $uri)
+                  } else {
+                      Check ('protocol:launch:' + $s) $true ('pid=' + $win.Id + ' title=' + $win.MainWindowTitle + ' via ' + $uri)
+                      Shot ('02-scheme-' + ($s -replace '[^A-Za-z0-9]', '_'))
+                  }
+              }
+
+              # ---------- 8. uninstall ----------
+              Kill-App
+              Start-Sleep -Seconds 3
+              Log ('UNINSTALL ' + $uninst.FullName + ' /S /currentuser')
+              $up = Start-Process -FilePath $uninst.FullName -ArgumentList '/S', '/currentuser' -Wait -PassThru
+              Check 'uninstall:exit' ($up.ExitCode -eq 0) ('exit=' + $up.ExitCode)
+              $deadline = (Get-Date).AddSeconds(300)
+              while ((Test-Path $root) -and ((Get-Date) -lt $deadline)) { Start-Sleep -Seconds 2 }
+              Start-Sleep -Seconds 5
+              Check 'uninstall:installdir-gone' (-not (Test-Path $root)) $root
+
+              # ---------- 9. protocol keys after the uninstall ----------
+              foreach ($s in $schemes) {
+                  $st = SchemeState $s
+                  Set-Content -Path (Join-Path $EV ('registry-after-uninstall-' + $s + '.txt')) -Value ('== HKCU\Software\Classes\' + $s + "`n" + (RegQuery ('HKCU\Software\Classes\' + $s))) -Encoding utf8
+                  $stale = ($st.Command -ne '') -and ($st.Command -like ('*' + $root + '*'))
+                  Log ('PROTOCOL after uninstall ' + $s + ' key=' + $st.KeyExists + ' command=' + $st.Command)
+                  Check ('uninstall:registry:' + $s) (-not $stale) ('keyExists=' + $st.KeyExists + ' commandExists=' + $st.CommandExists + ' command=' + $st.Command)
+              }
+              $scan = (& reg.exe query 'HKCU\Software\Classes' /s /f $root 2>&1 | Out-String)
+              Set-Content -Path (Join-Path $EV 'registry-scan-classes.txt') -Value $scan -Encoding utf8
+              $hits = @($scan -split "`r?`n" | Where-Object { $_ -match [regex]::Escape($root) })
+              Check 'uninstall:no-stale-path-in-classes' ($hits.Count -eq 0) (($hits -join ' ; ') -replace '^$', '(no value under HKCU\Software\Classes mentions the removed install dir)')
+
+              # A scheme with no handler must not start anything any more.
+              $stillOpens = $false
+              try {
+                  Start-Process 'element://plotina.test/qa-after-uninstall' | Out-Null
+                  $w2 = Wait-Window 25
+                  if ($null -ne $w2) { $stillOpens = $true }
+              } catch {
+                  Log ('PROTOCOL post-uninstall launch failed as expected: ' + $_.Exception.Message)
+              }
+              Check 'uninstall:scheme-has-no-handler' (-not $stillOpens) 'no Plotina-Desktop process appeared for element:// after the uninstall'
+              Shot '03-after-uninstall'
+
+              # ---------- 10. nothing extra was deleted ----------
+              $dataAfter = @()
+              foreach ($rec in $dataBefore) {
+                  $exists = Test-Path $rec.Path
+                  $files = 0
+                  $size = 0
+                  if ($exists) {
+                      $f = @(Get-ChildItem $rec.Path -Recurse -File -ErrorAction SilentlyContinue)
+                      $files = $f.Count
+                      $sum = ($f | Measure-Object -Property Length -Sum).Sum
+                      if ($null -eq $sum) { $sum = 0 }
+                      $size = [int64]$sum
+                  }
+                  $dataAfter += [pscustomobject]@{ Path = $rec.Path; Exists = $exists; Files = $files; Bytes = $size; BeforeFiles = $rec.Files; BeforeBytes = $rec.Bytes; Marker = ($exists -and (Test-Path (Join-Path $rec.Path 'qa-uninstall-marker.txt'))) }
+              }
+              Set-Content -Path (Join-Path $EV 'userdata-after.txt') -Value (($dataAfter | ForEach-Object { '{0} exists={1} files={2} bytes={3} marker={4}' -f $_.Path, $_.Exists, $_.Files, $_.Bytes, $_.Marker }) -join "`n") -Encoding utf8
+              $missing = @($dataAfter | Where-Object { -not $_.Exists })
+              $kept = @($dataAfter | Where-Object { $_.Exists })
+              Check 'keep:userdata-dirs' ($missing.Count -eq 0) ('missing: ' + ((($missing | ForEach-Object { $_.Path }) -join ' | ') -replace '^$', '(none)') + ' ; kept: ' + (($kept | ForEach-Object { $_.Path }) -join ' | '))
+              $noMarker = @($dataAfter | Where-Object { -not $_.Marker })
+              Check 'keep:userdata-marker' ($noMarker.Count -eq 0) (($noMarker | ForEach-Object { $_.Path }) -join ' | ')
+              $lostFiles = @($dataAfter | Where-Object { $_.Exists -and ($_.Files -lt $_.BeforeFiles) })
+              Check 'keep:userdata-content' ($lostFiles.Count -eq 0) (($dataAfter | ForEach-Object { '{0} files {1}->{2}' -f $_.Path, $_.BeforeFiles, $_.Files }) -join ' | ')
+
+              # ---------- 11. shortcuts, Programs-and-features, processes ----------
+              $lnkAfter = @(Get-PlotinaLnk)
+              Write-List 'shortcuts-after.txt' $lnkAfter
+              Check 'uninstall:shortcuts-gone' ($lnkAfter.Count -eq 0) ((($lnkAfter | ForEach-Object { $_.FullName }) -join ' | ') -replace '^$', '(no Plotina shortcut left)')
+              $progAfter = @(Get-PlotinaPrograms)
+              Set-Content -Path (Join-Path $EV 'programs-after.txt') -Value (($progAfter | ForEach-Object { '{0}  [{1}]' -f $_.DisplayName, $_.Path }) -join "`n") -Encoding utf8
+              Check 'uninstall:programs-entry-gone' ($progAfter.Count -eq 0) ((($progAfter | ForEach-Object { $_.DisplayName }) -join ' | ') -replace '^$', '(no Plotina entry left in HKCU/HKLM Uninstall)')
+
+              Start-Sleep -Seconds 5
+              $left = @(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue)
+              Check 'uninstall:no-process' ($left.Count -eq 0) ('pids=' + (($left | ForEach-Object { $_.Id }) -join ',') -replace '^pids=$', '(no Plotina-Desktop process)')
+              $unProcs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^(Au_|Un_A|Uninstall)' })
+              Check 'uninstall:no-uninstaller-process' ($unProcs.Count -eq 0) (($unProcs | ForEach-Object { $_.ProcessName + '(' + $_.Id + ')' }) -join ',')
+          } catch {
+              $hardFail = $_
+              Log ('HARD FAIL ' + $_.Exception.Message)
+          } finally {
+              try { Kill-App } catch { }
+              $lines = New-Object System.Collections.Generic.List[string]
+              $lines.Add('# Windows uninstall protocol-key QA (branch artifact)')
+              $lines.Add('')
+              $lines.Add('- artifact run: ' + $env:RUN_ID + ' (sha ' + $env:EXPECTED_SHA + ')')
+              $lines.Add('- checks failed: ' + $script:failures.Count)
+              if ($hardFail) { $lines.Add('- hard failure: ' + $hardFail.Exception.Message) }
+              foreach ($f in $script:failures) { $lines.Add('- FAIL ' + $f) }
+              Set-Content -Path (Join-Path $EV 'verdict.txt') -Value ($lines -join "`n") -Encoding utf8
+              try { Stop-Transcript | Out-Null } catch { }
+          }
+
+          if ($hardFail) { throw $hardFail }
+          if ($script:failures.Count -gt 0) { throw ('uninstall QA checks failed: ' + ($script:failures -join '; ')) }
+
+      - name: Job summary
+        if: always()
+        shell: pwsh
+        run: |
+          $EV = Join-Path $env:GITHUB_WORKSPACE 'qa-evidence-uninstall'
+          $p = Join-Path $EV 'events.log'
+          if (Test-Path $p) {
+              '' | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_STEP_SUMMARY
+              '### CHECK lines' | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_STEP_SUMMARY
+              '```' | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_STEP_SUMMARY
+              (Get-Content $p -Raw) | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_STEP_SUMMARY
+              '```' | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_STEP_SUMMARY
+          }
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-windows-uninstall-evidence-${{ inputs.artifact_run_id }}
+          path: qa-evidence-uninstall/
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Verdict
+        if: always()
+        shell: pwsh
+        run: |
+          $EV = Join-Path $env:GITHUB_WORKSPACE 'qa-evidence-uninstall'
+          $v = Join-Path $EV 'verdict.txt'
+          if (Test-Path $v) { Get-Content $v | Write-Host }
+          if ('${{ steps.uninst.outcome }}' -ne 'success') { throw 'uninstall QA failed - see the CHECK|FAIL lines and the uploaded evidence' }
