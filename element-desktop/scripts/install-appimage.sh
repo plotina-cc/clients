@@ -537,7 +537,7 @@ Terminal=false
 Type=Application
 Icon=plotina-desktop
 StartupWMClass=plotina-desktop
-MimeType=x-scheme-handler/$SCHEME;x-scheme-handler/element;x-scheme-handler/cc.plotina.element;
+MimeType=x-scheme-handler/$SCHEME;
 Categories=Network;InstantMessaging;Chat;
 EOF
     info "Ярлык: $desktop"

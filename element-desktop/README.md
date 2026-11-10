@@ -326,20 +326,27 @@ element-desktop/scripts/install-appimage.sh ~/Downloads/Plotina-Desktop.AppImage
 ```
 
 It puts the image in `~/.local/bin/plotina-desktop`, installs the icon and
-desktop entry, and makes `io.element.desktop`, `element` and
-`cc.plotina.element` point at it. The apt-repo `.deb` installs the same
-desktop entry system-wide; if an upstream Element is already the default
-handler, choose Plotina Desktop once in the browser's protocol prompt.
+desktop entry, and makes `io.element.desktop` — the SSO callback scheme — point
+at it. That is the only scheme the app registers: the legacy `element` and the
+old `cc.plotina.element` schemes are deliberately gone from the build (they put
+the word Element into the Windows registry and the `.desktop` file), and
+uninstall still cleans up their keys on machines that have them. The apt-repo
+`.deb` installs the same desktop entry system-wide; if an upstream Element is
+already the default handler, choose Plotina Desktop once in the browser's
+protocol prompt.
 
 Windows has no `.desktop` file, and electron-builder only applies the variant's
 `protocols` list to macOS bundles and Linux desktop entries, so the shell claims
 the schemes itself: `apps/desktop/src/protocol.ts` registers **every** scheme in
-`element-desktop/build.plotina.json` (`io.element.desktop`, `element`,
-`cc.plotina.element`) when the app starts, and the packaged `package.json`
-carries that list as `electron_protocols`. `matrix:` is deliberately **not**
-claimed — taking every `matrix:` link away from another installed client is a
-user decision, not an install-time default — and `https://plotina.cc` cannot be
-associated at all, because Windows associates schemes, not URLs.
+`element-desktop/build.plotina.json` (`io.element.desktop` — and that is the
+whole list) when the app starts, and the packaged `package.json` carries that
+list as `electron_protocols`. `io.element.desktop` cannot change: MAS pins
+`redirect_uris = {io.element.desktop:/vector/webapp/?no_universal_links=true}`
+for the "Plotina Desktop" client, so the SSO round-trip depends on it.
+`matrix:` is deliberately **not** claimed — taking every `matrix:` link away
+from another installed client is a user decision, not an install-time default —
+and `https://plotina.cc` cannot be associated at all, because Windows associates
+schemes, not URLs.
 
 The same steps run in CI: `.github/workflows/build-element-desktop.yml` triggers
 on a `v*-plotina.*` tag, builds one webapp and hands it to the Linux and Windows

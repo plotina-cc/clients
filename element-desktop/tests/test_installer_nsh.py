@@ -2,9 +2,9 @@
 """Tests for element-desktop/build/installer.nsh — the Windows uninstall hook.
 
 Зачем этот файл. Приложение при каждом старте пишет протокольные ассоциации
-само (apps/desktop/src/protocol.ts -> app.setAsDefaultProtocolClient()), то есть
-ключи появляются в HKCU\\Software\\Classes\\{element,io.element.desktop,
-cc.plotina.element} независимо от установщика. NSIS-uninstaller
+само (apps/desktop/src/protocol.ts -> app.setAsDefaultProtocolClient()) для схем
+из build.plotina.json — сейчас это только io.element.desktop. У старых сборок
+в реестре остались также element и cc.plotina.element. NSIS-uninstaller
 electron-builder'а снимает только то, что зарегистрировал сам, поэтому после
 удаления ключи оставались и указывали в уже удалённый Plotina-Desktop.exe
 (Windows QA, проверка `uninstall:registry`: FAIL).
@@ -14,7 +14,10 @@ electron-builder'а снимает только то, что зарегистр�
     (electron-builder берёт его по умолчанию как build/installer.nsh; ключ
     nsis.include в build.plotina.json не работает — electron-builder.ts
     собирает конфиг по белому списку полей варианта);
-  * список схем совпадает с "protocols" в build.plotina.json;
+  * uninstall вычищает надмножество объявленных схем: всё из "protocols"
+    (сейчас io.element.desktop) плюс снятые element и cc.plotina.element —
+    ровно те ключи, что могли попасть в реестр. Обратное неверно: снятые схемы
+    не должны возвращаться в "protocols", и тест это проверяет;
   * единственный DeleteRegKey стоит ПОД проверкой shell\\open\\command на
     $INSTDIR — иначе uninstall чужой копии ломал бы живую ассоциацию;
   * в uninstall-секции нет вызовов installer-функций: `Call` только на `un.*`
@@ -30,6 +33,7 @@ electron-builder'а снимает только то, что зарегистр�
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -47,6 +51,24 @@ WORKFLOW = REPO / ".github" / "workflows" / "build-element-desktop.yml"
 
 MAKENSIS = shutil.which("makensis")
 WINE = shutil.which("wine")
+
+# Схемы, которые регистрировали СТАРЫЕ сборки Plotina Desktop и которые сняты из
+# build.plotina.json намеренно (word "Element" в реестре и .desktop-файле).
+# Новые установки их не создают; uninstall обязан их вычищать у тех, у кого
+# ключи уже лежат в реестре. Поэтому список в installer.nsh — надмножество
+# объявленного, и эти имена НЕ должны возвращаться в "protocols".
+RETIRED_SCHEMES = ("element", "cc.plotina.element")
+
+
+def declared_schemes():
+    schemes = json.loads(read(VARIANT))["protocols"]
+    assert schemes, "build.plotina.json declares no protocols"
+    return schemes
+
+
+def uninstall_schemes(text):
+    """Схемы, которые uninstall вычищает: ровно аргументы Push в макросе."""
+    return re.findall(r'^\s*Push\s+"([^"]+)"\s*$', custom_uninstall_block(text), re.MULTILINE)
 
 
 def read(path):
@@ -78,13 +100,53 @@ class InstallerNshContract(unittest.TestCase):
         self.assertIn("!macro customUnInstall", self.text)
         self.assertIn("!macroend", self.text)
 
-    def test_covers_every_scheme_declared_in_the_variant(self):
-        schemes = json.loads(read(VARIANT))["protocols"]
-        self.assertTrue(schemes, "build.plotina.json declares no protocols")
+    def test_uninstall_covers_every_declared_scheme(self):
+        # uninstall must clean up what the current build registers...
         block = custom_uninstall_block(self.text)
-        for scheme in schemes:
+        for scheme in declared_schemes():
             with self.subTest(scheme=scheme):
                 self.assertIn(f'Push "{scheme}"', block)
+
+    def test_uninstall_still_covers_the_retired_schemes(self):
+        # ...and the ones older builds registered. These keys are already in
+        # the registry of existing users; dropping them here would leave a
+        # URL:element protocol pointing at a deleted Plotina-Desktop.exe, which
+        # is the bug this whole hook was written for. The uninstall list is a
+        # superset of "protocols" on purpose - not a stale copy of it.
+        block = custom_uninstall_block(self.text)
+        for scheme in RETIRED_SCHEMES:
+            with self.subTest(scheme=scheme):
+                self.assertIn(f'Push "{scheme}"', block)
+
+    def test_retired_schemes_are_not_declared_again(self):
+        # The other half of the contract: the uninstall superset must never be
+        # read as "the build still advertises these". A retired scheme that
+        # reappears in build.plotina.json gets registered on install again.
+        declared = declared_schemes()
+        for scheme in RETIRED_SCHEMES:
+            with self.subTest(scheme=scheme):
+                self.assertNotIn(scheme, declared)
+
+    def test_only_the_sso_scheme_is_declared(self):
+        # MAS pins redirect_uris to io.element.desktop for the "Plotina
+        # Desktop" client, so that scheme cannot change. Everything else was
+        # removed deliberately: cc.plotina.element and element put the word
+        # Element into the Windows registry and the .desktop file.
+        self.assertEqual(declared_schemes(), ["io.element.desktop"])
+
+    def test_uninstall_list_is_a_superset_of_the_declared_one(self):
+        pushed = uninstall_schemes(self.text)
+        self.assertTrue(pushed, "customUnInstall pushes no scheme")
+        self.assertEqual(len(pushed), len(set(pushed)), f"duplicate Push in customUnInstall: {pushed}")
+        missing = [s for s in declared_schemes() if s not in pushed]
+        self.assertEqual(missing, [], f"declared scheme(s) not cleaned up by uninstall: {missing}")
+        # Nothing beyond declared + retired: a third unknown name means a typo
+        # here or a half-finished scheme removal.
+        self.assertEqual(
+            sorted(pushed),
+            sorted([*declared_schemes(), *RETIRED_SCHEMES]),
+            f"customUnInstall cleans up a scheme nothing ever registered: {pushed}",
+        )
 
     def test_delete_is_guarded_by_the_install_dir_check(self):
         # Exactly one DeleteRegKey, and it lives inside the branch taken only
@@ -224,7 +286,9 @@ ShowUninstDetails show
 !include "installer.nsh"
 
 Section "install"
-  ; what Chromium writes for the schemes in build.plotina.json
+  ; what Chromium wrote for the schemes of an OLD Plotina Desktop build: the
+  ; current one registers only io.element.desktop, but these keys are already
+  ; in users' registries and uninstall still has to remove them.
   WriteRegStr HKCU "Software\Classes\element" "" "URL:element protocol"
   WriteRegStr HKCU "Software\Classes\element\URL Protocol" "" ""
   WriteRegStr HKCU "Software\Classes\element\shell\open\command" "" '"$INSTDIR\Plotina-Desktop.exe" "%1"'
@@ -320,7 +384,7 @@ class InstallerNshBehaviour(unittest.TestCase):
             while Path(installed).is_dir() and time.time() < deadline:
                 time.sleep(1)
 
-            for scheme in ("element", "io.element.desktop", "cc.plotina.element"):
+            for scheme in (*declared_schemes(), *RETIRED_SCHEMES):
                 with self.subTest(scheme=scheme):
                     self.assertFalse(
                         registry_has_key(env, scheme),

@@ -230,11 +230,12 @@ jobs:
           # updates" feed answer (upstream's Squirrel-only autoUpdater call
           # throws on Linux, hiding the button). Must mirror scripts/build.sh.
           cp "${{ github.workspace }}/element-desktop/desktop/icon.ts" "$SRC/apps/desktop/src/icon.ts"
-          # Protocol registration for every scheme build.plotina.json declares
-          # (cc.plotina.element included): electron-builder only applies its
-          # `protocols` config to macOS bundles and Linux .desktop files, so the
-          # shell must claim them at runtime or the variant advertises a scheme
-          # nobody registers (QA CHECK|protocol:declared|NOT-REGISTERED).
+          # Protocol registration for the scheme build.plotina.json declares
+          # (io.element.desktop, the SSO callback a second change cannot touch):
+          # electron-builder only applies its `protocols` config to macOS
+          # bundles and Linux .desktop files, so the shell must claim it at
+          # runtime or the variant advertises a scheme nobody registers
+          # (QA CHECK|protocol:declared|NOT-REGISTERED).
           cp "${{ github.workspace }}/element-desktop/desktop/protocol-schemes.ts" "$SRC/apps/desktop/src/protocol-schemes.ts"
           rm -rf "$SRC/apps/desktop/build/icons"
           cp -r "${{ github.workspace }}/element-desktop/build/icons" "$SRC/apps/desktop/build/icons"
@@ -577,20 +578,28 @@ jobs:
           $left = @(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue)
           Write-Host "processes left after kill: $($left.Count)"
 
-      - name: Assert every declared protocol scheme is owned by this install
+      - name: Assert declared protocol scheme is owned and the retired ones are gone
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           # Acceptance for CHECK|protocol:declared in qa-windows-release.yml: a
           # scheme the variant advertises must be registered and must point at
-          # the exe we just installed. cc.plotina.element:// used to open the
-          # browser because only protocols[0] and the legacy `element` scheme
-          # were ever claimed.
+          # the exe we just installed. The variant declares one scheme now —
+          # io.element.desktop, the SSO callback MAS pins — and the legacy
+          # `element` / `cc.plotina.element` schemes are no longer registered by
+          # a fresh install at all (they used to drag the word Element into the
+          # registry). That removal is asserted here; the uninstall of the still
+          # existing keys is a separate step below.
           $root = (Get-ChildItem "$env:LOCALAPPDATA\Programs" -Directory -Filter 'Plotina*')[0].FullName
           $exe = Join-Path $root 'Plotina-Desktop.exe'
           $declared = @((Get-Content "$env:GITHUB_WORKSPACE\element-desktop\build.plotina.json" -Raw | ConvertFrom-Json).protocols)
           if ($declared.Count -eq 0) { throw 'build.plotina.json declares no protocol schemes' }
           Write-Host "declared schemes: $($declared -join ', ')"
+          # Schemes earlier builds registered and this one must never create.
+          $retired = @('element', 'cc.plotina.element')
+          foreach ($s in $retired) {
+            if ($declared -contains $s) { throw "$s is retired but the variant declares it again" }
+          }
           if (@(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue).Count -eq 0) {
             Start-Process $exe | Out-Null
           }
@@ -617,23 +626,38 @@ jobs:
           } while ($bad.Count -and (Get-Date) -lt $deadline)
           if ($bad.Count) { throw "declared scheme(s) not registered to this install: $($bad -join '; ')" }
           foreach ($scheme in $declared) { Write-Host "OK $scheme -> $exe" }
+          # A clean install on a clean runner: the retired keys must not be
+          # there. (A runner image with an older Plotina install would have
+          # them; that is what the uninstall step below proves is cleaned.)
+          $leaked = @()
+          foreach ($s in $retired) {
+            $k = "HKCU:\Software\Classes\$s\shell\open\command"
+            if (-not (Test-Path $k)) { Write-Host "OK $s is not registered"; continue }
+            $cmd = "$((Get-ItemProperty -Path $k -ErrorAction SilentlyContinue).'(default)')"
+            if ($cmd -like "*$root*") { $leaked += "$s -> $cmd" } else { Write-Host "note: $s is registered by something else -> $cmd" }
+          }
+          if ($leaked.Count) { throw "retired scheme(s) registered by this install: $($leaked -join '; ')" }
           & taskkill /IM Plotina-Desktop.exe /F /T 2>&1 | ForEach-Object { Write-Host $_ }
 
-      # The app registers its protocols (element://, io.element.desktop://,
-      # cc.plotina.element:// — see "protocols" in element-desktop/
-      # build.plotina.json) itself on every start (apps/desktop/src/protocol.ts
-      # -> app.setAsDefaultProtocolClient), so those HKCU keys are not the ones
-      # the installer wrote and the uninstaller used to leave them behind
-      # pointing at the deleted exe (Windows QA: uninstall:registry FAIL). The
-      # customUnInstall hook in element-desktop/build/installer.nsh has to
-      # remove them; prove it on the real package, before anything is published.
+      # The app registers its protocol(s) itself on every start
+      # (apps/desktop/src/protocol.ts -> app.setAsDefaultProtocolClient) — today
+      # that is io.element.desktop only (see "protocols" in element-desktop/
+      # build.plotina.json), while older Plotina builds also wrote element and
+      # cc.plotina.element. Those keys are not the ones the installer wrote, so
+      # the uninstaller used to leave them behind pointing at the deleted exe
+      # (Windows QA: uninstall:registry FAIL). The customUnInstall hook in
+      # element-desktop/build/installer.nsh has to remove all three; prove it on
+      # the real package, before anything is published.
       - name: Silent uninstall leaves no protocol keys behind
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $root = (Get-ChildItem "$env:LOCALAPPDATA\Programs" -Directory -Filter 'Plotina*')[0].FullName
           $classes = 'HKCU:\Software\Classes'
-          $schemes = @('element', 'io.element.desktop', 'cc.plotina.element')
+          # What uninstall must clean up: the scheme this build registers plus
+          # the two older builds left in the registry. A former key that is
+          # absent is fine; one that points into $root after uninstall is not.
+          $schemes = @('io.element.desktop', 'element', 'cc.plotina.element')
           $registered = @()
           foreach ($s in $schemes) {
             $k = Join-Path $classes "$s\shell\open\command"

@@ -133,9 +133,18 @@ Function un.PlotinaRemoveRuntimeProtocolKey
   ${EndIf}
 FunctionEnd
 
-; Electron-builder inserts this macro into its uninstall section. All three
-; schemes the app can register at runtime (see "protocols" in
-; build.plotina.json) are covered.
+; Electron-builder inserts this macro into its uninstall section.
+;
+; DO NOT trim this list down to what build.plotina.json declares. The variant
+; declares ONE scheme (io.element.desktop, the SSO callback MAS pins); the two
+; extra entries here are historical on purpose: element and cc.plotina.element
+; were registered by older Plotina Desktop builds and those keys are still in
+; the registry of machines that have them. Uninstall has to remove them, or
+; they keep pointing at a deleted Plotina-Desktop.exe. New installs never
+; create them (protocol.ts registers only the variant's schemes, and the
+; declared cc.plotina.element is gone from the build), so this list is
+; deliberately a superset of the declared one. element-desktop/tests/
+; test_installer_nsh.py checks exactly that.
 !macro customUnInstall
   Push "element"
   Call un.PlotinaRemoveRuntimeProtocolKey
