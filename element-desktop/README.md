@@ -163,6 +163,59 @@ to plotina-cc/clients releases can ship any binary that installs silently.
 Users also see SmartScreen prompts (first run and updates) until the
 installer is code-signed.
 
+## QA on the released installer (Windows)
+
+`build-element-desktop.yml` smoke-tests *the build of the moment*. The proof that
+the artefact users actually download installs, reports the right version and
+restarts on update is `.github/workflows/qa-windows-release.yml`, which never
+builds anything: it downloads the release assets of an existing tag and runs the
+same lifecycle on a `windows-latest` runner.
+
+```bash
+# fresh install: is the published .46-dev.1 installer installable and does the app come up?
+gh workflow run qa-windows-release.yml --ref main -f tag=v1.12.32-plotina-desktop.46-dev.1
+
+# update: install .45, launch it, then install .46 over it the way the updater does
+gh workflow run qa-windows-release.yml --ref main \
+  -f tag=v1.12.32-plotina-desktop.46-dev.1 -f from_tag=v1.12.32-plotina-desktop.45
+```
+
+`workflow_dispatch` inputs:
+
+| input | required | meaning |
+| --- | --- | --- |
+| `tag` | yes | release tag to check, `v<upstream>-plotina-desktop.<N>[-dev.<M>]`. The app version (`1.12.32-plotina.<N>[-dev.<M>]`) and the asset name (`Plotina-Desktop-<version>-setup.exe`) are derived from it |
+| `from_tag` | no | older release tag: install it first, launch it, then update. Empty = fresh install only |
+| `settle_seconds` | no | how long the launched app must stay alive with a window (default 30) |
+
+What it asserts, in order:
+
+1. **Metadata before install** — for each tag, `latest.yml`: `version` equals the
+   tag's app version, `path` names the installer asset, and the downloaded
+   `setup.exe`'s sha512 (base64, the form electron-builder publishes) and size
+   match. Nothing is executed when they disagree.
+2. **Silent install** — the installer runs with `/S` and must exit 0.
+3. **Version** — `ProductVersion`/`FileVersion` of the installed
+   `Plotina-Desktop.exe` and the `version` inside the shipped
+   `resources/app.asar` (`package.json`, read from the asar header) are compared
+   with the tag: the asar version must be exact, exe metadata may be
+   electron-builder's numeric form but must not name a different build.
+4. **Window and liveness** — the app is launched, a non-zero `MainWindowHandle`
+   must appear within 180 s, and the process must still be alive with a window
+   after `settle_seconds`. A desktop screenshot is taken (best effort on a
+   headless runner).
+5. **Update / auto-restart** (only with `from_tag`) — after the old version is
+   installed and running, the new installer runs as `/S --updated --force-run`
+   (the exact argv `desktop/updater.ts` uses): the old PID must exit within
+   240 s, a *new* PID with a window must appear, survive `settle_seconds`, and
+   the installed version must now be the tag's.
+
+The artifact `qa-windows-release-evidence-<tag>` keeps `events.log` (timestamped
+EVID lines for every install/PID/version decision), `pids-*.txt` (process tables
+before and after each phase), `latest-*.yml`, `transcript.txt`, the app logs and
+the screenshots. The workflow has `permissions: contents: read`, publishes
+nothing, and does not touch `build-element-desktop.yml`.
+
 ## Parity with Element Web
 
 **Rule: every fix we ship in the Element Web image must also ship in Element

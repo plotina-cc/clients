@@ -71,8 +71,12 @@ python3 branding.py --dist <upstream>/cinny/dist
 
 CI runs the same builds on GitHub runners: `.github/workflows/build-cinny-desktop.yml`
 and `.github/workflows/build-element-desktop.yml` trigger on a `v*-plotina.*` tag
-and attach the installers to the release. Build details that are specific to one
-client live in that client's directory.
+and attach the installers to the release. The released Windows installer gets its
+own acceptance run: `.github/workflows/qa-windows-release.yml` installs an already
+published `setup.exe` on a `windows-latest` runner, checks the `latest.yml` sha512
+before installing, and proves the installed version, the window, and (with
+`from_tag`) the update restart — see `element-desktop/README.md`. Build details
+that are specific to one client live in that client's directory.
 
 ## Windows builds
 

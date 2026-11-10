@@ -1,0 +1,505 @@
+name: QA windows release installer (no publish)
+
+# Acceptance QA on the artefact we actually PUBLISH, not on a local build: for an
+# existing release tag this workflow downloads the release assets (the NSIS
+# setup.exe + latest.yml), checks the sha512/size/version that latest.yml
+# advertises BEFORE anything is installed, installs the package silently, proves
+# the installed tree reports the tag's version (exe metadata + the version inside
+# the shipped app.asar), launches the app, and proves a window appears and the
+# process survives.
+#
+# With `from_tag` it covers the update path instead: install `from_tag`, launch
+# it, then run the new installer exactly the way desktop/updater.ts does
+# (`/S --updated --force-run`) and assert the OLD pid exits while a NEW pid gets a
+# window — the Windows auto-restart that `.46` needed.
+#
+# Nothing is published, tagged or uploaded anywhere: contents: read, no secrets,
+# the only write is the workflow artifact (logs, versions, PID tables, screenshot).
+#
+# This is the release-artefact counterpart of qa/windows-update-restart, which
+# builds qa44/qa45/qa46 installers of its own to pin the argv contract.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag whose Windows installer is checked, e.g. v1.12.32-plotina-desktop.46'
+        required: true
+        type: string
+      from_tag:
+        description: 'Optional older release tag to install first and update from, e.g. v1.12.32-plotina-desktop.45 (empty = fresh install only)'
+        required: false
+        type: string
+        default: ''
+      settle_seconds:
+        description: 'How long the launched app must stay alive with a window'
+        required: false
+        type: string
+        default: '30'
+
+run-name: "QA windows release ${{ inputs.tag }}${{ inputs.from_tag != '' && format(' (update from {0})', inputs.from_tag) || '' }}"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-windows-release-${{ inputs.tag }}-${{ inputs.from_tag }}
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  windows-release:
+    name: windows release installer QA
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      # Tags carry the release counter, the app version does not (v1.12.32-
+      # plotina-desktop.46 -> 1.12.32-plotina.46, -dev.1 kept as -dev.1), exactly
+      # like the build workflow derives it. Everything downstream is keyed off
+      # these two values, so a tag that does not parse fails before any download.
+      - name: Resolve the tag -> app version and asset name
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          FROM_TAG: ${{ inputs.from_tag }}
+          SETTLE_SECONDS: ${{ inputs.settle_seconds }}
+        run: |
+          set -euo pipefail
+          resolve() {
+            local tag="$1"
+            local re='^v([0-9]+\.[0-9]+\.[0-9]+)-plotina-desktop\.([0-9]+)(-dev\.([0-9]+))?$'
+            [[ "$tag" =~ $re ]] || return 1
+            local v="${BASH_REMATCH[1]}-plotina.${BASH_REMATCH[2]}"
+            if [[ -n "${BASH_REMATCH[3]:-}" ]]; then
+              v="${v}-dev.${BASH_REMATCH[4]}"
+            fi
+            printf '%s' "$v"
+          }
+
+          if ! EXPECTED="$(resolve "$TAG")"; then
+            echo "::error::tag '$TAG' is not a Plotina Desktop release tag (v<upstream>-plotina-desktop.<N>[-dev.<M>])"
+            exit 1
+          fi
+          echo "tag      : $TAG"
+          echo "version  : $EXPECTED"
+          echo "installer: Plotina-Desktop-$EXPECTED-setup.exe"
+
+          {
+            echo "TAG=$TAG"
+            echo "EXPECTED_VERSION=$EXPECTED"
+            echo "EXPECTED_SETUP=Plotina-Desktop-$EXPECTED-setup.exe"
+            echo "SETTLE_SECONDS=$SETTLE_SECONDS"
+          } >> "$GITHUB_ENV"
+
+          if [[ ! "$SETTLE_SECONDS" =~ ^[0-9]+$ ]] || [ "$SETTLE_SECONDS" -lt 10 ]; then
+            echo "::error::settle_seconds must be an integer >= 10 (got '$SETTLE_SECONDS')"
+            exit 1
+          fi
+
+          if [ -n "$FROM_TAG" ]; then
+            if ! FROM_VERSION="$(resolve "$FROM_TAG")"; then
+              echo "::error::from_tag '$FROM_TAG' is not a Plotina Desktop release tag"
+              exit 1
+            fi
+            if [ "$FROM_VERSION" = "$EXPECTED" ]; then
+              echo "::error::from_tag '$FROM_TAG' resolves to the same app version as tag '$TAG' — the update would be a no-op"
+              exit 1
+            fi
+            echo "from tag : $FROM_TAG"
+            echo "from ver : $FROM_VERSION"
+            {
+              echo "FROM_TAG=$FROM_TAG"
+              echo "FROM_VERSION=$FROM_VERSION"
+              echo "FROM_SETUP=Plotina-Desktop-$FROM_VERSION-setup.exe"
+            } >> "$GITHUB_ENV"
+          else
+            echo "from_tag : (empty — fresh install only)"
+            echo "FROM_TAG=" >> "$GITHUB_ENV"
+            echo "FROM_VERSION=" >> "$GITHUB_ENV"
+            echo "FROM_SETUP=" >> "$GITHUB_ENV"
+          fi
+
+      - name: Download the release assets (setup.exe + latest.yml)
+        shell: bash
+        run: |
+          set -euo pipefail
+          fetch() {
+            local tag="$1" setup="$2"
+            echo "::group::release $tag"
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+              --json tagName,isPrerelease,assets \
+              --jq '"tag=\(.tagName) prerelease=\(.isPrerelease)", (.assets[] | "asset: \(.name) \(.size) bytes")'
+            local names
+            names="$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+            for want in "$setup" latest.yml; do
+              if ! printf '%s\n' "$names" | grep -Fxq "$want"; then
+                echo "::error::release $tag has no asset '$want'"
+                exit 1
+              fi
+            done
+            mkdir -p "rel/$tag"
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "rel/$tag" --clobber "$setup" latest.yml
+            ls -l "rel/$tag"
+            echo "::endgroup::"
+          }
+          fetch "$TAG" "$EXPECTED_SETUP"
+          if [ -n "${FROM_TAG:-}" ]; then
+            fetch "$FROM_TAG" "$FROM_SETUP"
+          fi
+
+      # Must run BEFORE any install: this is the same sha512 the updater trusts.
+      - name: Verify sha512 / size / version from latest.yml (before install)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $EV = Join-Path $env:GITHUB_WORKSPACE 'qa-evidence'
+          New-Item -ItemType Directory -Force -Path $EV | Out-Null
+
+          function Assert-AssetMetadata([string]$tag, [string]$setupName, [string]$wantVersion) {
+              $dir  = Join-Path (Join-Path $env:GITHUB_WORKSPACE 'rel') $tag
+              $setup = Join-Path $dir $setupName
+              $yml   = Join-Path $dir 'latest.yml'
+              if (-not (Test-Path $setup)) { throw "release $tag`: $setupName was not downloaded to $dir" }
+              if (-not (Test-Path $yml))   { throw "release $tag`: latest.yml was not downloaded to $dir" }
+
+              $text = Get-Content -Path $yml -Raw
+              Copy-Item $yml (Join-Path $EV "latest-$tag.yml") -Force
+              $version = [regex]::Match($text, '(?m)^version:\s*(\S+)\s*$').Groups[1].Value
+              $path    = [regex]::Match($text, '(?m)^path:\s*(\S+)\s*$').Groups[1].Value
+              $sha512  = [regex]::Match($text, '(?m)^sha512:\s*(\S+)\s*$').Groups[1].Value
+              $size    = [regex]::Match($text, '(?m)^\s+size:\s*(\d+)').Groups[1].Value
+
+              Write-Host "---- latest.yml of $tag ----`n$text"
+              Write-Host "latest.yml: version='$version' path='$path' size=$size"
+              Write-Host "latest.yml: sha512=$sha512"
+
+              $bytes = (Get-Item $setup).Length
+              $algo = [System.Security.Cryptography.SHA512]::Create()
+              $stream = [System.IO.File]::OpenRead($setup)
+              try { $digest = $algo.ComputeHash($stream) } finally { $stream.Dispose(); $algo.Dispose() }
+              $computed = [Convert]::ToBase64String($digest)
+              Write-Host "download  : $setupName $bytes bytes"
+              Write-Host "download  : sha512=$computed"
+              $vi = (Get-Item $setup).VersionInfo
+              Write-Host "installer VersionInfo: ProductVersion='$($vi.ProductVersion)' FileVersion='$($vi.FileVersion)'"
+
+              if ($version -ne $wantVersion) { throw "$tag`: latest.yml version '$version' does not match the tag's app version '$wantVersion'" }
+              if ($path -ne $setupName) { throw "$tag`: latest.yml path '$path' does not name the release asset '$setupName'" }
+              if ([string]::IsNullOrEmpty($sha512)) { throw "$tag`: latest.yml carries no sha512" }
+              if ($computed -ne $sha512) { throw "$tag`: sha512 mismatch for $setupName — release metadata and asset disagree, refusing to install" }
+              if ([string]::IsNullOrEmpty($size)) { throw "$tag`: latest.yml carries no size" }
+              if ($bytes -ne [int64]$size) { throw "$tag`: size mismatch for $setupName ($bytes downloaded, latest.yml says $size)" }
+              Write-Host "CHECK|$tag|version+path+sha512+size agree; nothing installed yet"
+          }
+
+          Assert-AssetMetadata $env:TAG $env:EXPECTED_SETUP $env:EXPECTED_VERSION
+          if ($env:FROM_TAG) {
+              Assert-AssetMetadata $env:FROM_TAG $env:FROM_SETUP $env:FROM_VERSION
+          }
+
+      - name: Install on a real Windows runner, launch, and (optionally) update
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $EV = Join-Path $env:GITHUB_WORKSPACE 'qa-evidence'
+          New-Item -ItemType Directory -Force -Path $EV | Out-Null
+          Start-Transcript -Path (Join-Path $EV 'transcript.txt') | Out-Null
+
+          $want   = $env:EXPECTED_VERSION
+          $from   = $env:FROM_VERSION
+          $settle = [int]$env:SETTLE_SECONDS
+          $tagDir  = Join-Path (Join-Path $env:GITHUB_WORKSPACE 'rel') $env:TAG
+          $setup   = Join-Path $tagDir $env:EXPECTED_SETUP
+          $fromDir = if ($from) { Join-Path (Join-Path $env:GITHUB_WORKSPACE 'rel') $env:FROM_TAG } else { $null }
+          $fromSetup = if ($from) { Join-Path $fromDir $env:FROM_SETUP } else { $null }
+
+          $results = [ordered]@{}
+          $failures = New-Object System.Collections.Generic.List[string]
+
+          function Log([string]$m) {
+              $line = "EVID|{0}|{1}" -f (Get-Date).ToString('o'), $m
+              Write-Host $line
+              Add-Content -Path (Join-Path $EV 'events.log') -Value $line
+          }
+
+          # Version comparison that survives electron-builder's own normalisation:
+          # the exe's ProductVersion may be the full semver ('1.12.32-plotina.46-dev.1')
+          # or a numeric Windows form ('1.12.32.46'), but never a different build.
+          function Get-VerTokens([string]$v) {
+              @([regex]::Matches($v.ToLowerInvariant(), '[0-9]+|[a-z]+') | ForEach-Object { $_.Value })
+          }
+          function Compare-Ver([string]$got, [string]$wantV) {
+              if ([string]::IsNullOrWhiteSpace($got)) { return 'MISSING' }
+              if ($got.Trim().ToLowerInvariant() -eq $wantV.ToLowerInvariant()) { return 'EXACT' }
+              $g = Get-VerTokens $got
+              $w = Get-VerTokens $wantV
+              if ($g.Count -ge 3 -and $g.Count -le 4 -and ($g[0..2] -join '.') -eq ($w[0..2] -join '.')) {
+                  if ($g.Count -eq 3) { return 'BASE-ONLY' }
+                  if ($g[3] -eq $w[4]) { return 'NUMERIC' }
+              }
+              return 'MISMATCH'
+          }
+
+          # azar/asar: uint32 payload-size, uint32 header size, header JSON, then
+          # file data; offsets in the header are relative to the header's end.
+          function Get-AsarPackageVersion([string]$asar) {
+              $js = @'
+          const fs = require('fs');
+          const fd = fs.openSync(process.argv[2], 'r');
+          try {
+            const head = Buffer.alloc(16);
+            fs.readSync(fd, head, 0, 16, 0);
+            const headerSize = head.readUInt32LE(4);
+            const hb = Buffer.alloc(headerSize);
+            fs.readSync(fd, hb, 0, headerSize, 8);
+            let txt = hb.toString('utf8');
+            txt = txt.slice(txt.indexOf('{'), txt.lastIndexOf('}') + 1);
+            const header = JSON.parse(txt);
+            const entry = header.files['package.json'];
+            if (!entry || entry.unpacked) throw new Error('package.json is not stored in the asar header');
+            const size = Number(entry.size), off = Number(entry.offset);
+            const buf = Buffer.alloc(size);
+            fs.readSync(fd, buf, 0, size, 8 + headerSize + off);
+            process.stdout.write(String(JSON.parse(buf.toString('utf8')).version || ''));
+          } finally { fs.closeSync(fd); }
+          '@
+              $tmp = Join-Path $EV 'asar-version.js'
+              Set-Content -Path $tmp -Value $js -Encoding utf8
+              $v = (& node $tmp $asar)
+              if ($LASTEXITCODE -ne 0) { throw "could not read the version out of $asar (node exit $LASTEXITCODE)" }
+              return ("$v").Trim()
+          }
+
+          function Get-InstallRoot {
+              $roots = @(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Directory -Filter 'Plotina*' -ErrorAction SilentlyContinue)
+              if ($roots.Count -eq 0) { throw "no Plotina* install directory under $env:LOCALAPPDATA\Programs" }
+              if ($roots.Count -gt 1) { Log "WARN several install dirs: $($roots.Name -join ', ')" }
+              return $roots[0].FullName
+          }
+
+          function Assert-InstalledVersion([string]$label, [string]$wantV, [string]$exe) {
+              $vi = (Get-Item $exe).VersionInfo
+              $root = Split-Path $exe -Parent
+              $asar = Join-Path $root 'resources\app.asar'
+              if (-not (Test-Path $asar)) { throw "$label`: no resources\app.asar under $root" }
+              $asarV = Get-AsarPackageVersion $asar
+              $pv = Compare-Ver $vi.ProductVersion $wantV
+              $fv = Compare-Ver $vi.FileVersion $wantV
+              $av = Compare-Ver $asarV $wantV
+              Log "$label`: ProductVersion='$($vi.ProductVersion)' ($pv) FileVersion='$($vi.FileVersion)' ($fv) app.asar version='$asarV' ($av), want '$wantV'"
+              if ($pv -eq 'MISMATCH' -or $pv -eq 'MISSING') { throw "$label`: exe ProductVersion '$($vi.ProductVersion)' does not match tag version '$wantV'" }
+              if ($fv -eq 'MISMATCH') { throw "$label`: exe FileVersion '$($vi.FileVersion)' contradicts tag version '$wantV'" }
+              if ($av -ne 'EXACT') { throw "$label`: the shipped app.asar reports '$asarV', the tag says '$wantV'" }
+              Write-Host "CHECK|version $label|ProductVersion=$pv FileVersion=$fv app.asar=EXACT ('$asarV')"
+          }
+
+          function Snap([string]$label) {
+              $ps = @(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue)
+              $d = ($ps | ForEach-Object { "pid=$($_.Id) window=$($_.MainWindowHandle) title='$($_.MainWindowTitle)' started=$($_.StartTime.ToString('o'))" }) -join '; '
+              Log "SNAP $label count=$($ps.Count) $d"
+              $tbl = if ($ps.Count) { ($ps | Select-Object Id, StartTime, MainWindowHandle, MainWindowTitle | Format-Table -AutoSize | Out-String) } else { "(no Plotina-Desktop process)`n" }
+              Add-Content -Path (Join-Path $EV "pids-$label.txt") -Value ("# $label @ $(Get-Date -Format o)`n" + $tbl)
+              return ,$ps
+          }
+
+          function Wait-Exit([int]$procId, [int]$sec) {
+              $dl = (Get-Date).AddSeconds($sec)
+              while ((Get-Date) -lt $dl) {
+                  if (-not (Get-Process -Id $procId -ErrorAction SilentlyContinue)) { return $true }
+                  Start-Sleep 2
+              }
+              return $false
+          }
+
+          function Wait-Windowed([int]$sec, [int]$exclude) {
+              $dl = (Get-Date).AddSeconds($sec)
+              while ((Get-Date) -lt $dl) {
+                  $p = @(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue |
+                         Where-Object { $_.MainWindowHandle -ne 0 -and $_.Id -ne $exclude })
+                  if ($p.Count -ge 1) { return $p[0] }
+                  Start-Sleep 2
+              }
+              return $null
+          }
+
+          function Shot([string]$name, [int]$procId) {
+              try {
+                  if ($procId) { try { [Microsoft.VisualBasic.Interaction]::AppActivate($procId) | Out-Null; Start-Sleep 2 } catch { Log "SCREENSHOT could not activate pid $procId`: $($_.Exception.Message)" } }
+                  Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+                  $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+                  $b = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+                  $g = [System.Drawing.Graphics]::FromImage($b)
+                  $g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+                  $path = Join-Path $EV "$name.png"
+                  $b.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+                  $g.Dispose(); $b.Dispose()
+                  Log "SCREENSHOT $name.png saved ($((Get-Item $path).Length) bytes, $($bounds.Width)x$($bounds.Height))"
+              } catch {
+                  Log "SCREENSHOT $name FAILED (best effort on a headless runner): $($_.Exception.Message)"
+              }
+          }
+
+          function KillAll([string]$why) {
+              Log "KILLALL $why"
+              & taskkill /IM Plotina-Desktop.exe /F /T 2>&1 | ForEach-Object { Log "  $_" }
+              Start-Sleep 3
+          }
+
+          # Named parameters on purpose: an empty @() passed positionally unrolls
+          # to nothing, which would shift extra argv into $label.
+          function Install-Silent {
+              param([string]$setupPath, [string[]]$extra = @(), [string]$label)
+              if (-not (Test-Path $setupPath)) { throw "$label`: installer $setupPath is missing" }
+              $argv = @('/S') + $extra
+              Log "INSTALL $label argv='$($argv -join ' ')' file=$setupPath"
+              $sw = [Diagnostics.Stopwatch]::StartNew()
+              $p = Start-Process -FilePath $setupPath -ArgumentList $argv -Wait -PassThru
+              $sw.Stop()
+              Log "INSTALL $label exit=$($p.ExitCode) elapsed=$([int]$sw.Elapsed.TotalSeconds)s"
+              if ($p.ExitCode -ne 0) { throw "$label`: installer exited with $($p.ExitCode)" }
+          }
+
+          function Launch-And-Window([string]$appExe, [int]$timeoutSec) {
+              $p = Start-Process -FilePath $appExe -PassThru
+              Log "LAUNCH started pid=$($p.Id) exe=$appExe"
+              $w = Wait-Windowed $timeoutSec 0
+              if (-not $w) { Snap 'no-window' | Out-Null; throw "no Plotina-Desktop window appeared within $timeoutSec s of launching $appExe" }
+              Log "WINDOW pid=$($w.Id) handle=$($w.MainWindowHandle) title='$($w.MainWindowTitle)'"
+              return $w
+          }
+
+          function Assert-Survives([int]$procId, [string]$label) {
+              Start-Sleep $settle
+              $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+              if (-not $p) {
+                  $crashes = @(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'CrashDumps') -Filter 'Plotina*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 3)
+                  foreach ($c in $crashes) { Log "CRASHDMP $($c.Name) $($c.LastWriteTime.ToString('o'))" }
+                  throw "$label`: pid $procId is gone ${settle}s after launch (crash?)"
+              }
+              if ($p.MainWindowHandle -eq 0) { throw "$label`: pid $procId still runs but has no window after ${settle}s" }
+              Log "SURVIVED $label pid=$procId after ${settle}s window=$($p.MainWindowHandle) title='$($p.MainWindowTitle)'"
+          }
+
+          function Copy-AppLogs {
+              foreach ($d in @((Join-Path $env:APPDATA 'Plotina Desktop'), (Join-Path $env:APPDATA 'plotina-desktop'))) {
+                  if (Test-Path $d) {
+                      $logs = Get-ChildItem $d -Recurse -Include *.log -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 2
+                      foreach ($l in $logs) { Copy-Item $l.FullName (Join-Path $EV ("applog-" + $l.Name)) -ErrorAction SilentlyContinue; Log "APPCOPY $($l.FullName)" }
+                      return
+                  }
+              }
+              Log "APPCOPY no app log dir found"
+          }
+
+          $hardFail = $null
+          try {
+              Log "BEGIN tag=$($env:TAG) version=$want settle=${settle}s"
+              Log "BEGIN from_tag=$($env:FROM_TAG) from_version=$from"
+              Log "installer=$setup ($([math]::Round((Get-Item $setup).Length / 1MB)) MB)"
+              KillAll 'pre-clean'
+
+              if ($from) {
+                  # ---- update mode: install the OLD release, then update to the new one ----
+                  Install-Silent -setupPath $fromSetup -label "from_tag $from"
+                  $root = Get-InstallRoot
+                  Log "INSTALL ROOT $root"
+                  $appExe = Join-Path $root 'Plotina-Desktop.exe'
+                  Assert-InstalledVersion "installed $from (from_tag)" $from $appExe
+                  $results['from_tag_installed'] = "PASS — $from from $env:FROM_TAG (exe + app.asar agree)"
+
+                  $old = Launch-And-Window $appExe 180
+                  $oldPid = $old.Id
+                  Shot '01-from-tag-window' $oldPid
+                  Snap 'before-update' | Out-Null
+                  $results['from_tag_launched'] = "PASS — old pid $oldPid, window '$($old.MainWindowTitle)'"
+                  Start-Sleep 10
+
+                  $t0 = Get-Date
+                  Install-Silent -setupPath $setup -extra @('--updated', '--force-run') -label "update to $want"
+                  $gone = Wait-Exit $oldPid 240
+                  Log "UPDATE old_pid=$oldPid exited=$gone (installer started $($t0.ToString('o')))"
+                  if (-not $gone) { Snap 'old-pid-stuck' | Out-Null; throw "old pid $oldPid is still alive 240s after the update installer ran" }
+                  $results['old_process_exited'] = "PASS — pid $oldPid gone"
+
+                  $new = Wait-Windowed 240 $oldPid
+                  if (-not $new) { Snap 'no-new-window' | Out-Null; throw "no new windowed Plotina-Desktop process appeared after the update (auto-restart did not happen)" }
+                  Log "UPDATE new_pid=$($new.Id) handle=$($new.MainWindowHandle) title='$($new.MainWindowTitle)' started=$($new.StartTime.ToString('o'))"
+                  $results['new_process_relaunched'] = "PASS — new pid $($new.Id) with a window, old pid $oldPid gone"
+                  Assert-Survives $new.Id 'updated app'
+                  $results['updated_app_survives'] = "PASS — pid $($new.Id) alive with a window ${settle}s after the restart"
+                  Shot '02-updated-window' $new.Id
+                  Snap 'after-update' | Out-Null
+                  Assert-InstalledVersion "installed $want after update" $want $appExe
+                  $results['update_version_matches_tag'] = "PASS — $want installed by the update"
+              } else {
+                  # ---- fresh mode: install this release and prove it starts ----
+                  Install-Silent -setupPath $setup -label "fresh $want"
+                  $root = Get-InstallRoot
+                  Log "INSTALL ROOT $root"
+                  $appExe = Join-Path $root 'Plotina-Desktop.exe'
+                  Assert-InstalledVersion "installed $want" $want $appExe
+                  $results['release_installed'] = "PASS — $want installed from $env:EXPECTED_SETUP"
+
+                  $w = Launch-And-Window $appExe 180
+                  Shot '01-fresh-window' $w.Id
+                  Snap 'after-launch' | Out-Null
+                  Assert-Survives $w.Id 'fresh app'
+                  $results['app_window_opens'] = "PASS — pid $($w.Id), window '$($w.MainWindowTitle)'"
+                  $results['app_survives'] = "PASS — alive with a window ${settle}s after launch"
+                  Shot '02-fresh-window-after-settle' $w.Id
+              }
+
+              Copy-AppLogs
+          } catch {
+              $hardFail = $_
+              Log "FAIL $($_.Exception.Message)"
+              $results['verdict'] = "FAIL — $($_.Exception.Message)"
+          } finally {
+              KillAll 'final-cleanup'
+              Snap 'final' | Out-Null
+              try { Stop-Transcript | Out-Null } catch { }
+
+              $lines = New-Object System.Collections.Generic.List[string]
+              $lines.Add('# Windows release-installer QA')
+              $lines.Add('')
+              $lines.Add("- tag: ``$($env:TAG)`` -> app version ``$want``")
+              if ($from) { $lines.Add("- from_tag: ``$($env:FROM_TAG)`` -> app version ``$from`` (update path)") }
+              else { $lines.Add('- from_tag: not set (fresh install only)') }
+              $lines.Add("- installer: ``$($env:EXPECTED_SETUP)``")
+              $lines.Add("- liveness window: ${settle}s")
+              $lines.Add('')
+              $lines.Add('## Checks')
+              $lines.Add('')
+              foreach ($k in $results.Keys) { $lines.Add("- **$($k)**: $($results[$k])") }
+              if (-not $results.Contains('verdict')) { $lines.Add('- **verdict**: PASS') }
+              $lines.Add('')
+              $lines.Add('Evidence in this artifact: `events.log` (timestamped EVID lines), `pids-*.txt` (process tables), `transcript.txt` (full step log), `latest-*.yml` (published metadata), `*.png` (window screenshots, best effort on a headless runner).')
+              Set-Content -Path (Join-Path $EV 'qa-summary.md') -Value ($lines -join "`n") -Encoding utf8
+          }
+
+          if ($hardFail) { throw $hardFail }
+
+      - name: Job summary
+        if: always()
+        shell: pwsh
+        run: |
+          $EV = Join-Path $env:GITHUB_WORKSPACE 'qa-evidence'
+          foreach ($f in @('qa-summary.md', 'events.log')) {
+              $p = Join-Path $EV $f
+              if (Test-Path $p) {
+                  "`n### $f`n" | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_STEP_SUMMARY
+                  if ($f -like '*.md') { (Get-Content $p -Raw) | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_STEP_SUMMARY }
+                  else { "``````" | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_STEP_SUMMARY; (Get-Content $p -Raw) | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_STEP_SUMMARY; "``````" | Out-File -Append -Encoding utf8 -FilePath $env:GITHUB_STEP_SUMMARY }
+              }
+          }
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qa-windows-release-evidence-${{ inputs.tag }}
+          path: qa-evidence/
+          if-no-files-found: warn
+          retention-days: 30
