@@ -118,6 +118,16 @@ class InstallerNshContract(unittest.TestCase):
         guard = self.text.split('${If} $INSTDIR == ""', 1)[1].split("${EndIf}", 1)[0]
         self.assertIn("Return", guard)
 
+    def test_uninstaller_code_is_behind_the_build_define(self):
+        # The include is compiled into the installer pass too. Uninstaller code
+        # there trips NSIS warning 6020 ("Uninstaller script code found but
+        # WriteUninstaller never used"), which electron-builder turns into a
+        # build failure; the hook must be behind BUILD_UNINSTALLER.
+        self.assertIn("!ifdef BUILD_UNINSTALLER", self.text)
+        guarded = self.text.split("!ifdef BUILD_UNINSTALLER", 1)[1]
+        self.assertIn("Function un.", guarded)
+        self.assertIn("!endif ; BUILD_UNINSTALLER", guarded)
+
     def test_reads_the_runtime_command_value(self):
         # The runtime association is a default value of shell\open\command;
         # anything else would compare against the wrong thing.
@@ -145,6 +155,45 @@ class InstallerNshWiring(unittest.TestCase):
         # the hook were wired through it.
         variant = json.loads(read(VARIANT))
         self.assertNotIn("nsis", variant)
+
+
+INSTALLER_PASS = r"""
+; electron-builder's installer pass: BUILD_UNINSTALLER is not defined and this
+; script writes no uninstaller, so any un.* code in the include trips
+; NSIS warning 6020 (fatal in electron-builder's makensis invocation).
+Unicode true
+Name "PlotinaNshInstallerPass"
+OutFile "installer-pass.exe"
+InstallDir "{install_dir}"
+RequestExecutionLevel user
+!include "installer.nsh"
+
+Section "install"
+  CreateDirectory "$INSTDIR"
+SectionEnd
+"""
+
+
+@unittest.skipUnless(MAKENSIS, "makensis is not installed")
+class InstallerNshCompile(unittest.TestCase):
+    def compile(self, script_name, body, *defines):
+        with tempfile.TemporaryDirectory(prefix="plotina-nsh-") as tmp:
+            tmp = Path(tmp)
+            (tmp / "installer.nsh").write_text(read(NSH), encoding="utf-8")
+            script = tmp / script_name
+            script.write_text(
+                "!addincludedir \"%s\"\n" % tmp.as_posix()
+                + body.replace("{install_dir}", r"C:\Plotina-NshCompile"),
+                encoding="utf-8",
+            )
+            return subprocess.run(
+                [MAKENSIS, "-V2", "-WX", *defines, str(script)],
+                cwd=tmp, capture_output=True, text=True, timeout=300,
+            )
+
+    def test_installer_pass_compiles_without_warnings(self):
+        proc = self.compile("installer-pass.nsi", INSTALLER_PASS)
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 
 
 DRIVER = r"""
@@ -226,7 +275,7 @@ class InstallerNshBehaviour(unittest.TestCase):
                 encoding="utf-8",
             )
             build = subprocess.run(
-                [MAKENSIS, "-V2", str(script)],
+                [MAKENSIS, "-V2", "-DBUILD_UNINSTALLER", str(script)],
                 cwd=tmp, capture_output=True, text=True, timeout=300,
             )
             self.assertEqual(build.returncode, 0, build.stdout + build.stderr)

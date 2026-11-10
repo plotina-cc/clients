@@ -37,6 +37,15 @@
 
 !include "LogicLib.nsh"
 
+; This include is compiled into BOTH electron-builder passes: the installer and
+; the separate BUILD_UNINSTALLER pass. Uninstaller code left in the installer
+; pass makes NSIS emit "warning 6020: Uninstaller script code found but
+; WriteUninstaller never used", which electron-builder turns into a build
+; failure (it spawns makensis with warnings-as-errors). Keep everything behind
+; the same define electron-builder uses and the include expands to nothing in
+; the installer pass.
+!ifdef BUILD_UNINSTALLER
+
 ; Everything below runs in the uninstaller section, where NSIS only allows
 ; functions declared with the "un." prefix — electron-builder's shipped
 ; StrContains.nsh helper is installer-only and cannot be called from there.
@@ -125,3 +134,5 @@ FunctionEnd
   Push "cc.plotina.element"
   Call un.PlotinaRemoveRuntimeProtocolKey
 !macroend
+
+!endif ; BUILD_UNINSTALLER
