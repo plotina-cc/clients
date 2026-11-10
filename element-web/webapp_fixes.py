@@ -179,9 +179,10 @@ def inject_modal_style(html: str) -> str:
 
 
 # --------------------------------------------------------------------------
-# 3. First-visit theme bootstrap (THEMES.md part 2). plotina-theme.js seeds
+# 3. Theme bootstrap (THEMES.md part 2). plotina-theme.js seeds
 # mx_local_settings.theme with the Plotina custom theme matching
-# prefers-color-scheme for fresh visitors only; it must run before
+# prefers-color-scheme for fresh visitors, and rewrites a theme id saved
+# before the Mint Light/Mint Dark rename; it must run before
 # bundles/<hash>/bundle.js, so its tag is anchored directly in front of
 # that loader. The payload file lives in element-web/ for BOTH clients:
 # the Dockerfile COPYs it into /app; element-desktop/branding.py copies it

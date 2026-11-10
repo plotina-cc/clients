@@ -23,7 +23,8 @@ Scope (and nothing else):
     It also carries the <script src="/plotina-theme.js"> bootstrap tag,
     inserted directly before the bundles/<hash>/bundle.js loader so it
     runs first: it seeds mx_local_settings.theme with the Plotina custom
-    theme matching prefers-color-scheme for fresh visitors only. The file
+    theme matching prefers-color-scheme for fresh visitors, and migrates a
+    theme id saved before the Mint Light/Mint Dark rename. The file
     itself is COPYed into /app by the Dockerfile (checked here).
   * bundles/*/theme-light-custom.css and theme-dark-custom.css —
     --timeline-text-color gains a var(--cpd-color-text-primary) fallback

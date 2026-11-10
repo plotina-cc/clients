@@ -24,6 +24,21 @@ Playwright-проба (`probe-theme.spec.ts` в этом же корне worktre
 поэтому баг воспроизводится только при системном dark (зеркально ломается
 тёмная custom-тема на светлой ОС).
 
+### Идентификаторы тем (обновление 2026-11-10)
+
+Апстрим не хранит отдельного id кастомной темы: ThemeWatcher собирает его как
+`"custom-" + setting_defaults.custom_themes[].name`. Переименование метки
+(`Plotina Mint` → `Mint Light`, `Plotina Mint Dark` → `Mint Dark`) поэтому
+переименовало и id, а `default_theme`, `setting_defaults.theme` и
+`plotina-theme.js` остались на старых — на этом падал
+`NodeThemeLogicTest.test_theme_init_logic`
+(`custom-Plotina Mint not in custom-Mint Light,custom-Mint Dark`).
+Сейчас все три источника дают `custom-Mint Light` / `custom-Mint Dark`, а прежние id
+живут только как карта миграции в `plotina-theme.js`: у кого в
+`mx_local_settings.theme` сохранён старый id, скрипт переписывает его на текущий при
+первой же загрузке страницы (остальное содержимое блоба не трогается). Имена в
+диагностике ниже — до переименования, механика та же.
+
 ## 1._assets_ и идентификаторы (chat.plotina.cc, bundle `81bff4fd060173d686ec`)
 
 `index.html` грузит только загрузчик `bundles/81bff4fd060173d686ec/bundle.js` (27 KB,

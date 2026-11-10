@@ -3,19 +3,24 @@
 // Что проверяет: свежий посетитель (пустой localStorage) при
 // prefers-color-scheme: dark должен получить ТЁМНЫЙ фон И СВЕТЛЫЙ текст И
 // контраст >= 4.5. До фикса падал по всем трём: фон был светлый (Config
-// pin'ит custom-Plotina Mint), а цвет текста наследовался с <html> из-за
+// pin'ил светлую custom-тему), а цвет текста наследовался с <html> из-за
 // мёртвого var(--timeline-text-color) без fallback в theme-*-custom.css
 // (корень и патчи — THEMES.md).
 //
 // После деплоя ветки theme/css-fallback зелёная целиком:
 //   * /plotina-theme.js (init-скрипт) пишет mx_local_settings.theme =
-//     "custom-Plotina Mint Dark" при тёмной ОС у посетителя без сохранённой
+//     "custom-Mint Dark" при тёмной ОС у посетителя без сохранённой
 //     темы → фон тёмный;
 //   * CSS-патч branding.py даёт тексту fallback на --cpd-color-text-primary,
 //     который резолвится по классу cpd-theme-* на body (т.е. по выбранной
 //     теме, а не по ОС) → текст светлый на тёмном фоне, контраст ~16.9:1.
 // Первый ассерт (seed в localStorage) дополнительно проверяет, что init-тег
 // реально вставлен и отрабатывает ДО bundle.js.
+//
+// Id темы: апстрим собирает его как "custom-" + custom_themes[].name из
+// config.json, т.е. id следует за меткой (Mint Light/Mint Dark с 2026-11-08).
+// Проба проверяет именно текущий id, поэтому на сборке старше этого
+// переименования она останется красной — это ожидаемо, а не регресс.
 //
 // Как запускать (Playwright настроен в e2e/, браузеры установлены):
 //   cd e2e && npm ci
@@ -26,6 +31,10 @@
 import { test, expect } from "@playwright/test";
 
 const SITE = process.env.PLOTINA_CHAT_URL ?? "https://chat.plotina.cc/";
+
+// Текущие id custom-тем (config.json: "custom-" + custom_themes[].name).
+// Старые "custom-Plotina Mint*" переписаны в эти /plotina-theme.js.
+const DARK_THEME_ID = "custom-Mint Dark";
 
 test.describe("system dark theme (fresh visitor)", () => {
   // Никакой авторизации и никакого персистентного состояния: чистый
@@ -105,10 +114,10 @@ test.describe("system dark theme (fresh visitor)", () => {
     expect
       .soft(
         readout.storedTheme,
-        `mx_local_settings.theme должен быть "custom-Plotina Mint Dark" ` +
+        `mx_local_settings.theme должен быть ${JSON.stringify(DARK_THEME_ID)} ` +
           `(сид /plotina-theme.js при prefers-color-scheme: dark), сейчас ${JSON.stringify(readout.storedTheme)}`,
       )
-      .toBe("custom-Plotina Mint Dark");
+      .toBe(DARK_THEME_ID);
 
     // 1) Фон тёмный (следствие сида: ThemeWatcher применяет Dark-custom).
     expect
