@@ -248,10 +248,10 @@ index 0834111..8a49056 100644
              size="300"
 diff --git a/src/app/state/plotinaAliases.ts b/src/app/state/plotinaAliases.ts
 new file mode 100644
-index 0000000..464d969
+index 0000000..d6c1194
 --- /dev/null
 +++ b/src/app/state/plotinaAliases.ts
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,205 @@
 +/*
 +Copyright 2026 Plotina <thebob3r@gmail.com>
 +
@@ -291,8 +291,12 @@ index 0000000..464d969
 +room when it changes: installPlotinaRoomNames() listens for the account data
 +event and calls Room.recalculate(), which is what emits Room.name -- the signal
 +every consumer already listens to -- so the list repaints without a reload.
++The same recompute runs once the room exists (ClientEvent.Room) and once the
++first sync is applied (SyncState.Prepared), because on a cold start the account
++data arrives before the rooms and a new room is named before it is in the
++client -- see the comment at the end of installPlotinaRoomNames().
 +*/
-+import { ClientEvent, MatrixClient, MatrixEvent, Room } from 'matrix-js-sdk';
++import { ClientEvent, MatrixClient, MatrixEvent, Room, SyncState } from 'matrix-js-sdk';
 +import { useAccountData } from '../hooks/useAccountData';
 +import { AccountDataEvent } from '../../types/matrix/accountData';
 +import {
@@ -389,19 +393,21 @@ index 0000000..464d969
 +
 +type PlotinaRoomNamesClient = MatrixClient & { plotinaRoomNames?: boolean };
 +
++/** Recompute one room's cached name; Room.name listeners repaint the list. */
++const recalculateOneRoom = (room: Room) => {
++  try {
++    room.recalculate(); // emits Room.name when the displayed name changes
++  } catch {
++    /* one broken room must not stop the others */
++  }
++};
++
 +/**
-+ * Install the display point. Returns the function that recomputes every room,
-+ * the account data listener uses it and so does the caller after the first
-+ * sync, so a name stored on another device lands without a reload.
++ * Recompute every room the client knows. Cheap: Room.recalculate() only emits
++ * Room.name for a room whose displayed name actually changed.
 + */
 +export const recalculatePlotinaRoomNames = (mx: MatrixClient) => {
-+  mx.getRooms().forEach((room: Room) => {
-+    try {
-+      room.recalculate(); // emits Room.name when the displayed name changes
-+    } catch {
-+      /* one broken room must not stop the others */
-+    }
-+  });
++  mx.getRooms().forEach(recalculateOneRoom);
 +};
 +
 +export const installPlotinaRoomNames = (mx: PlotinaRoomNamesClient) => {
@@ -429,6 +435,27 @@ index 0000000..464d969
 +    if (event.getType() === ALIASES_EVENT_TYPE) recalculatePlotinaRoomNames(mx);
 +  };
 +  mx.on(ClientEvent.AccountData, handleAccountData);
++
++  // Cold start. Two SDK facts leave a room with the stock name and nothing
++  // recomputes it later, because account data is not room state:
++  //
++  //   * the first /sync carries global account data BEFORE the room sections
++  //     (matrix-js-sdk sync.js), so the handler above runs against an empty
++  //     room list -- the alias is stored by then, but no room sees it;
++  //   * for a brand-new room the SDK calls Room.recalculate() BEFORE
++  //     storeRoom() and ClientEvent.Room, so inside the generator
++  //     mx.getRoom(roomId) is still undefined for that room and the name it is
++  //     born with is the member-list one. The list then shows that name until
++  //     the room is opened or an event arrives in it.
++  //
++  // A room is in the client's map by ClientEvent.Room, and after
++  // SyncState.Prepared the whole first sync is applied, so every room that was
++  // born before its alias and every alias that arrived before its room is
++  // recomputed here -- on the first paint, not on the next room event.
++  mx.on(ClientEvent.Room, recalculateOneRoom);
++  mx.on(ClientEvent.Sync, (state: SyncState) => {
++    if (state === SyncState.Prepared) recalculatePlotinaRoomNames(mx);
++  });
 +};
 diff --git a/src/client/initMatrix.ts b/src/client/initMatrix.ts
 index 498d4f7..ce2a9c3 100644

@@ -101,6 +101,8 @@ test('the personal name only wins for a direct chat', () => {
 
 const ACCOUNT_DATA_EVENT = 'accountData'; // ClientEvent.AccountData
 const ROOM_NAME_EVENT = 'Room.name'; // RoomEvent.Name
+const CLIENT_ROOM_EVENT = sdk.ClientEvent.Room; // 'Room'
+const CLIENT_SYNC_EVENT = sdk.ClientEvent.Sync; // 'sync'
 
 class FakeEvent {
   constructor(type, content) {
@@ -310,6 +312,68 @@ test('installing twice does not stack generators', () => {
   assert.equal(mx.roomNameGenerator, first);
 });
 
+/**
+ * The order matrix-js-sdk uses on the first /sync (sync.js): global account
+ * data is applied and emitted BEFORE the room sections, and every brand-new
+ * room is recalculated BEFORE storeRoom() and ClientEvent.Room. So the
+ * generator is asked about a room the client cannot see yet, and the name the
+ * room is born with is the member-list one. Nothing recomputes it afterwards --
+ * account data is not room state -- and the chat list keeps showing that name
+ * until the room is opened or an event arrives in it. QA found exactly that
+ * after a client restart (patch 0012, cold start).
+ */
+test('cold start: a room named before it is in the client is fixed when it arrives', () => {
+  const mx = new FakeClient('@me:test');
+  mx.data.set('m.direct', new FakeEvent('m.direct', { '@me:test': ['!dm:cold'] }));
+  glue.installPlotinaRoomNames(mx);
+
+  // 1. The alias arrives with the global account data of the first sync, while
+  //    the client still has no rooms: the listener has nothing to repaint.
+  const aliases = new FakeEvent('cc.plotina.room_aliases', { '!dm:cold': 'Денчик' });
+  mx.data.set('cc.plotina.room_aliases', aliases);
+  mx.emit(ACCOUNT_DATA_EVENT, aliases);
+  assert.equal(mx.rooms.length, 0);
+
+  // 2. The room is created and named before it is stored: stock name.
+  const dm = new FakeRoom(mx, '!dm:cold', { name: 'Даниил', members: 2 });
+  dm.recalculate();
+  assert.equal(dm.name, 'Даниил', 'generator cannot resolve a room that is not in the client yet');
+
+  // 3. ClientEvent.Room, not an opened room and not a new message, is what
+  //    puts the personal name into the list.
+  mx.rooms.push(dm);
+  mx.emit(CLIENT_ROOM_EVENT, dm);
+  assert.equal(dm.name, 'Денчик');
+  assert.equal(dm.nameEvents, 1, 'Room.name was emitted once, so the chat list repaints');
+});
+
+test('the first sync recomputes the names of rooms that were already there', () => {
+  // A room restored from the local store may have been named before its alias
+  // was known (the name was set on another device). Its account data event is
+  // long gone by then; the sync state is the only signal that the sync is in.
+  const mx = fakeWithDirect();
+  glue.installPlotinaRoomNames(mx);
+  const dm = mx.getRoom('!dm:test');
+  assert.equal(dm.name, 'Даниил');
+
+  mx.data.set(
+    'cc.plotina.room_aliases',
+    new FakeEvent('cc.plotina.room_aliases', { '!dm:test': 'Денчик' })
+  );
+  const aliases = mx.getAccountData('cc.plotina.room_aliases');
+
+  // No account data event on this path: only the completed first sync.
+  mx.emit(CLIENT_SYNC_EVENT, 'SYNCING');
+  assert.equal(dm.name, 'Даниил', 'a running sync does not recompute on every response');
+
+  mx.emit(CLIENT_SYNC_EVENT, 'PREPARED');
+  assert.equal(dm.name, 'Денчик');
+  // The room keeps the personal name for the rest of the session.
+  mx.emit(ACCOUNT_DATA_EVENT, aliases);
+  assert.equal(dm.name, 'Денчик');
+  assert.equal(mx.stateWrites, 0, 'room state was never written');
+});
+
 /* ------------------------------------------------------ against the real SDK */
 
 // MemoryStore keeps account data in this map; Cinny's own developer-tools page
@@ -396,4 +460,28 @@ test('a real Room repaints on recalculate() and on the account data event', () =
   putAccountData(mx, 'cc.plotina.room_aliases', {});
   mx.emit(sdk.ClientEvent.AccountData, mx.getAccountData('cc.plotina.room_aliases'));
   assert.notEqual(dm.name, 'Денчик 3');
+});
+
+test('a real client fixes the cold-start name on Room and on the first sync', () => {
+  const mx = realClient();
+  putAccountData(mx, 'cc.plotina.room_aliases', { '!dm': 'Денчик' });
+  glue.installPlotinaRoomNames(mx);
+
+  // SDK order for a brand-new room: recalculate() first, storeRoom() after.
+  const dm = new sdk.Room('!dm', mx, '@me:test');
+  // What the SDK computes while the room is not yet in the client -- the name
+  // it would keep for the whole session before this fix.
+  const stock = dm.calculateRoomName('@me:test');
+  dm.recalculate();
+  assert.equal(dm.name, stock, 'the generator had no room to check yet');
+
+  mx.store.storeRoom(dm);
+  mx.emit(sdk.ClientEvent.Room, dm);
+  assert.equal(dm.name, 'Денчик', 'ClientEvent.Room is enough -- no room open, no message');
+
+  // The first sync recomputes everything again, which is also the path that
+  // brings a reset made on another device without a reload.
+  putAccountData(mx, 'cc.plotina.room_aliases', {});
+  mx.emit(sdk.ClientEvent.Sync, sdk.SyncState.Prepared, sdk.SyncState.Syncing);
+  assert.equal(dm.name, stock, 'PREPARED puts the stock name back after a reset');
 });

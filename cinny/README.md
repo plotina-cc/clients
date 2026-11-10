@@ -103,6 +103,16 @@ notifications, message search and the A→Z room order, because all of them read
 also listens for the event and calls `Room.recalculate()` — which emits
 `Room.name` — and the list repaints without a reload.
 
+That listener alone is not enough on a cold start, which is why the patch also
+recomputes on `ClientEvent.Room` and once the first sync is applied
+(`SyncState.Prepared`). The SDK's first `/sync` carries global account data
+before the room sections, and it recalculates a brand-new room *before*
+`storeRoom()` — so inside the generator `client.getRoom(id)` is still empty for
+that room, the room is born with its member-list name, and nothing recomputes
+it: the chat list showed the old name until the room was opened or a message
+arrived (the defect QA found after a client restart). Both hooks are covered by
+`tests/dm_aliases.test.mjs`, including a rehearsal of that exact SDK order.
+
 The way in is the room's context menu: "Личное имя" / "Personal name", shown for
 direct chats only, with Save and Reset. Storage rules and the client glue are
 covered by `tests/dm_aliases.test.mjs`; `scripts/test-dm-aliases.sh` exports the

@@ -22,7 +22,9 @@ ROOT="$(dirname "$HERE")"
 TAG="$(cat "$ROOT/UPSTREAM_TAG")"
 
 SRC="${1:-${CINNY_SRC:-$ROOT/.build/cinny-desktop/cinny}}"
-if [ ! -d "$SRC/src" ] || [ ! -d "$SRC/.git" ]; then
+# A submodule checkout has .git as a file pointing at the superproject, so ask
+# git rather than test for a directory.
+if [ ! -d "$SRC/src" ] || ! git -C "$SRC" rev-parse --git-dir >/dev/null 2>&1; then
   echo "test-dm-aliases: no Cinny git checkout at $SRC" >&2
   echo "  run scripts/build.sh once (it clones $TAG into .build/), or pass" >&2
   echo "  the path of the checkout it left behind." >&2
