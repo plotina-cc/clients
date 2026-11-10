@@ -87,6 +87,7 @@ sheet; both sheets use the identical name set.
 |---|---|---|---|---|---|---|
 | `--timeline-text-color` | 133 | 133 | **main text invisible/inherited**: body, `.text-primary`, every input, event-tile copy | define | `var(--cpd-color-text-primary)` / same | `var(--cpd-color-text-primary)` ×17 |
 | `--secondary-content` | 141 | 0 | muted copy (timestamps, hints) — fallback already correct but literal `#2e2f32` froze the light colour into the dark sheet | define | `var(--cpd-color-text-secondary)` / same | `var(--cpd-color-text-secondary)` ×36 |
+| `--accent-color` | 59 | 0 | accent chrome: selected/focused states, action icons, active toggles. Nothing was visibly broken (every use already carries `#0dbd8b` as its own fallback), but that literal pins the brand green into both sheets and ignores the theme | define | `var(--cpd-color-text-action-accent)` / same | `var(--cpd-color-text-action-accent)` ×47, `1px solid …` ×6, `14px solid …` ×1, `1px dashed …` ×1, `…!important` ×1; Element also writes it inline from `config.json` `custom_themes[].colors`, which still wins — the declaration only gives the static CSS and the loading window a value |
 | `--quinary-content` | 42 | 0 | icons and hairlines tinted by a light-theme literal | define | `var(--cpd-color-gray-400)` / same | `var(--cpd-color-gray-400)` ×22 + 17 borders |
 | `--tertiary-content` | 40 | 0 | secondary headings, caption text | define | `var(--cpd-color-gray-800)` / same | `var(--cpd-color-gray-800)` ×37 |
 | `--alert` | 39 | 0 | error/warning text (`#ff5b55` literal, wrong in dark) | define | `var(--cpd-color-text-critical-primary)` / same | `var(--cpd-color-text-critical-primary)` ×34 |
@@ -108,7 +109,7 @@ sheet; both sheets use the identical name set.
 | `--sidebar-color-50pct` | 2 | 2 | dialog scrim, space-create menu scrim: **no scrim at all** | define | `#030c1b4d` / `#00000080` | stock literals `#030c1b4d` / `#00000080` (no themeable token exists) |
 | `--menu-selected-color` | 2 | 0 | selected context-menu row / read-receipt row hover | define | `#f5f8fa` / `#343a46` | stock literals `#f5f8fa` / `#343a46` |
 | `--strong-input-border-color` | 2 | 0 | msisdn input border (border slot) and voice-feed background (background slot) | define | `var(--cpd-color-border-interactive-primary)` / same | border slot: `border-interactive-primary` ✓; background slot in stock is `bg-action-primary-rest` — one definition cannot serve both, the border slot is the dominant one (documented deviation) |
-| `--timeline-background-color-50pct` | 1 | 1 | **auth-page card background**: stock hard-codes `hsla(0,0%,96%,.9)` in *both* sheets, i.e. a near-white card under light text in the dark theme | define | `color-mix(in srgb,var(--cpd-color-bg-canvas-default) 90%,transparent)` / same | `hsla(0,0%,96%,.9)` in both sheets — deliberate fix, the only value that changes the rendered output by design |
+| `--timeline-background-color-50pct` | 1 | 1 | **auth-page card background**: stock hard-codes `hsla(0,0%,96%,.9)` in *both* sheets, i.e. a near-white card under light text in the dark theme | define | `color-mix(in srgb,var(--cpd-color-bg-canvas-default) 90%,transparent)` / same | `hsla(0,0%,96%,.9)` in both sheets — deliberate fix, and the only value chosen for its rendered effect rather than copied from stock (see the caveat below) |
 | `--accent-color-400` | 1 | 1 | wysiwyg composer focus ring | define | `var(--cpd-color-green-400)` / same | legacy accent ramp → Compound green |
 | `--accent-color-1000` | 1 | 1 | "recommended" join-rule chip | define | `var(--cpd-color-green-1000)` / same | legacy accent ramp → Compound green |
 | `--secondary-hairline-color` | 1 | 1 | text input border in dialogs: **inherit → no border** | define | `var(--cpd-color-gray-300)` / same | `var(--cpd-color-gray-300)` ×1 |
@@ -132,6 +133,17 @@ computed value cannot move, and the inline style Element writes (configured
 font, measured image height, per-element clamp) still wins over the sheet. That
 keeps the invariant total instead of an allow-list that a future upstream sheet
 could silently fall outside.
+
+One caveat on the rendered effect the table claims: on the v1.12.32 login page
+`.mx_AuthPage_modal` carries an inline `background: initial` (Element's
+`_withBlur` variant), so the sheet rule for
+`--timeline-background-color-50pct` never paints *there* — the computed
+`background-color` of that element is `rgba(0,0,0,0)` with and without the
+block, while the variable itself resolves correctly
+(`color(srgb 0.105882 0.113725 0.133333 / 0.9)`) everywhere it is used without
+that inline override. The definition is still right — it is what makes the dark
+theme stop resolving a near-white card wherever the rule does apply — but it
+must not be read as "the login card changes colour".
 
 ## What stays undefined
 

@@ -97,6 +97,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Unit tests (element-web)
+        # The overlay suites, before anything expensive runs: branding_test.py,
+        # test_theme_tokens.py and test_theme_custom_css_vars.py (fixture half).
+        # The artifact half of the last one needs a built webapp and skips here;
+        # the step after the smoke test runs it against the extracted /app.
+        run: python3 -m unittest discover -s element-web/tests -p '*test*.py'
+
       - name: Read the pinned upstream image
         id: pin
         run: |
@@ -140,6 +147,27 @@ jobs:
         env:
           IMAGE: plotina-web:ci-${{ github.run_id }}
         run: bash element-web/scripts/smoke-image.sh "$IMAGE"
+
+      - name: Theme CSS artifact check
+        # The half of test_theme_custom_css_vars.py that the unit step above
+        # skips: the generated theme-*-custom.css sheets only exist inside a
+        # built webapp. Extract /app from the image just built and run the same
+        # suite against it with the strict switch on, so "no artifact" is a
+        # failure instead of a skip. This is the check that catches a new
+        # upstream sheet using a custom property nothing defines.
+        env:
+          IMAGE: plotina-web:ci-${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          app="$RUNNER_TEMP/webapp"
+          rm -rf "$app"
+          mkdir -p "$app"
+          cid="$(docker create "$IMAGE")"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          docker cp "$cid:/app/." "$app"/
+          find "$app" -name 'theme-*-custom.css' | sed 's#^#  extracted: #'
+          PLOTINA_WEBAPP_ROOT="$app" PLOTINA_THEME_CSS_STRICT=1 \
+            python3 -m unittest discover -s element-web/tests -p '*test*.py'
 
       - name: Summary
         run: |
