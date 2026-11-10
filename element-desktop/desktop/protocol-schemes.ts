@@ -6,14 +6,15 @@ SPDX-License-Identifier: AGPL-3.0-only
 PLOTINA-SHELL-PATCH: copied into apps/desktop/src by scripts/build.sh and the
 CI "Apply Plotina desktop sources" step (same pattern as icon.ts/updater.ts).
 
-Upstream's ProtocolHandler registers exactly two schemes: `electron_protocol`
-(= variant protocols[0], io.element.desktop) and the legacy `element`. Our
-variant (element-desktop/build.plotina.json) advertises three, including
-cc.plotina.element, and electron-builder only applies its `protocols` config
-to macOS bundles and Linux .desktop files — on Windows nothing registers a
-scheme but this handler. The result was a scheme the build advertises and no
-component claims: cc.plotina.element:// links went to the browser, and the
-release QA recorded `CHECK|protocol:declared|NOT-REGISTERED`.
+Upstream's ProtocolHandler registers protocols[0] plus the legacy `element`
+scheme. Our variant (element-desktop/build.plotina.json) declares exactly one
+scheme — io.element.desktop, the SSO callback MAS sends back to — and
+electron-builder only applies its `protocols` config to macOS bundles and Linux
+.desktop files, so on Windows the only thing that registers it is this handler.
+The legacy `element` and the old cc.plotina.element scheme are deliberately
+gone: they dragged the word Element into the Windows registry and into the
+.desktop file. Uninstall still cleans up their keys on machines that have them
+(build/installer.nsh) — that is not a reason to keep registering them.
 
 So the scheme list is derived from the variant at build time
 (electron-builder.ts writes electron_protocols, build-config.ts reads it) and
@@ -22,11 +23,8 @@ logic in this file: it is the one part of the shell patch that is unit-tested
 (desktop/tests/protocol-schemes.test.mjs) instead of only grep-asserted.
 */
 
-/** The scheme every Element-based client has always answered to. */
-export const LEGACY_PROTOCOL = "element";
-
 /**
- * Normalises a scheme name ("element", "Element:", " cc.plotina.element ").
+ * Normalises a scheme name ("io.element.desktop", "IO.Element.Desktop:").
  * Windows stores scheme keys case-insensitively and Electron's
  * setAsDefaultProtocolClient rejects anything that is not a bare scheme.
  */
@@ -38,13 +36,14 @@ export function normaliseScheme(scheme: string): string {
 }
 
 /**
- * The full set of schemes this install answers to: the primary protocol, the
- * legacy one, then everything else the variant declares. Order is stable and
- * duplicates (element is both legacy and declared) collapse.
+ * The full set of schemes this install answers to: the primary protocol, then
+ * everything else the variant declares. Nothing is added behind the variant's
+ * back — a scheme it does not declare is not claimed. Order is stable and
+ * duplicates collapse.
  */
 export function protocolSchemeList(primary: string, declared: readonly string[] = []): string[] {
     const schemes: string[] = [];
-    for (const candidate of [primary, LEGACY_PROTOCOL, ...declared]) {
+    for (const candidate of [primary, ...declared]) {
         const scheme = normaliseScheme(candidate);
         if (scheme && !schemes.includes(scheme)) schemes.push(scheme);
     }

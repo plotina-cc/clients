@@ -26,16 +26,19 @@ build loudly instead of silently shipping the old behaviour:
    build before honouring it).
 
 4. electron-builder.ts + src/build-config.ts + src/electron-main.ts +
-   src/protocol.ts — the whole `protocols` list from build.plotina.json reaches
-   the shell and is registered, not only protocols[0] and the legacy `element`.
-   electron-builder applies its own `protocols` config to macOS bundles and
-   Linux .desktop files only, so on Windows this handler is the one thing that
-   can claim cc.plotina.element; without it the variant advertises a scheme
-   registered nowhere (QA `protocol:declared` NOT-REGISTERED) and
-   cc.plotina.element:// links open the browser. The list normalisation and the
-   registration/deeplink predicates live in desktop/protocol-schemes.ts (copied
-   into src next to the other Plotina sources) so they are unit-tested instead
-   of only grep-asserted.
+   src/protocol.ts — the variant's `protocols` list reaches the shell and is
+   registered. There is exactly one scheme now: io.element.desktop, the SSO
+   callback MAS sends the browser back to, and it cannot change (MAS pins
+   redirect_uris to it for the "Plotina Desktop" client). The legacy `element`
+   and the old cc.plotina.element scheme are gone from the build on purpose —
+   they put the word Element into the Windows registry and the .desktop file.
+   The patch is still needed because electron-builder applies its own
+   `protocols` config only to macOS bundles and Linux .desktop files, so on
+   Windows the runtime handler in src/protocol.ts is the only registration the
+   app ever gets. The list normalisation and the registration/deeplink
+   predicates live in desktop/protocol-schemes.ts (copied into src next to the
+   other Plotina sources) so they are unit-tested instead of only
+   grep-asserted.
 """
 import sys
 from pathlib import Path
@@ -65,7 +68,8 @@ patch(main, [
      "icon: await getMainWindowIcon(),  // PLOTINA-SHELL-PATCH: X11 _NET_WM_ICON size limit", 1),
     ("const protocolHandler = new ProtocolHandler(buildConfig.protocol);",
      "// PLOTINA-SHELL-PATCH: pass the variant's full scheme list (see\n"
-     "// protocol-schemes.ts); upstream registers only protocols[0] and `element`.\n"
+     "// protocol-schemes.ts); upstream registers only protocols[0], while the\n"
+     "// variant (one scheme: io.element.desktop) is the source of truth.\n"
      "const protocolHandler = new ProtocolHandler(buildConfig.protocol, buildConfig.protocols);", 1),
 ])
 
@@ -111,8 +115,8 @@ patch(build_config, [
     ('            protocol: (packageJson["electron_protocol"] as string) || "io.element.desktop",',
      '            protocol: (packageJson["electron_protocol"] as string) || "io.element.desktop",\n'
      '            // PLOTINA-SHELL-PATCH: without this the shell registers only\n'
-     '            // protocols[0], so a variant-declared scheme such as\n'
-     '            // cc.plotina.element is advertised but claimed by nobody.\n'
+     '            // protocols[0]; the variant is the single source of truth for\n'
+     '            // which schemes exist (currently just io.element.desktop).\n'
      '            protocols: String(packageJson["electron_protocols"] || "")\n'
      '                .split(",")\n'
      '                .map((scheme) => scheme.trim())\n'
@@ -126,8 +130,8 @@ patch(protocol, [
      'const LEGACY_PROTOCOL = "element";\n',
      'import { type Args, getArgsForProtocolRegistration } from "./args.js";\n'
      '// PLOTINA-SHELL-PATCH: register and accept every scheme the variant\n'
-     '// declares, not only protocols[0] + the legacy `element` scheme; the list\n'
-     '// logic (and its tests) lives in desktop/protocol-schemes.ts.\n'
+     '// declares, instead of upstream\'s protocols[0] plus the legacy `element`;\n'
+     '// the list logic (and its tests) lives in desktop/protocol-schemes.ts.\n'
      'import {\n'
      '    isSchemeProtocol,\n'
      '    isSchemeUrl,\n'
@@ -140,8 +144,8 @@ patch(protocol, [
      "    public constructor(private readonly protocol: string) {\n",
      "    private readonly store: Record<string, string> = {};\n"
      "    private readonly sessionId: string;\n"
-     "    // PLOTINA-SHELL-PATCH: protocols[0] + `element` + everything else the\n"
-     "    // variant declares (electron_protocols in the packaged package.json).\n"
+     "    // PLOTINA-SHELL-PATCH: protocols[0] + everything else the variant\n"
+     "    // declares (electron_protocols in the packaged package.json).\n"
      "    private readonly schemes: string[];\n"
      "\n"
      "    public constructor(private readonly protocol: string, declaredProtocols: string[] = []) {\n"

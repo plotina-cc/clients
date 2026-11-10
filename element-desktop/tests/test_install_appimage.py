@@ -480,6 +480,12 @@ class TestAppImagePath(InstallerCase):
         self.assertIn("Name=Plotina Desktop", desktop)
         self.assertIn("Comment=", desktop)
         self.assertIn("MimeType=x-scheme-handler/io.element.desktop;", desktop)
+        # The retired schemes must not come back into the .desktop file: they
+        # are what put the word Element into the handler list.
+        for retired in ("element", "cc.plotina.element"):
+            with self.subTest(retired=retired):
+                self.assertNotIn(f"x-scheme-handler/{retired};", desktop)
+                self.assertNotIn(f"x-scheme-handler/{retired}\n", desktop)
         self.assertTrue(any(l.endswith("set default-url-scheme-handler io.element.desktop "
                                         "plotina-desktop.desktop") for l in self.mock_log_lines()),
                         self.mock_log_lines())

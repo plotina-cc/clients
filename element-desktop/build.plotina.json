@@ -4,9 +4,7 @@
     "productName": "Plotina Desktop",
     "description": "Plotina Desktop — Matrix client with DeepFilterNet3 noise suppression",
     "protocols": [
-        "io.element.desktop",
-        "element",
-        "cc.plotina.element"
+        "io.element.desktop"
     ],
     "linux": {
         "desktop": {
