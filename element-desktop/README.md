@@ -328,6 +328,16 @@ desktop entry, and makes `io.element.desktop`, `element` and
 desktop entry system-wide; if an upstream Element is already the default
 handler, choose Plotina Desktop once in the browser's protocol prompt.
 
+Windows has no `.desktop` file, and electron-builder only applies the variant's
+`protocols` list to macOS bundles and Linux desktop entries, so the shell claims
+the schemes itself: `apps/desktop/src/protocol.ts` registers **every** scheme in
+`element-desktop/build.plotina.json` (`io.element.desktop`, `element`,
+`cc.plotina.element`) when the app starts, and the packaged `package.json`
+carries that list as `electron_protocols`. `matrix:` is deliberately **not**
+claimed — taking every `matrix:` link away from another installed client is a
+user decision, not an install-time default — and `https://plotina.cc` cannot be
+associated at all, because Windows associates schemes, not URLs.
+
 The same steps run in CI: `.github/workflows/build-element-desktop.yml` triggers
 on a `v*-plotina.*` tag, builds one webapp and hands it to the Linux and Windows
 packaging jobs, then attaches the stable names to the release. macOS is out of

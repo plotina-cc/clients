@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Apply Plotina's shell patches to an element-web apps/desktop/src tree.
+"""Apply Plotina's shell patches to an element-web apps/desktop tree.
 
     desktop/patch-shell.py [path/to/apps/desktop/src]
 
-Three edits, all pinned with unique-context asserts so an upstream drift fails
-the build loudly instead of silently shipping the old behaviour:
+Every edit is pinned with unique-context asserts so an upstream drift fails the
+build loudly instead of silently shipping the old behaviour:
 
 1. electron-main.ts — the main window's `icon` option goes through
    getMainWindowIcon() (desktop/icon.ts): Chromium cannot fit a 256x256 icon
@@ -24,6 +24,18 @@ the build loudly instead of silently shipping the old behaviour:
    second setUpdateChannel argument is the user-confirmed "return to stable"
    downgrade flag (desktop/updater.ts enforces that it is a running -dev
    build before honouring it).
+
+4. electron-builder.ts + src/build-config.ts + src/electron-main.ts +
+   src/protocol.ts — the whole `protocols` list from build.plotina.json reaches
+   the shell and is registered, not only protocols[0] and the legacy `element`.
+   electron-builder applies its own `protocols` config to macOS bundles and
+   Linux .desktop files only, so on Windows this handler is the one thing that
+   can claim cc.plotina.element; without it the variant advertises a scheme
+   registered nowhere (QA `protocol:declared` NOT-REGISTERED) and
+   cc.plotina.element:// links open the browser. The list normalisation and the
+   registration/deeplink predicates live in desktop/protocol-schemes.ts (copied
+   into src next to the other Plotina sources) so they are unit-tested instead
+   of only grep-asserted.
 """
 import sys
 from pathlib import Path
@@ -51,6 +63,10 @@ patch(main, [
      'import { getIconPath, getMainWindowIcon } from "./icon.js";', 1),
     ("icon: await getIconPath(),",
      "icon: await getMainWindowIcon(),  // PLOTINA-SHELL-PATCH: X11 _NET_WM_ICON size limit", 1),
+    ("const protocolHandler = new ProtocolHandler(buildConfig.protocol);",
+     "// PLOTINA-SHELL-PATCH: pass the variant's full scheme list (see\n"
+     "// protocol-schemes.ts); upstream registers only protocols[0] and `element`.\n"
+     "const protocolHandler = new ProtocolHandler(buildConfig.protocol, buildConfig.protocols);", 1),
 ])
 
 ipc = SRC / "ipc.ts"
@@ -74,4 +90,106 @@ patch(ipc, [
      '            // allowDowngrade is the user-confirmed "Вернуться на стабильный"\n'
      '            // and only applies to a running -dev build (see updater.ts).\n'
      '            ret = setUpdateChannel(String(args[0]), args[1] === true);', 1),
+])
+
+build_config = SRC / "build-config.ts"
+patch(build_config, [
+    ("interface BuildConfig {\n"
+     "    // Application User Model ID\n"
+     "    appId: string;\n"
+     "    // Protocol string used for OIDC callbacks\n"
+     "    protocol: string;",
+     "interface BuildConfig {\n"
+     "    // Application User Model ID\n"
+     "    appId: string;\n"
+     "    // Protocol string used for OIDC callbacks\n"
+     "    protocol: string;\n"
+     "    // PLOTINA-SHELL-PATCH: every scheme the variant declares, from the\n"
+     "    // comma-separated electron_protocols electron-builder.ts writes out of\n"
+     "    // build.plotina.json protocols[]. `protocol` stays protocols[0].\n"
+     "    protocols: string[];", 1),
+    ('            protocol: (packageJson["electron_protocol"] as string) || "io.element.desktop",',
+     '            protocol: (packageJson["electron_protocol"] as string) || "io.element.desktop",\n'
+     '            // PLOTINA-SHELL-PATCH: without this the shell registers only\n'
+     '            // protocols[0], so a variant-declared scheme such as\n'
+     '            // cc.plotina.element is advertised but claimed by nobody.\n'
+     '            protocols: String(packageJson["electron_protocols"] || "")\n'
+     '                .split(",")\n'
+     '                .map((scheme) => scheme.trim())\n'
+     '                .filter(Boolean),', 1),
+])
+
+protocol = SRC / "protocol.ts"
+patch(protocol, [
+    ('import { type Args, getArgsForProtocolRegistration } from "./args.js";\n'
+     '\n'
+     'const LEGACY_PROTOCOL = "element";\n',
+     'import { type Args, getArgsForProtocolRegistration } from "./args.js";\n'
+     '// PLOTINA-SHELL-PATCH: register and accept every scheme the variant\n'
+     '// declares, not only protocols[0] + the legacy `element` scheme; the list\n'
+     '// logic (and its tests) lives in desktop/protocol-schemes.ts.\n'
+     'import {\n'
+     '    isSchemeProtocol,\n'
+     '    isSchemeUrl,\n'
+     '    protocolSchemeList,\n'
+     '    registerProtocolSchemes,\n'
+     '} from "./protocol-schemes.js";\n', 1),
+    ("    private readonly store: Record<string, string> = {};\n"
+     "    private readonly sessionId: string;\n"
+     "\n"
+     "    public constructor(private readonly protocol: string) {\n",
+     "    private readonly store: Record<string, string> = {};\n"
+     "    private readonly sessionId: string;\n"
+     "    // PLOTINA-SHELL-PATCH: protocols[0] + `element` + everything else the\n"
+     "    // variant declares (electron_protocols in the packaged package.json).\n"
+     "    private readonly schemes: string[];\n"
+     "\n"
+     "    public constructor(private readonly protocol: string, declaredProtocols: string[] = []) {\n"
+     "        this.schemes = protocolSchemeList(this.protocol, declaredProtocols);\n", 1),
+    ("    private checkArgIsUrl = (arg: string): boolean => {\n"
+     "        return arg.startsWith(`${this.protocol}:/`) || arg.startsWith(`${LEGACY_PROTOCOL}://`);\n"
+     "    };",
+     "    private checkArgIsUrl = (arg: string): boolean => {\n"
+     "        return isSchemeUrl(arg, this.schemes);\n"
+     "    };", 1),
+    ("        const args = getArgsForProtocolRegistration(parsedArgs);\n"
+     "        if (app.isPackaged) {\n"
+     "            app.setAsDefaultProtocolClient(this.protocol, process.execPath, args);\n"
+     "            app.setAsDefaultProtocolClient(LEGACY_PROTOCOL, process.execPath, args);\n"
+     "        } else if (process.platform === \"win32\") {\n",
+     "        const args = getArgsForProtocolRegistration(parsedArgs);\n"
+     "        // PLOTINA-SHELL-PATCH: claim every scheme of the variant. On Windows\n"
+     "        // this write is what makes a scheme real: electron-builder does not\n"
+     "        // register protocols in its NSIS installer (macOS/Linux only).\n"
+     "        if (app.isPackaged) {\n"
+     "            registerProtocolSchemes(app, this.schemes, process.execPath, args);\n"
+     "        } else if (process.platform === \"win32\") {\n", 1),
+    ("            app.setAsDefaultProtocolClient(this.protocol, process.execPath, [app.getAppPath(), ...args]);\n"
+     "            app.setAsDefaultProtocolClient(LEGACY_PROTOCOL, process.execPath, [app.getAppPath(), ...args]);\n",
+     "            registerProtocolSchemes(app, this.schemes, process.execPath, [app.getAppPath(), ...args]);\n", 1),
+    ("        if (parsed.protocol !== `${this.protocol}:` && parsed.protocol !== `${LEGACY_PROTOCOL}:`) {\n",
+     "        if (!isSchemeProtocol(parsed.protocol, this.schemes)) {\n", 1),
+    ("        const deeplinkUrl = args.find(\n"
+     "            (arg) => arg.startsWith(`${this.protocol}:/`) || arg.startsWith(`${LEGACY_PROTOCOL}://`),\n"
+     "        );\n",
+     "        const deeplinkUrl = args.find((arg) => isSchemeUrl(arg, this.schemes));\n", 1),
+    ("            if (parsedUrl.protocol === `${this.protocol}:` || parsedUrl.protocol === `${LEGACY_PROTOCOL}:`) {\n",
+     "            if (isSchemeProtocol(parsedUrl.protocol, this.schemes)) {\n", 1),
+])
+
+# electron-builder.ts sits next to src/ (apps/desktop/electron-builder.ts): it
+# turns the variant into package.json extraMetadata, which is what the packaged
+# app reads back at runtime.
+builder = SRC.parent / "electron-builder.ts"
+patch(builder, [
+    ("        electron_appId: variant.appId,\n"
+     "        electron_protocol: variant.protocols[0],",
+     "        electron_appId: variant.appId,\n"
+     "        electron_protocol: variant.protocols[0],\n"
+     "        // PLOTINA-SHELL-PATCH: hand the shell the whole variant protocol\n"
+     "        // list (read back in src/build-config.ts). electron-builder's own\n"
+     "        // `protocols` option only covers macOS bundles and Linux .desktop\n"
+     "        // files, so the runtime registration in src/protocol.ts is what\n"
+     "        // claims the schemes on Windows.\n"
+     "        electron_protocols: variant.protocols.join(\",\"),", 1),
 ])
