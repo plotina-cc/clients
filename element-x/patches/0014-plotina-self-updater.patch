@@ -1,5 +1,5 @@
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
-index 50847073..698218f1 100644
+index 50847073..f88e15b7 100644
 --- a/app/build.gradle.kts
 +++ b/app/build.gradle.kts
 @@ -40,6 +40,15 @@ plugins {
@@ -18,7 +18,7 @@ index 50847073..698218f1 100644
      namespace = "io.element.android.x"
  
      defaultConfig {
-@@ -55,6 +64,25 @@ android {
+@@ -55,6 +64,34 @@ android {
          versionCode = Versions.VERSION_CODE
          versionName = Versions.VERSION_NAME
  
@@ -28,11 +28,20 @@ index 50847073..698218f1 100644
 +        // .github/workflows/build-element-x.yml in the clients repository); without the property
 +        // (plain local builds) upstream's Versions.VERSION_CODE stands, and a local build carries
 +        // the `.debug` application id suffix anyway, so it never competes with a release.
++        // A dev-channel tag `vYY.MM.p-plotina-x.N-dev.M` passes the same N *plus* -PplotinaDevBuild=M:
++        // the versionCode stays the base of the stable it is based on (AOSP replaces equal codes,
++        // checkDowngrade only rejects lower), and only versionName grows the `-dev.M` suffix -
++        // which is also how the installed app recognises its own dev build. See element-x/README.md.
 +        val plotinaBuildNumber = project.findProperty("plotinaBuildNumber")?.toString()?.toIntOrNull()
 +        if (plotinaBuildNumber != null) {
 +            require(plotinaBuildNumber in 0..999) { "plotinaBuildNumber must be in 0..999, was $plotinaBuildNumber" }
++            val plotinaDevBuild = project.findProperty("plotinaDevBuild")?.toString()?.toIntOrNull() ?: 0
++            require(plotinaDevBuild in 0..999) { "plotinaDevBuild must be in 0..999, was $plotinaDevBuild" }
 +            val cal = Versions.VERSION_NAME.split(".").map { it.toInt() }
 +            versionCode = (2000 + cal[0]) * 100_000 + cal[1] * 1_000 + plotinaBuildNumber
++            if (plotinaDevBuild > 0) {
++                versionName = "$versionName-dev.$plotinaDevBuild"
++            }
 +        }
 +        // The packaged APK still gets the ABI digit the androidComponents block appends
 +        // (base * 10 + abiCode, arm64-v8a = 2). update-x.json carries the arm64 APK's full
@@ -44,7 +53,7 @@ index 50847073..698218f1 100644
          // Plotina: no ndk.abiFilters here. AGP refuses to configure the project when
          // abiFilters is set at all while ABI splits are enabled; the filter only exists
          // upstream to serve the universal APK, which we build without.
-@@ -334,7 +362,9 @@ dependencies {
+@@ -334,7 +371,9 @@ dependencies {
      implementation(platform(libs.network.okhttp.bom))
      implementation(libs.network.okhttp.logging)
  
@@ -56,7 +65,7 @@ index 50847073..698218f1 100644
      testImplementation(projects.services.toolbox.test)
  }
 diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
-index e5872e54..1ed2e11b 100644
+index e5872e54..bbcef1e3 100644
 --- a/app/src/main/AndroidManifest.xml
 +++ b/app/src/main/AndroidManifest.xml
 @@ -8,6 +8,9 @@
@@ -69,7 +78,7 @@ index e5872e54..1ed2e11b 100644
      <application
          android:name=".ElementXApplication"
          android:allowBackup="false"
-@@ -57,6 +60,18 @@
+@@ -57,6 +60,29 @@
          https://github.com/element-hq/element-x-android/issues/4074) and for opening
          the application from a mobile.element.io link.
          -->
@@ -83,6 +92,17 @@ index e5872e54..1ed2e11b 100644
 +            android:excludeFromRecents="true"
 +            android:exported="false"
 +            android:launchMode="singleTop"
++            android:theme="@style/Theme.ElementX" />
++
++        <!--
++        Plotina: the «Обновления» page behind the Settings row: «Проверить обновления» on top,
++        the Stable/Dev channel choice beneath. Same opaque full-screen treatment; nothing
++        external may start it.
++        -->
++        <activity
++            android:name=".updater.PlotinaUpdatesActivity"
++            android:excludeFromRecents="true"
++            android:exported="false"
 +            android:theme="@style/Theme.ElementX" />
 +
          <activity
@@ -113,10 +133,10 @@ index cc058d0f..eab5ab90 100644
      /**
 diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt
 new file mode 100644
-index 00000000..503e2983
+index 00000000..00a0b576
 --- /dev/null
 +++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt
-@@ -0,0 +1,189 @@
+@@ -0,0 +1,310 @@
 +/*
 + * Plotina: the in-app updater's manifest side.
 + *
@@ -161,6 +181,11 @@ index 00000000..503e2983
 +    val sha256: String,
 +    val size: Long,
 +    val notes: String,
++    // Dev-channel builds carry the versionCode of the stable they are based on, unchanged. The
++    // dev number travels beside it as `devBuild: M`; the stable feed never has the key (0).
++    // Equal base codes then only move forward when M grows - a stable manifest can never bump a
++    // same-code dev install, and a dev manifest can never roll anyone back.
++    val devBuild: Int = 0,
 +) {
 +    fun toJson(): String = JSONObject()
 +        .put("client", "x")
@@ -169,6 +194,9 @@ index 00000000..503e2983
 +        .put("package", packageName)
 +        .put("versionName", versionName)
 +        .put("versionCode", versionCode)
++        // Only the dev feed serialises devBuild: a stable manifest keeps the documented shape
++        // byte-for-byte, so one file serves the edge host and the app alike.
++        .also { json -> if (devBuild > 0) json.put("devBuild", devBuild) }
 +        .put("apkUrl", apkUrl)
 +        .put("sha256", sha256)
 +        .put("size", size)
@@ -191,6 +219,10 @@ index 00000000..503e2983
 +            if (packageName != manifestPackage && !packageName.startsWith("$manifestPackage.")) return null
 +            val sha256 = json.getString("sha256").lowercase()
 +            if (!Regex("^[0-9a-f]{64}$").matches(sha256)) return null
++            // devBuild is the dev feed's own counter (see the tag v<base>-plotina-x.<N>-dev.<M>).
++            // Absent means the stable contract; nonsense means we do not trust the file at all.
++            val devBuild = json.optInt("devBuild", 0)
++            if (devBuild !in 0..999) return null
 +            UpdateInfo(
 +                packageName = manifestPackage,
 +                versionName = json.getString("versionName"),
@@ -199,6 +231,7 @@ index 00000000..503e2983
 +                sha256 = sha256,
 +                size = json.getLong("size"),
 +                notes = json.optString("notes"),
++                devBuild = devBuild,
 +            ).takeIf { it.versionCode > 0 && it.size > 0 }
 +        }.onFailure { Timber.tag(loggerTag).w(it, "update manifest did not parse") }.getOrNull()
 +    }
@@ -220,8 +253,39 @@ index 00000000..503e2983
 +object PlotinaUpdate {
 +    const val MANIFEST_URL = "https://plotina.cc/dl/update-x.json"
 +
++    /**
++     * The dev feed lives on GitHub, not on the edge host: a moving `dev-latest` release whose two
++     * assets (update-x-dev.json + Plotina-X.apk) are overwritten by hand when a dev build is cut.
++     * The URL is static forever, so opting in needs nothing but this constant.
++     */
++    const val DEV_MANIFEST_URL =
++        "https://github.com/plotina-cc/clients/releases/download/dev-latest/update-x-dev.json"
++
++    /**
++     * What the user opted into in Settings («Канал обновлений»). STABLE is the default and the
++     * only channel a fresh install follows; DEV adds the dev feed on top - same package, same key,
++     * dev builds based on the newest published stable.
++     */
++    enum class UpdateChannel {
++        STABLE,
++        DEV,
++        ;
++
++        companion object {
++            fun fromId(id: String?): UpdateChannel = if (id == "dev") DEV else STABLE
++        }
++    }
++
++    fun manifestUrlFor(channel: UpdateChannel): String = when (channel) {
++        UpdateChannel.STABLE -> MANIFEST_URL
++        UpdateChannel.DEV -> DEV_MANIFEST_URL
++    }
++
 +    /** The updater screen, named from other modules too - they cannot see the app module. */
 +    const val ACTIVITY_CLASS = "io.element.android.x.updater.PlotinaUpdateActivity"
++
++    /** The «Обновления» page (check action + channel section), named the same way for Settings. */
++    const val UPDATES_ACTIVITY_CLASS = "io.element.android.x.updater.PlotinaUpdatesActivity"
 +
 +    /** A already-fetched manifest, passed as JSON by the daily check. */
 +    const val EXTRA_MANIFEST = "plotina_update_manifest"
@@ -231,10 +295,30 @@ index 00000000..503e2983
 +
 +    private const val PREFS = "plotina-updater"
 +    private const val KEY_LAST_CHECK = "last_check_ms"
++    private const val KEY_CHANNEL = "update_channel"
 +    private const val CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000L
 +
 +    fun activityIntent(context: Context): Intent =
 +        Intent().setClassName(context.packageName, ACTIVITY_CLASS)
++
++    /** The Settings entry: the «Обновления» page. */
++    fun updatesActivityIntent(context: Context): Intent =
++        Intent().setClassName(context.packageName, UPDATES_ACTIVITY_CLASS)
++
++    /** The user's channel. Anything unrecognised reads as STABLE: the safe default, twice over. */
++    fun channel(context: Context): UpdateChannel =
++        UpdateChannel.fromId(
++            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_CHANNEL, null),
++        )
++
++    fun setChannel(context: Context, channel: UpdateChannel) {
++        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
++            .putString(KEY_CHANNEL, if (channel == UpdateChannel.DEV) "dev" else "stable")
++            .apply()
++    }
++
++    /** The manifest URL for whatever channel the user is on right now. */
++    fun manifestUrl(context: Context): String = manifestUrlFor(channel(context))
 +
 +    /**
 +     * Drops the ABI digit the packaging step appends (`base * 10 + abiCode`, arm64-v8a = 2,
@@ -252,22 +336,79 @@ index 00000000..503e2983
 +        context.packageManager.getPackageInfo(context.packageName, 0).versionName.orEmpty()
 +
 +    /**
++     * The dev number riding in a versionName: patch 0014's build.gradle.kts stamps dev builds as
++     * `<base>-dev.<M>` (CI -PplotinaDevBuild), so the installed app can tell a stable from a dev
++     * build of the same versionCode. Returns 0 for anything that is not exactly that shape.
++     */
++    fun devBuildOf(versionName: String): Int =
++        Regex("-dev\\.([0-9]{1,3})$").find(versionName)?.groupValues?.get(1)?.toIntOrNull() ?: 0
++
++    fun isDevVersionName(versionName: String): Boolean = devBuildOf(versionName) > 0
++
++    fun installedDevBuild(context: Context): Int = devBuildOf(installedVersionName(context))
++
++    /**
 +     * Whether the manifest describes a newer build. CI writes the arm64 split's full versionCode,
 +     * ABI digit included, into update-x.json, while a phone may run either split, so the digit is
 +     * dropped from the manifest number too before comparing base codes. Comparing the raw manifest
 +     * number against a base code made it always greater - the same build was offered forever
 +     * after updating (the .28 report); integer division keeps an armv7 install quiet as well.
++     *
++     * Equal base codes - the dev-channel case - only move forward through devBuild: the dev feed
++     * offers `dev.(M+1)` over `dev.M`, offers its first dev over the stable of the same base
++     * (Android permits an equal-versionCode replacement with the same signing key: PackageManager.
++     * checkDowngrade rejects *lower*, never *equal*), and a stable manifest (devBuild 0) offers
++     * nothing to a dev install of that base. Note for the record: AOSP's rule is what our own
++     * installs rely on; some OEM skins are stricter about equal codes, so the cross-grade to dev
++     * still needs the manual device test on real hardware.
 +     */
++    fun isUpdateAvailable(
++        manifestVersionCode: Long,
++        manifestDevBuild: Int,
++        installedBase: Long,
++        installedDevBuild: Int,
++    ): Boolean {
++        val manifestBase = baseCodeOf(manifestVersionCode)
++        return when {
++            manifestBase > installedBase -> true
++            manifestBase < installedBase -> false
++            else -> manifestDevBuild > installedDevBuild
++        }
++    }
++
 +    fun isUpdateAvailable(manifestVersionCode: Long, installedBase: Long): Boolean =
-+        baseCodeOf(manifestVersionCode) > installedBase
++        isUpdateAvailable(
++            manifestVersionCode = manifestVersionCode,
++            manifestDevBuild = 0,
++            installedBase = installedBase,
++            installedDevBuild = 0,
++        )
 +
 +    fun isUpdateAvailable(context: Context, info: UpdateInfo): Boolean =
-+        isUpdateAvailable(manifestVersionCode = info.versionCode, installedBase = installedBaseCode(context))
++        isUpdateAvailable(
++            manifestVersionCode = info.versionCode,
++            manifestDevBuild = info.devBuild,
++            installedBase = installedBaseCode(context),
++            installedDevBuild = installedDevBuild(context),
++        )
++
++    /**
++     * Whether the updater page should say "this is still a dev build, waiting for the stable that
++     * outranks it" instead of a plain "up to date": the user switched back to the stable channel
++     * while running a dev build, and no published stable is newer yet. When one appears, the
++     * normal Available flow takes it - greater base code, same package, same key, data preserved.
++     */
++    fun isPassiveStable(
++        channel: UpdateChannel,
++        installedIsDev: Boolean,
++        updateAvailable: Boolean,
++    ): Boolean = channel == UpdateChannel.STABLE && installedIsDev && !updateAvailable
 +
 +    /**
 +     * Silent once-a-day check started from MainActivity.onCreate. Only when the manifest really
 +     * describes a newer build does anything open: the updater page, carrying the manifest we
-+     * already fetched, so the user never waits on a second request.
++     * already fetched, so the user never waits on a second request. The channel decides which
++     * feed is read.
 +     */
 +    fun onAppStart(activity: Activity) {
 +        val prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -276,7 +417,7 @@ index 00000000..503e2983
 +        prefs.edit().putLong(KEY_LAST_CHECK, now).apply()
 +        val appContext = activity.applicationContext
 +        Thread {
-+            val info = fetch(appContext, MANIFEST_URL) ?: return@Thread
++            val info = fetch(appContext, manifestUrl(appContext)) ?: return@Thread
 +            if (!isUpdateAvailable(appContext, info)) return@Thread
 +            if (activity.isFinishing || activity.isDestroyed) return@Thread
 +            val intent = activityIntent(appContext)
@@ -308,10 +449,10 @@ index 00000000..503e2983
 +}
 diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt
 new file mode 100644
-index 00000000..35bd46b6
+index 00000000..a5c36300
 --- /dev/null
 +++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt
-@@ -0,0 +1,414 @@
+@@ -0,0 +1,427 @@
 +/*
 + * Plotina: the in-app updater's screen host.
 + *
@@ -369,11 +510,11 @@ index 00000000..35bd46b6
 +private data class DownloadRow(val status: Int, val done: Long, val total: Long)
 +
 +/**
-+ * Reached two ways: the «Проверить обновления» row at the root of Settings (always shows a result),
-+ * and the silent once-a-day check in [PlotinaUpdate.onAppStart], which only starts this Activity
-+ * when the manifest really is newer and hands over its own copy through
-+ * [PlotinaUpdate.EXTRA_MANIFEST]. A debug build can point it at a local manifest with
-+ * [PlotinaUpdate.EXTRA_MANIFEST_URL] (see PlotinaUpdate.kt).
++ * Reached two ways: the «Проверить обновления» action on the Settings › «Обновления» page
++ * [PlotinaUpdatesActivity] (always shows a result), and the silent once-a-day check in
++ * [PlotinaUpdate.onAppStart], which only starts this Activity when the manifest really is newer
++ * and hands over its own copy through [PlotinaUpdate.EXTRA_MANIFEST]. A debug build can point it
++ * at a local manifest with [PlotinaUpdate.EXTRA_MANIFEST_URL] (see PlotinaUpdate.kt).
 + *
 + * The page lives on its own: opening the updater navigates the user away from Settings, the same
 + * way Plotina Mobile pushes its updater route.
@@ -450,7 +591,10 @@ index 00000000..35bd46b6
 +    private fun check() {
 +        uiState = UpdaterUiState.Checking
 +        lifecycleScope.launch {
-+            val url = intent.getStringExtra(PlotinaUpdate.EXTRA_MANIFEST_URL) ?: PlotinaUpdate.MANIFEST_URL
++            // The EXTRA_MANIFEST_URL test hook wins; otherwise the user's channel decides the feed:
++            // the edge host for stable, the GitHub dev-latest release for dev.
++            val url = intent.getStringExtra(PlotinaUpdate.EXTRA_MANIFEST_URL)
++                ?: PlotinaUpdate.manifestUrl(this@PlotinaUpdateActivity)
 +            val info = withContext(Dispatchers.IO) { PlotinaUpdate.fetch(this@PlotinaUpdateActivity, url) }
 +            if (info == null) {
 +                uiState = UpdaterUiState.Message(
@@ -465,10 +609,20 @@ index 00000000..35bd46b6
 +
 +    private fun showResult(info: UpdateInfo) {
 +        pendingInfo = info
-+        uiState = if (PlotinaUpdate.isUpdateAvailable(this, info)) {
-+            UpdaterUiState.Available(info)
-+        } else {
-+            UpdaterUiState.UpToDate(PlotinaUpdate.installedVersionName(this))
++        val installed = PlotinaUpdate.installedVersionName(this)
++        val available = PlotinaUpdate.isUpdateAvailable(this, info)
++        uiState = when {
++            available -> UpdaterUiState.Available(info)
++            // Back on the stable channel while still running a dev build, and no published stable
++            // outranks it yet: say so instead of pretending "up to date". The moment a newer
++            // stable lands, `available` takes it through the normal download - same package id,
++            // same key, data preserved.
++            PlotinaUpdate.isPassiveStable(
++                channel = PlotinaUpdate.channel(this),
++                installedIsDev = PlotinaUpdate.isDevVersionName(installed),
++                updateAvailable = false,
++            ) -> UpdaterUiState.PassiveStable(installed)
++            else -> UpdaterUiState.UpToDate(installed)
 +        }
 +    }
 +
@@ -728,10 +882,10 @@ index 00000000..35bd46b6
 +}
 diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdaterScreen.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdaterScreen.kt
 new file mode 100644
-index 00000000..99369c0c
+index 00000000..30337759
 --- /dev/null
 +++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdaterScreen.kt
-@@ -0,0 +1,441 @@
+@@ -0,0 +1,467 @@
 +/*
 + * Plotina: the full-screen updater page.
 + *
@@ -802,6 +956,11 @@ index 00000000..99369c0c
 +    data object Installing : UpdaterUiState
 +    data object NeedPermission : UpdaterUiState
 +    data class UpToDate(val version: String) : UpdaterUiState
++    /**
++     * The dev-build-on-stable-channel case: nothing to download yet, and the honest answer is
++     * "still a dev build, waiting for a stable that outranks it" (PlotinaUpdate.isPassiveStable).
++     */
++    data class PassiveStable(val version: String) : UpdaterUiState
 +    data class Available(val info: UpdateInfo) : UpdaterUiState
 +    data class Downloading(val percent: Int) : UpdaterUiState
 +    data class Message(val text: String, val retry: Retry = Retry.None) : UpdaterUiState
@@ -894,6 +1053,17 @@ index 00000000..99369c0c
 +                        icon = CompoundIcons.CheckCircle(),
 +                        headline = stringResource(R.string.plotina_update_no_updates),
 +                        body = stringResource(R.string.plotina_update_is_latest, s.version),
++                    )
++
++                    is UpdaterUiState.PassiveStable -> Stage(
++                        icon = CompoundIcons.Admin(),
++                        headline = stringResource(R.string.plotina_update_passive_stable),
++                        body = stringResource(R.string.plotina_update_passive_stable_version, s.version),
++                        actions = {
++                            TextButton(onClick = onCloseClick, modifier = Modifier.fillMaxWidth()) {
++                                Text(stringResource(R.string.plotina_update_close))
++                            }
++                        },
 +                    )
 +
 +                    is UpdaterUiState.Available -> Column(
@@ -1136,6 +1306,16 @@ index 00000000..99369c0c
 +
 +@PreviewsDayNight
 +@Composable
++internal fun PlotinaUpdaterPassiveStablePreview() = ElementPreview {
++    PlotinaUpdaterScreen(
++        state = UpdaterUiState.PassiveStable(version = "26.10.1-dev.1"),
++        onBackClick = {}, onDownloadClick = {}, onLaterClick = {}, onCancelDownloadClick = {},
++        onOpenSettingsClick = {}, onRetryClick = {}, onCloseClick = {},
++    )
++}
++
++@PreviewsDayNight
++@Composable
 +internal fun PlotinaUpdaterDownloadingPreview() = ElementPreview {
 +    PlotinaUpdaterScreen(
 +        state = UpdaterUiState.Downloading(percent = 42),
@@ -1173,12 +1353,304 @@ index 00000000..99369c0c
 +    size = 137_608_493L,
 +    notes = "Исправления и улучшения.",
 +)
+diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdatesActivity.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdatesActivity.kt
+new file mode 100644
+index 00000000..0b4d20b7
+--- /dev/null
++++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdatesActivity.kt
+@@ -0,0 +1,286 @@
++/*
++ * Plotina: the «Обновления» page behind the single Settings row.
++ *
++ * One screen for everything update-related, mirroring Plotina Mobile's Updates tab: the primary
++ * action «Проверить обновления» on top, and beneath it the channel choice (Стабильный / Dev)
++ * that decides which feed both this check and the daily silent check read. The updater's engine
++ * is untouched: the check action opens PlotinaUpdateActivity, the page that owns every stage
++ * from Checking to Installing. The channel picker used to be its own Settings row and its own
++ * Activity (PlotinaUpdateChannelActivity); consolidating them removed both.
++ *
++ * Copyright (C) 2026 Plotina
++ *
++ * This program is free software: you can redistribute it and/or modify it under the terms of the
++ * GNU Affero General Public License as published by the Free Software Foundation, version 3.
++ */
++
++package io.element.android.x.updater
++
++import android.os.Bundle
++import androidx.activity.ComponentActivity
++import androidx.activity.compose.setContent
++import androidx.activity.enableEdgeToEdge
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.Spacer
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.height
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.layout.width
++import androidx.compose.foundation.layout.widthIn
++import androidx.compose.foundation.rememberScrollState
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.foundation.verticalScroll
++import androidx.compose.material3.Button
++import androidx.compose.material3.Card
++import androidx.compose.material3.CardDefaults
++import androidx.compose.material3.Icon
++import androidx.compose.material3.IconButton
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.RadioButton
++import androidx.compose.material3.Scaffold
++import androidx.compose.material3.Text
++import androidx.compose.material3.TopAppBar
++import androidx.compose.material3.TopAppBarDefaults
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.collectAsState
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.res.stringResource
++import androidx.compose.ui.text.style.TextAlign
++import androidx.compose.ui.unit.dp
++import io.element.android.compound.colors.SemanticColorsLightDark
++import io.element.android.compound.tokens.generated.CompoundIcons
++import io.element.android.libraries.architecture.bindings
++import io.element.android.libraries.designsystem.preview.ElementPreview
++import io.element.android.libraries.designsystem.preview.PreviewsDayNight
++import io.element.android.libraries.designsystem.theme.ElementThemeApp
++import io.element.android.x.R
++import io.element.android.x.di.AppBindings
++
++/**
++ * The entry point Settings actually opens: one row, one page. The check action hands over to
++ * [PlotinaUpdateActivity] (singleTop, so a running download is brought forward, not restarted);
++ * the channel radios persist immediately through [PlotinaUpdate.setChannel], the same store the
++ * daily silent check reads.
++ */
++class PlotinaUpdatesActivity : ComponentActivity() {
++    private lateinit var appBindings: AppBindings
++
++    override fun onCreate(savedInstanceState: Bundle?) {
++        super.onCreate(savedInstanceState)
++        // Same host wiring as the other updater pages: edge-to-edge, the app's own theme graph,
++        // so this page looks like the rest of Settings in light and dark alike.
++        enableEdgeToEdge()
++        appBindings = bindings()
++        setContent {
++            UpdatesTheme {
++                var channel by remember { mutableStateOf(PlotinaUpdate.channel(this)) }
++                PlotinaUpdatesScreen(
++                    channel = channel,
++                    installedVersion = PlotinaUpdate.installedVersionName(this),
++                    onBackClick = ::finish,
++                    onCheckClick = { startActivity(PlotinaUpdate.activityIntent(this)) },
++                    onChannelSelected = {
++                        channel = it
++                        PlotinaUpdate.setChannel(this, it)
++                    },
++                )
++            }
++        }
++    }
++
++    /** The app's own theme wrapper, exactly as PlotinaUpdateActivity and MainActivity use it. */
++    @Composable
++    private fun UpdatesTheme(content: @Composable () -> Unit) {
++        val colors by remember {
++            appBindings.enterpriseService().semanticColorsFlow(sessionId = null)
++        }.collectAsState(SemanticColorsLightDark.default)
++        ElementThemeApp(
++            appPreferencesStore = appBindings.preferencesStore(),
++            featureFlagService = appBindings.featureFlagService(),
++            compoundLight = colors.light,
++            compoundDark = colors.dark,
++            buildMeta = appBindings.buildMeta(),
++            content = content,
++        )
++    }
++}
++
++/**
++ * The page itself, stateless: the Activity decides the channel store and the navigation. The
++ * layout follows the other updater pages - Scaffold, TopAppBar, one column no wider than 480 dp
++ * over 24 dp of padding - with the primary check action above the channel section.
++ */
++@Composable
++internal fun PlotinaUpdatesScreen(
++    channel: PlotinaUpdate.UpdateChannel,
++    installedVersion: String,
++    onBackClick: () -> Unit,
++    onCheckClick: () -> Unit,
++    onChannelSelected: (PlotinaUpdate.UpdateChannel) -> Unit,
++    modifier: Modifier = Modifier,
++) {
++    Scaffold(
++        modifier = modifier,
++        topBar = {
++            TopAppBar(
++                title = { Text(stringResource(R.string.plotina_updates_title)) },
++                navigationIcon = {
++                    IconButton(onClick = onBackClick) {
++                        Icon(
++                            imageVector = CompoundIcons.Close(),
++                            contentDescription = stringResource(R.string.plotina_update_back),
++                        )
++                    }
++                },
++                colors = TopAppBarDefaults.topAppBarColors(
++                    containerColor = MaterialTheme.colorScheme.surface,
++                    titleContentColor = MaterialTheme.colorScheme.onSurface,
++                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
++                ),
++            )
++        },
++        containerColor = MaterialTheme.colorScheme.surface,
++    ) { contentPadding ->
++        Column(
++            modifier = Modifier
++                .fillMaxSize()
++                .padding(contentPadding)
++                .verticalScroll(rememberScrollState())
++                .padding(24.dp),
++            horizontalAlignment = Alignment.Start,
++        ) {
++            Column(
++                modifier = Modifier
++                    .widthIn(max = 480.dp)
++                    .fillMaxWidth(),
++            ) {
++                // Top: the primary action, like Mobile's Updates tab. The flow itself runs on
++                // the updater page, so this button only ever opens it.
++                Button(
++                    onClick = onCheckClick,
++                    modifier = Modifier.fillMaxWidth(),
++                ) {
++                    Icon(
++                        imageVector = CompoundIcons.Download(),
++                        contentDescription = null,
++                        modifier = Modifier.size(18.dp),
++                    )
++                    Spacer(modifier = Modifier.width(8.dp))
++                    Text(stringResource(R.string.plotina_updates_check))
++                }
++                Spacer(modifier = Modifier.height(8.dp))
++                Text(
++                    text = stringResource(R.string.plotina_updates_current_version, installedVersion),
++                    modifier = Modifier.fillMaxWidth(),
++                    textAlign = TextAlign.Center,
++                    style = MaterialTheme.typography.bodySmall,
++                    color = MaterialTheme.colorScheme.onSurfaceVariant,
++                )
++                // Below: which feed to follow. The rows and the dev warning are the former
++                // channel page's content, now a section of this page.
++                Spacer(modifier = Modifier.height(24.dp))
++                Text(
++                    text = stringResource(R.string.plotina_update_channel_title),
++                    style = MaterialTheme.typography.titleSmall,
++                    color = MaterialTheme.colorScheme.onSurface,
++                )
++                Spacer(modifier = Modifier.height(8.dp))
++                ChannelRow(
++                    title = stringResource(R.string.plotina_update_channel_stable),
++                    description = stringResource(R.string.plotina_update_channel_stable_desc),
++                    selected = channel == PlotinaUpdate.UpdateChannel.STABLE,
++                    onClick = { onChannelSelected(PlotinaUpdate.UpdateChannel.STABLE) },
++                )
++                ChannelRow(
++                    title = stringResource(R.string.plotina_update_channel_dev),
++                    description = stringResource(R.string.plotina_update_channel_dev_desc),
++                    selected = channel == PlotinaUpdate.UpdateChannel.DEV,
++                    onClick = { onChannelSelected(PlotinaUpdate.UpdateChannel.DEV) },
++                )
++                if (channel == PlotinaUpdate.UpdateChannel.DEV) {
++                    Spacer(modifier = Modifier.height(16.dp))
++                    Card(
++                        modifier = Modifier.fillMaxWidth(),
++                        shape = RoundedCornerShape(16.dp),
++                        colors = CardDefaults.cardColors(
++                            containerColor = MaterialTheme.colorScheme.surfaceVariant,
++                            contentColor = MaterialTheme.colorScheme.onSurface,
++                        ),
++                    ) {
++                        Text(
++                            text = stringResource(R.string.plotina_update_channel_dev_warning),
++                            modifier = Modifier.padding(16.dp),
++                            style = MaterialTheme.typography.bodyMedium,
++                            color = MaterialTheme.colorScheme.onSurfaceVariant,
++                        )
++                    }
++                }
++            }
++        }
++    }
++}
++
++/** One channel option: radio, title, description. Moved over from the old channel page. */
++@Composable
++private fun ChannelRow(
++    title: String,
++    description: String,
++    selected: Boolean,
++    onClick: () -> Unit,
++) {
++    Row(
++        modifier = Modifier
++            .fillMaxWidth()
++            .clickable(onClick = onClick)
++            .padding(vertical = 12.dp),
++        verticalAlignment = Alignment.CenterVertically,
++    ) {
++        RadioButton(selected = selected, onClick = onClick)
++        Column(modifier = Modifier.padding(start = 8.dp)) {
++            Text(
++                text = title,
++                style = MaterialTheme.typography.bodyLarge,
++                color = MaterialTheme.colorScheme.onSurface,
++                textAlign = TextAlign.Start,
++            )
++            Text(
++                text = description,
++                style = MaterialTheme.typography.bodySmall,
++                color = MaterialTheme.colorScheme.onSurfaceVariant,
++            )
++        }
++    }
++}
++
++@PreviewsDayNight
++@Composable
++internal fun PlotinaUpdatesStablePreview() = ElementPreview {
++    PlotinaUpdatesScreen(
++        channel = PlotinaUpdate.UpdateChannel.STABLE,
++        installedVersion = "26.10.1",
++        onBackClick = {},
++        onCheckClick = {},
++        onChannelSelected = {},
++    )
++}
++
++@PreviewsDayNight
++@Composable
++internal fun PlotinaUpdatesDevPreview() = ElementPreview {
++    PlotinaUpdatesScreen(
++        channel = PlotinaUpdate.UpdateChannel.DEV,
++        installedVersion = "26.10.1-dev.1",
++        onBackClick = {},
++        onCheckClick = {},
++        onChannelSelected = {},
++    )
++}
 diff --git a/app/src/main/res/values-ru/plotina_updater.xml b/app/src/main/res/values-ru/plotina_updater.xml
 new file mode 100644
-index 00000000..0f4ccd23
+index 00000000..3905ac1f
 --- /dev/null
 +++ b/app/src/main/res/values-ru/plotina_updater.xml
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,40 @@
 +<?xml version="1.0" encoding="utf-8"?>
 +<!--
 +  ~ Plotina: строки встроенного обновителя (io.element.android.x.updater).
@@ -1207,13 +1679,24 @@ index 00000000..0f4ccd23
 +    <string name="plotina_update_retry">"Повторить"</string>
 +    <string name="plotina_update_cancel">"Отмена"</string>
 +    <string name="plotina_update_close">"Закрыть"</string>
++    <string name="plotina_update_passive_stable">"Пока dev-сборка, ждём стабильный релиз для перехода"</string>
++    <string name="plotina_update_passive_stable_version">"Установлена dev-версия %1$s. Как только выйдет стабильный релиз новее, он предложится обычным обновлением — данные сохранятся."</string>
++    <string name="plotina_updates_title">"Обновления"</string>
++    <string name="plotina_updates_check">"Проверить обновления"</string>
++    <string name="plotina_updates_current_version">"Установленная версия: %1$s"</string>
++    <string name="plotina_update_channel_title">"Канал обновлений"</string>
++    <string name="plotina_update_channel_stable">"Стабильный"</string>
++    <string name="plotina_update_channel_stable_desc">"Официальные релизы с plotina.cc"</string>
++    <string name="plotina_update_channel_dev">"Dev"</string>
++    <string name="plotina_update_channel_dev_desc">"Ранние сборки с GitHub (release dev-latest)"</string>
++    <string name="plotina_update_channel_dev_warning">"Dev-сборки тестируют следующую версию заранее и могут работать нестабильно. Это та же программа и те же данные: переключение обратно на «Стабильный» ничего не удалит — переход к стабильному релизу произойдёт, когда он станет новее текущей dev-сборки."</string>
 +</resources>
 diff --git a/app/src/main/res/values/plotina_updater.xml b/app/src/main/res/values/plotina_updater.xml
 new file mode 100644
-index 00000000..e68a9ab7
+index 00000000..0f4c3c9e
 --- /dev/null
 +++ b/app/src/main/res/values/plotina_updater.xml
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,40 @@
 +<?xml version="1.0" encoding="utf-8"?>
 +<!--
 +  ~ Plotina: strings for the in-app updater (io.element.android.x.updater).
@@ -1242,6 +1725,17 @@ index 00000000..e68a9ab7
 +    <string name="plotina_update_retry">"Retry"</string>
 +    <string name="plotina_update_cancel">"Cancel"</string>
 +    <string name="plotina_update_close">"Close"</string>
++    <string name="plotina_update_passive_stable">"Still a dev build — waiting for a stable release to switch back"</string>
++    <string name="plotina_update_passive_stable_version">"Dev version %1$s is installed. As soon as a newer stable release appears, it will be offered the normal way — your data stays."</string>
++    <string name="plotina_updates_title">"Updates"</string>
++    <string name="plotina_updates_check">"Check for updates"</string>
++    <string name="plotina_updates_current_version">"Installed version: %1$s"</string>
++    <string name="plotina_update_channel_title">"Update channel"</string>
++    <string name="plotina_update_channel_stable">"Stable"</string>
++    <string name="plotina_update_channel_stable_desc">"Official releases from plotina.cc"</string>
++    <string name="plotina_update_channel_dev">"Dev"</string>
++    <string name="plotina_update_channel_dev_desc">"Early builds from GitHub (dev-latest release)"</string>
++    <string name="plotina_update_channel_dev_warning">"Dev builds test the next version early and may be unstable. It is the same app and the same data: switching back to Stable deletes nothing — you move back as soon as a stable release is newer than the dev build."</string>
 +</resources>
 diff --git a/app/src/test/kotlin/io/element/android/x/intent/DefaultIntentProviderTest.kt b/app/src/test/kotlin/io/element/android/x/intent/DefaultIntentProviderTest.kt
 index be059ed2..214369d6 100644
@@ -1269,14 +1763,105 @@ index be059ed2..214369d6 100644
  class DefaultIntentProviderTest : RobolectricTest() {
      @Test
      fun `test getViewRoomIntent with data`() {
+diff --git a/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdateManifestTest.kt b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdateManifestTest.kt
+new file mode 100644
+index 00000000..1089784e
+--- /dev/null
++++ b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdateManifestTest.kt
+@@ -0,0 +1,85 @@
++/*
++ * Plotina: the update manifest's JSON contract, including the dev feed's devBuild.
++ *
++ * org.json.JSONObject is Android platform code: on a plain JVM unit test it is a "Stub!" shell,
++ * so the parsing that guards every update - stable and dev alike - runs under Robolectric here.
++ *
++ * Copyright (C) 2026 Plotina
++ *
++ * This program is free software: you can redistribute it and/or modify it under the terms of the
++ * GNU Affero General Public License as published by the Free Software Foundation, version 3.
++ */
++
++package io.element.android.x.updater
++
++import android.app.Application
++import android.content.Context
++import com.google.common.truth.Truth.assertThat
++import io.element.android.tests.testutils.robolectric.RobolectricTest
++import io.mockk.every
++import io.mockk.mockk
++import org.junit.Test
++import org.robolectric.annotation.Config
++
++@Config(application = Application::class)
++class PlotinaUpdateManifestTest : RobolectricTest() {
++    // Base code of v26.10.1-plotina-x.30; the arm64 number is what the dev feed publishes.
++    private val base = 202610030L
++    private val arm64Code = base * 10 + 2
++
++    private val aReleaseContext = mockk<Context> { every { packageName } returns "cc.plotina.x" }
++
++    @Test
++    fun `fromJson reads devBuild from the dev manifest`() {
++        val info = UpdateInfo.fromJson(aReleaseContext, aDevManifestJson())
++        assertThat(info).isNotNull()
++        assertThat(info!!.devBuild).isEqualTo(1)
++        assertThat(info.versionCode).isEqualTo(arm64Code)
++        assertThat(info.versionName).isEqualTo("26.10.1-dev.1")
++        assertThat(info.apkUrl).startsWith("https://github.com/")
++    }
++
++    @Test
++    fun `fromJson defaults devBuild to 0 for the stable contract`() {
++        val raw = aDevManifestJson().replace("\"devBuild\":1,", "")
++        val info = UpdateInfo.fromJson(aReleaseContext, raw)
++        assertThat(info).isNotNull()
++        assertThat(info!!.devBuild).isEqualTo(0)
++    }
++
++    @Test
++    fun `fromJson rejects a devBuild that is not a small number`() {
++        assertThat(UpdateInfo.fromJson(aReleaseContext, aDevManifestJson(devBuild = -1))).isNull()
++        assertThat(UpdateInfo.fromJson(aReleaseContext, aDevManifestJson(devBuild = 1000))).isNull()
++    }
++
++    @Test
++    fun `toJson carries devBuild for a dev manifest and drops it for a stable one`() {
++        val dev = UpdateInfo.fromJson(aReleaseContext, aDevManifestJson())!!
++        // The daily check hands this exact string to the Activity, where it is re-parsed: the
++        // round trip must not lose the dev number.
++        assertThat(dev.toJson()).contains("\"devBuild\":1")
++        val round = UpdateInfo.fromJson(aReleaseContext, dev.toJson())
++        assertThat(round).isEqualTo(dev)
++
++        val stable = dev.copy(devBuild = 0)
++        assertThat(stable.toJson()).doesNotContain("devBuild")
++        assertThat(UpdateInfo.fromJson(aReleaseContext, stable.toJson())).isEqualTo(stable)
++    }
++
++    @Test
++    fun `a dev manifest is still held to the package and https rules`() {
++        // The dev feed lives on GitHub; fromJson only ever accepts https and our own package, no
++        // matter which channel fetched it.
++        val wrongPackage = aDevManifestJson().replace("\"package\":\"cc.plotina.x\"", "\"package\":\"com.evil.app\"")
++        assertThat(UpdateInfo.fromJson(aReleaseContext, wrongPackage)).isNull()
++        val plainHttp = aDevManifestJson().replace("https://", "http://")
++        assertThat(UpdateInfo.fromJson(aReleaseContext, plainHttp)).isNull()
++    }
++
++    private fun aDevManifestJson(devBuild: Int = 1) =
++        "{\"client\":\"x\",\"package\":\"cc.plotina.x\",\"versionName\":\"26.10.1-dev.1\"," +
++            "\"versionCode\":$arm64Code,\"devBuild\":$devBuild," +
++            "\"apkUrl\":\"https://github.com/plotina-cc/clients/releases/download/dev-latest/Plotina-X.apk\"," +
++            "\"sha256\":\"${"0".repeat(64)}\",\"size\":137608493,\"notes\":\"Dev.\"}"
++}
 diff --git a/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdateTest.kt b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdateTest.kt
 new file mode 100644
-index 00000000..ead7e918
+index 00000000..93509097
 --- /dev/null
 +++ b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdateTest.kt
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,188 @@
 +/*
-+ * Plotina: the in-app updater's versionCode comparison.
++ * Plotina: the in-app updater's versionCode comparison and update-channel rules.
 + *
 + * Copyright (C) 2026 Plotina
 + *
@@ -1294,6 +1879,11 @@ index 00000000..ead7e918
 + * have installed either split, so installed codes arrive as `base * 10 + 1` or `base * 10 + 2`.
 + * The comparison drops the ABI digit from both sides: with the manifest's raw number once compared
 + * against a base code, every check answered "newer" and build .28 offered itself forever.
++ *
++ * The dev channel adds one rule on top: a dev release keeps the base code of the stable it is
++ * based on (`v26.10.1-plotina-x.30-dev.1` is still base 202610030) and carries its dev number in
++ * the manifest's `devBuild` and in the installed versionName's `-dev.M` suffix. An equal base code
++ * only moves forward through devBuild, and only a dev manifest ever has one.
 + */
 +class PlotinaUpdateTest {
 +    // Base code of v26.10.1-plotina-x.28 under the tag formula: (2000+26)*100000 + 10*1000 + 28.
@@ -1331,13 +1921,139 @@ index 00000000..ead7e918
 +    fun `test an older manifest is not offered`() {
 +        assertThat(PlotinaUpdate.isUpdateAvailable((base - 1) * 10 + 2, base)).isFalse()
 +    }
++
++    // --- channel selection ---------------------------------------------------------------------
++
++    @Test
++    fun `the stable channel reads the plotina cc feed`() {
++        assertThat(PlotinaUpdate.manifestUrlFor(PlotinaUpdate.UpdateChannel.STABLE))
++            .isEqualTo("https://plotina.cc/dl/update-x.json")
++    }
++
++    @Test
++    fun `the dev channel reads the GitHub dev-latest feed`() {
++        // Static URL: tag dev-latest is a moving target whose assets are overwritten by hand, so
++        // the app never needs to know a version number to find the feed.
++        assertThat(PlotinaUpdate.manifestUrlFor(PlotinaUpdate.UpdateChannel.DEV))
++            .isEqualTo("https://github.com/plotina-cc/clients/releases/download/dev-latest/update-x-dev.json")
++    }
++
++    @Test
++    fun `the two channels are distinct URLs`() {
++        assertThat(PlotinaUpdate.manifestUrlFor(PlotinaUpdate.UpdateChannel.DEV))
++            .isNotEqualTo(PlotinaUpdate.MANIFEST_URL)
++    }
++
++    // --- dev build numbers riding in the versionName ---------------------------------------------
++
++    @Test
++    fun `a stable versionName carries devBuild 0`() {
++        assertThat(PlotinaUpdate.devBuildOf("26.10.1")).isEqualTo(0)
++        assertThat(PlotinaUpdate.isDevVersionName("26.10.1")).isFalse()
++    }
++
++    @Test
++    fun `a dev versionName carries its dev build number`() {
++        assertThat(PlotinaUpdate.devBuildOf("26.10.1-dev.1")).isEqualTo(1)
++        assertThat(PlotinaUpdate.devBuildOf("26.10.1-dev.12")).isEqualTo(12)
++        assertThat(PlotinaUpdate.isDevVersionName("26.10.1-dev.1")).isTrue()
++    }
++
++    @Test
++    fun `a versionName that only looks like a dev one is not dev`() {
++        assertThat(PlotinaUpdate.devBuildOf("26.10.1-dev")).isEqualTo(0)
++        assertThat(PlotinaUpdate.devBuildOf("26.10.1-dev.x")).isEqualTo(0)
++        assertThat(PlotinaUpdate.devBuildOf("dev.1")).isEqualTo(0)
++        assertThat(PlotinaUpdate.isDevVersionName("26.10.1-dev")).isFalse()
++    }
++
++    // --- dev-to-dev and dev-over-stable comparison ----------------------------------------------
++
++    @Test
++    fun `the dev feed offers a dev build over the stable it is based on`() {
++        // Same base code as the installed stable: AOSP's checkDowngrade only rejects *lower*
++        // versionCodes, so the equal code installs over it with the data intact.
++        assertThat(PlotinaUpdate.isUpdateAvailable(arm64Code, 1, base, 0)).isTrue()
++    }
++
++    @Test
++    fun `a newer dev build is offered over an older dev build`() {
++        assertThat(PlotinaUpdate.isUpdateAvailable(arm64Code, 2, base, 1)).isTrue()
++    }
++
++    @Test
++    fun `the very same dev build is not offered again`() {
++        assertThat(PlotinaUpdate.isUpdateAvailable(arm64Code, 1, base, 1)).isFalse()
++        assertThat(PlotinaUpdate.isUpdateAvailable(armv7Code, 1, base, 1)).isFalse()
++    }
++
++    @Test
++    fun `a dev manifest never rolls an install back to an older base`() {
++        // A dev build must be based on the *latest published* stable - CI enforces the tag shape,
++        // and the comparison protects users either way: an equal-base offer never wins over a
++        // greater base...
++        val greaterBase = (base + 1) * 10 + 2
++        assertThat(PlotinaUpdate.isUpdateAvailable(greaterBase, 9, base, 0)).isTrue()
++        // ...and a smaller base is never offered, however big its devBuild claims to be.
++        assertThat(PlotinaUpdate.isUpdateAvailable(arm64Code - 10, 9, base, 0)).isFalse()
++    }
++
++    @Test
++    fun `a stable manifest does not bump a same-base dev install`() {
++        // Stable .28 and a dev .28-dev.N share the base code: while the dev feed is the newest
++        // thing out there, the stable feed offers nothing to a dev install.
++        assertThat(PlotinaUpdate.isUpdateAvailable(arm64Code, 0, base, 1)).isFalse()
++    }
++
++    @Test
++    fun `a newer stable release is offered over a dev install`() {
++        // The way back to stable: the next stable has a greater base, so the normal path takes it
++        // and data is preserved - same package id, same signing key.
++        val nextStable = (base + 1) * 10 + 2
++        assertThat(PlotinaUpdate.isUpdateAvailable(nextStable, 0, base, 1)).isTrue()
++    }
++
++    // --- passive stable: what the page shows while no stable outranks the dev install ------------
++
++    @Test
++    fun `a dev install on the stable channel with nothing newer is the passive case`() {
++        assertThat(PlotinaUpdate.isPassiveStable(
++            channel = PlotinaUpdate.UpdateChannel.STABLE, installedIsDev = true, updateAvailable = false,
++        )).isTrue()
++    }
++
++    @Test
++    fun `a dev install on the dev channel is not passive`() {
++        // There the answer is a plain UpToDate: the dev feed is what the user asked to follow.
++        assertThat(PlotinaUpdate.isPassiveStable(
++            channel = PlotinaUpdate.UpdateChannel.DEV, installedIsDev = true, updateAvailable = false,
++        )).isFalse()
++    }
++
++    @Test
++    fun `a passive message never hides a real update`() {
++        assertThat(PlotinaUpdate.isPassiveStable(
++            channel = PlotinaUpdate.UpdateChannel.STABLE, installedIsDev = true, updateAvailable = true,
++        )).isFalse()
++    }
++
++    @Test
++    fun `a stable install is never told about waiting for stable`() {
++        assertThat(PlotinaUpdate.isPassiveStable(
++            channel = PlotinaUpdate.UpdateChannel.STABLE, installedIsDev = false, updateAvailable = false,
++        )).isFalse()
++    }
++
++    // --- manifest JSON contract ------------------------------------------------------------------
++    // The parsing lives in PlotinaUpdateManifestTest: org.json.JSONObject is Android code, so it
++    // needs the Robolectric runtime rather than a plain JVM unit test.
 +}
 diff --git a/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdaterScreenTest.kt b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdaterScreenTest.kt
 new file mode 100644
-index 00000000..33eec197
+index 00000000..04d2731d
 --- /dev/null
 +++ b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdaterScreenTest.kt
-@@ -0,0 +1,181 @@
+@@ -0,0 +1,194 @@
 +/*
 + * Plotina: the updater page renders each stage like Plotina Mobile's route, and the buttons wire
 + * to the right engine callbacks. Stateless screen, so the test feeds states instead of driving
@@ -1413,6 +2129,19 @@ index 00000000..33eec197
 +        onNodeWithText("No updates").assertIsDisplayed()
 +        onNodeWithText("The latest version is installed (26.10.1)").assertIsDisplayed()
 +        onNodeWithText("Download and install").assertDoesNotExist()
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `passive stable names the dev build, explains the wait, and offers no download`() = runAndroidComposeUiTest {
++        setScreen(UpdaterUiState.PassiveStable(version = "26.10.1-dev.1"))
++        onNodeWithText("Still a dev build — waiting for a stable release to switch back").assertIsDisplayed()
++        onNodeWithText(
++            "Dev version 26.10.1-dev.1 is installed. As soon as a newer stable release appears, " +
++                "it will be offered the normal way — your data stays.",
++        ).assertIsDisplayed()
++        onNodeWithText("Download and install").assertDoesNotExist()
++        onNodeWithText("Close").assertIsDisplayed()
 +    }
 +
 +    @Config(qualifiers = "h1280dp")
@@ -1519,8 +2248,118 @@ index 00000000..33eec197
 +    size = 137_608_493L,
 +    notes = "Fixes and improvements.",
 +)
+diff --git a/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdatesScreenTest.kt b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdatesScreenTest.kt
+new file mode 100644
+index 00000000..f5166ce4
+--- /dev/null
++++ b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdatesScreenTest.kt
+@@ -0,0 +1,104 @@
++/*
++ * Plotina: the consolidated «Обновления» page — check action on top, channel selection beneath,
++ * like Plotina Mobile's Updates tab. Stateless screen, so the test feeds channel values and
++ * captures callbacks instead of driving the store. Assertions use the English string values:
++ * Robolectric runs in the default locale and the screen renders
++ * app/src/main/res/values/plotina_updater.xml.
++ *
++ * Copyright (C) 2026 Plotina
++ *
++ * This program is free software: you can redistribute it and/or modify it under the terms of the
++ * GNU Affero General Public License as published by the Free Software Foundation, version 3.
++ */
++
++@file:OptIn(ExperimentalTestApi::class)
++
++package io.element.android.x.updater
++
++import android.app.Application
++import androidx.activity.ComponentActivity
++import androidx.compose.ui.test.AndroidComposeUiTest
++import androidx.compose.ui.test.ExperimentalTestApi
++import androidx.compose.ui.test.assertIsDisplayed
++import androidx.compose.ui.test.onNodeWithText
++import androidx.compose.ui.test.performClick
++import androidx.compose.ui.test.v2.runAndroidComposeUiTest
++import com.google.common.truth.Truth.assertThat
++import io.element.android.tests.testutils.EnsureNeverCalled
++import io.element.android.tests.testutils.EnsureNeverCalledWithParam
++import io.element.android.tests.testutils.robolectric.RobolectricTest
++import org.junit.Test
++import org.robolectric.annotation.Config
++
++// application = plain Application: as in PlotinaUpdaterScreenTest, the test only needs a blank
++// Compose host, not the ElementXApplication DI graph.
++@Config(application = Application::class)
++class PlotinaUpdatesScreenTest : RobolectricTest() {
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `the page shows the check action above the channel section`() = runAndroidComposeUiTest {
++        setScreen(channel = PlotinaUpdate.UpdateChannel.STABLE)
++        onNodeWithText("Updates").assertIsDisplayed() // AppBar title
++        onNodeWithText("Check for updates").assertIsDisplayed()
++        onNodeWithText("Installed version: 26.10.1").assertIsDisplayed()
++        onNodeWithText("Update channel").assertIsDisplayed()
++        onNodeWithText("Stable").assertIsDisplayed()
++        onNodeWithText("Dev").assertIsDisplayed()
++        // Stable by default: the dev warning belongs to the dev choice only.
++        onNodeWithText("Dev builds test the next version early", substring = true).assertDoesNotExist()
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `the check action opens the updater flow`() = runAndroidComposeUiTest {
++        var checked = false
++        setScreen(channel = PlotinaUpdate.UpdateChannel.STABLE, onCheckClick = { checked = true })
++        onNodeWithText("Check for updates").performClick()
++        assertThat(checked).isTrue()
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `choosing Dev is called back with the dev channel`() = runAndroidComposeUiTest {
++        var selected: PlotinaUpdate.UpdateChannel? = null
++        setScreen(channel = PlotinaUpdate.UpdateChannel.STABLE, onChannelSelected = { selected = it })
++        onNodeWithText("Dev").performClick()
++        assertThat(selected).isEqualTo(PlotinaUpdate.UpdateChannel.DEV)
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `choosing Stable is called back with the stable channel`() = runAndroidComposeUiTest {
++        var selected: PlotinaUpdate.UpdateChannel? = null
++        setScreen(channel = PlotinaUpdate.UpdateChannel.DEV, onChannelSelected = { selected = it })
++        onNodeWithText("Stable").performClick()
++        assertThat(selected).isEqualTo(PlotinaUpdate.UpdateChannel.STABLE)
++    }
++
++    @Config(qualifiers = "h1280dp")
++    @Test
++    fun `the dev channel warns on the page itself`() = runAndroidComposeUiTest {
++        setScreen(channel = PlotinaUpdate.UpdateChannel.DEV)
++        // The warning renders exactly for the stored channel: this is what the Activity shows
++        // right after a tap, the radios and the card share the same `channel` argument.
++        onNodeWithText("Dev builds test the next version early", substring = true).assertIsDisplayed()
++        onNodeWithText("Early builds from GitHub (dev-latest release)").assertIsDisplayed()
++    }
++}
++
++private fun AndroidComposeUiTest<ComponentActivity>.setScreen(
++    channel: PlotinaUpdate.UpdateChannel,
++    onBackClick: () -> Unit = EnsureNeverCalled(),
++    onCheckClick: () -> Unit = EnsureNeverCalled(),
++    onChannelSelected: (PlotinaUpdate.UpdateChannel) -> Unit = EnsureNeverCalledWithParam(),
++) {
++    setContent {
++        PlotinaUpdatesScreen(
++            channel = channel,
++            installedVersion = "26.10.1",
++            onBackClick = onBackClick,
++            onCheckClick = onCheckClick,
++            onChannelSelected = onChannelSelected,
++        )
++    }
++}
 diff --git a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootNode.kt b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootNode.kt
-index 93d6d25c..73360801 100644
+index 93d6d25c..cfcc5384 100644
 --- a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootNode.kt
 +++ b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootNode.kt
 @@ -9,6 +9,7 @@
@@ -1531,18 +2370,19 @@ index 93d6d25c..73360801 100644
  import androidx.activity.compose.LocalActivity
  import androidx.compose.runtime.Composable
  import androidx.compose.ui.Modifier
-@@ -77,6 +78,17 @@ class PreferencesRootNode(
+@@ -77,6 +78,18 @@ class PreferencesRootNode(
              onSwitchToSession = callback::navigateToSession,
              onOpenAnalytics = callback::navigateToAnalyticsSettings,
              onOpenAbout = callback::navigateToAbout,
-+            // Plotina: opens the app module's updater page. It cannot be referenced by class from
-+            // here (the feature module does not depend on the app module), so the component is
-+            // named; see io.element.android.x.updater.PlotinaUpdateActivity.
-+            onCheckUpdatesClick = {
++            // Plotina: opens the app module's «Обновления» page: «Проверить обновления» on top,
++            // the Stable/Dev channel choice beneath. It cannot be referenced by class from here
++            // (the feature module does not depend on the app module), so the component is named;
++            // see io.element.android.x.updater.PlotinaUpdatesActivity.
++            onUpdatesClick = {
 +                activity.startActivity(
 +                    Intent().setClassName(
 +                        activity.packageName,
-+                        "io.element.android.x.updater.PlotinaUpdateActivity",
++                        "io.element.android.x.updater.PlotinaUpdatesActivity",
 +                    ),
 +                )
 +            },
@@ -1550,66 +2390,68 @@ index 93d6d25c..73360801 100644
              onOpenMediaSettings = callback::navigateToMediaSettings,
              onOpenLocationSettings = callback::navigateToLocationSettings,
 diff --git a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootView.kt b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootView.kt
-index 79aabeea..356b36d4 100644
+index 79aabeea..5fbde590 100644
 --- a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootView.kt
 +++ b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/root/PreferencesRootView.kt
-@@ -85,6 +85,9 @@ fun PreferencesRootView(
+@@ -85,6 +85,10 @@ fun PreferencesRootView(
      onOpenAnalytics: () -> Unit,
      onOpenLockScreenSettings: () -> Unit,
      onOpenAbout: () -> Unit,
-+    // Plotina: opens the app module's updater page. Defaulted so upstream's PreferencesRootViewTest
-+    // keeps compiling untouched; the node always passes a real handler.
-+    onCheckUpdatesClick: () -> Unit = {},
++    // Plotina: opens the app module's «Обновления» page - «Проверить обновления» on top, the
++    // Stable/Dev channel choice beneath, like Plotina Mobile's Updates tab. Defaulted so
++    // upstream's PreferencesRootViewTest keeps compiling untouched; the node passes a real handler.
++    onUpdatesClick: () -> Unit = {},
      onOpenDeveloperSettings: () -> Unit,
      onOpenMediaSettings: () -> Unit,
      onOpenLocationSettings: () -> Unit,
-@@ -157,6 +160,7 @@ fun PreferencesRootView(
+@@ -157,6 +161,7 @@ fun PreferencesRootView(
              GeneralSection(
                  state = state,
                  onOpenAbout = onOpenAbout,
-+                onCheckUpdatesClick = onCheckUpdatesClick,
++                onUpdatesClick = onUpdatesClick,
                  onOpenAnalytics = onOpenAnalytics,
                  onOpenDeveloperSettings = onOpenDeveloperSettings,
                  onOpenLabs = onOpenLabs,
-@@ -354,6 +358,7 @@ private fun AppSettingsSection(
+@@ -354,6 +359,7 @@ private fun AppSettingsSection(
  private fun ColumnScope.GeneralSection(
      state: PreferencesRootState,
      onOpenAbout: () -> Unit,
-+    onCheckUpdatesClick: () -> Unit,
++    onUpdatesClick: () -> Unit,
      onOpenAnalytics: () -> Unit,
      onOpenLabs: () -> Unit,
      onOpenDeveloperSettings: () -> Unit,
-@@ -376,6 +381,13 @@ private fun ColumnScope.GeneralSection(
+@@ -376,6 +382,14 @@ private fun ColumnScope.GeneralSection(
              onClick = onOpenLabs,
          )
      }
-+    // Plotina: self-update entry right above 'About' - there is no Play channel here, so the
-+    // updater lives one tap from the settings root instead of inside About.
++    // Plotina: one «Обновления» entry right above 'About' - there is no Play channel here, so the
++    // updater lives one tap from the settings root instead of inside About. The page behind it
++    // carries both actions: «Проверить обновления» on top, the Stable/Dev channel beneath.
 +    ListItem(
-+        content = { Text(stringResource(id = R.string.plotina_check_updates)) },
++        content = { Text(stringResource(id = R.string.plotina_updates)) },
 +        leadingContent = ListItemContent.Icon(IconSource.Vector(CompoundIcons.Download())),
-+        onClick = onCheckUpdatesClick,
++        onClick = onUpdatesClick,
 +    )
      ListItem(
          content = { Text(stringResource(id = CommonStrings.common_about)) },
          leadingContent = ListItemContent.Icon(IconSource.Vector(CompoundIcons.Info())),
 diff --git a/features/preferences/impl/src/main/res/values-ru/translations.xml b/features/preferences/impl/src/main/res/values-ru/translations.xml
-index 96430521..5d87b91f 100644
+index 96430521..e68ae358 100644
 --- a/features/preferences/impl/src/main/res/values-ru/translations.xml
 +++ b/features/preferences/impl/src/main/res/values-ru/translations.xml
 @@ -124,4 +124,5 @@
    <string name="troubleshoot_notifications_entry_point_push_history_title">"История уведомлений"</string>
    <string name="troubleshoot_notifications_entry_point_section">"Устранение неполадок"</string>
    <string name="troubleshoot_notifications_entry_point_title">"Устранение неполадок с уведомлениями"</string>
-+  <string name="plotina_check_updates">"Проверить обновления"</string>
++  <string name="plotina_updates">"Обновления"</string>
  </resources>
 diff --git a/features/preferences/impl/src/main/res/values/localazy.xml b/features/preferences/impl/src/main/res/values/localazy.xml
-index d02257c2..45fabf61 100644
+index d02257c2..566f375c 100644
 --- a/features/preferences/impl/src/main/res/values/localazy.xml
 +++ b/features/preferences/impl/src/main/res/values/localazy.xml
 @@ -127,4 +127,5 @@ If you proceed, some of your settings may change."</string>
    <string name="troubleshoot_notifications_entry_point_push_history_title">"Push history"</string>
    <string name="troubleshoot_notifications_entry_point_section">"Troubleshoot"</string>
    <string name="troubleshoot_notifications_entry_point_title">"Troubleshoot notifications"</string>
-+  <string name="plotina_check_updates">"Check for updates"</string>
++  <string name="plotina_updates">"Updates"</string>
  </resources>
