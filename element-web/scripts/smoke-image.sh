@@ -57,8 +57,14 @@ for path in \
   curl -fsS -o /dev/null "http://127.0.0.1:${PORT}${path}"
 done
 
-# Licence and notice have to travel with the served app.
-curl -fsS "http://127.0.0.1:${PORT}/LICENSE-AGPL-3.0" | head -1 | grep -q 'GNU AFFERO GENERAL PUBLIC LICENSE'
+# Licence and notice have to travel with the served app. The licence is read
+# through a file, not a pipe: `curl | head -1` makes curl die with 23 (SIGPIPE)
+# the moment head closes the pipe, and `set -o pipefail` turns that into a
+# failure of a check that actually passed.
+LICENCE="$(mktemp)"
+trap 'rm -f "$PAGE" "$LICENCE"' EXIT
+curl -fsS "http://127.0.0.1:${PORT}/LICENSE-AGPL-3.0" -o "$LICENCE"
+head -1 "$LICENCE" | grep -q 'GNU AFFERO GENERAL PUBLIC LICENSE'
 curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/NOTICE"
 
 echo "smoke ok: $IMAGE"
