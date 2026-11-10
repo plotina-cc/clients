@@ -619,13 +619,14 @@ jobs:
           foreach ($scheme in $declared) { Write-Host "OK $scheme -> $exe" }
           & taskkill /IM Plotina-Desktop.exe /F /T 2>&1 | ForEach-Object { Write-Host $_ }
 
-      # The app registers element:// and io.element.desktop:// itself on every
-      # start (apps/desktop/src/protocol.ts -> app.setAsDefaultProtocolClient),
-      # so those HKCU keys are not the ones the installer wrote and the
-      # uninstaller used to leave them behind pointing at the deleted exe
-      # (Windows QA: uninstall:registry FAIL). The customUnInstall hook in
-      # element-desktop/build/installer.nsh has to remove them; prove it on the
-      # real package, before anything is published.
+      # The app registers its protocols (element://, io.element.desktop://,
+      # cc.plotina.element:// — see "protocols" in element-desktop/
+      # build.plotina.json) itself on every start (apps/desktop/src/protocol.ts
+      # -> app.setAsDefaultProtocolClient), so those HKCU keys are not the ones
+      # the installer wrote and the uninstaller used to leave them behind
+      # pointing at the deleted exe (Windows QA: uninstall:registry FAIL). The
+      # customUnInstall hook in element-desktop/build/installer.nsh has to
+      # remove them; prove it on the real package, before anything is published.
       - name: Silent uninstall leaves no protocol keys behind
         shell: pwsh
         run: |
@@ -660,8 +661,12 @@ jobs:
           $left = @()
           foreach ($s in $schemes) {
             $k = Join-Path $classes "$s\shell\open\command"
-            if (-not (Test-Path $k)) { continue }
+            if (-not (Test-Path $k)) {
+              Write-Host "after uninstall: $s is gone"
+              continue
+            }
             $cmd = "$((Get-ItemProperty -Path $k -ErrorAction SilentlyContinue).'(default)')"
+            Write-Host "after uninstall: $s still registered -> $cmd"
             if ($cmd -like "*$root*") { $left += "$s -> $cmd" }
           }
           if ($left.Count) { throw "protocol keys still point into the removed install: $($left -join '; ')" }
