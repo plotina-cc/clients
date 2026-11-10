@@ -38,6 +38,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import struct
 import sys
@@ -92,6 +93,12 @@ EC_MARKER = "<script>window.__plotinaEc=true;</script>"
 
 # matcher for an asset URL that would resolve outside the widget under vector://
 ROOT_ABSOLUTE = ('"/assets/', "'/assets/", "`/assets/", "(/assets/")
+# Vite keeps its lazy-chunk map as bare quoted "assets/x.js" entries; those
+# resolve against the document URL, which under vector:// is the origin root.
+BARE_ASSET = ('"assets/', "'assets/", "`assets/")
+# index.html carries bare href/src attributes (the <link rel="preload"
+# href="/config.json"> and the icon), which the JS string rewrites do not touch.
+HTML_ATTRS = ('href="', 'src="')
 
 
 def read_lock(lock_path: Path) -> dict:
@@ -224,8 +231,10 @@ def check_widget(widget: Path) -> list[str]:
     if html.count("noise/boot.js"):
         failures.append("index.html loads noise/boot.js in the widget; plotina-dfn.js is the caller path")
 
-    # The archive is built for a site root; anything still root-absolute 404s
-    # under vector://vector/webapp/ and the widget renders an empty #root.
+    # The archive is built for a site root; anything that still resolves there
+    # 404s under vector://vector/webapp/. Three shapes have to be caught: an
+    # absolute /assets/ URL, Vite's bare "assets/..." dep map, and a bare
+    # HTML attribute (href="/config.json", the icon).
     for path in [index, *assets.glob("*.js"), *assets.glob("*.css")]:
         text = path.read_text(encoding="utf-8", errors="replace")
         for bad in ROOT_ABSOLUTE:
@@ -235,6 +244,23 @@ def check_widget(widget: Path) -> list[str]:
                     f"rebase it onto {URL_PREFIX}"
                 )
                 break
+        for bad in BARE_ASSET:
+            if bad in text:
+                failures.append(
+                    f"{path.relative_to(widget)} still has a bare {bad!r} entry (Vite dep map): "
+                    f"it resolves against the origin root, rebase it onto {URL_PREFIX}"
+                )
+                break
+        if path.suffix == ".html":
+            # A correctly rebased attribute points inside the mount, so it still
+            # begins with href="/…"; only a URL that resolves outside it fails.
+            for bad in re.findall(r'(?:href|src)="(/[^"]*)"', text):
+                if not bad.startswith(URL_PREFIX + "/"):
+                    failures.append(
+                        f"index.html still has a root-absolute attribute {bad!r}: "
+                        f"rebase it onto {URL_PREFIX}"
+                    )
+                    break
     if not html.count(URL_PREFIX + "/assets/"):
         failures.append(f"index.html references no {URL_PREFIX}/assets/ URL")
     return failures
@@ -259,7 +285,24 @@ def _prepare(src: Path, dst: Path, url_prefix: str) -> None:
         if path.suffix == ".html":
             for tag in ARCHIVE_NOISE_TAGS:
                 text = text.replace(tag, "")
-        text = text.replace("/assets/", prefix + "assets/")
+        # Both attribute and JS-string forms are rewritten in one pass, and the
+        # bare-attribute and bare-Vite-entry forms only where the URL still
+        # starts at the root ("/x" or "assets/x"), so a second install of the
+        # same archive cannot prefix an already-prefixed path (that produced
+        # /webapp/.../webapp/... and a 404 on the app bundle).
+        def rebase_attr(match: "re.Match[str]") -> str:
+            attr, url = match.group(1), match.group(2)
+            if url.startswith(prefix):
+                return match.group(0)
+            return f'{attr}="{prefix}{url.lstrip("/")}"'
+
+        text = re.sub(r'(href|src)="(/[^"]*)"', rebase_attr, text)
+        text = text.replace("`/assets/", "`" + prefix + "assets/")
+        text = text.replace('"/assets/', f'"{prefix}assets/')
+        text = text.replace("'/assets/", f"'{prefix}assets/")
+        text = text.replace("(/assets/", f"({prefix}assets/")
+        for quote in ('"', "'", "`"):
+            text = text.replace(f"{quote}assets/", f"{quote}{prefix}assets/")
         text = text.replace('"/plotina-icon.svg"', f'"{prefix}plotina-icon.svg"')
         text = text.replace('"/plotina-512.png"', f'"{prefix}plotina-512.png"')
         text = text.replace("`/config.json`", f"`{prefix}config.json`")

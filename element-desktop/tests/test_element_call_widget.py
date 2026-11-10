@@ -43,6 +43,7 @@ URL_PREFIX = "/webapp/widgets/element-call"
 OUR_INDEX = (
     "<!doctype html><html><head><script>window.__plotinaEc=true;</script>"
     '<link rel="icon" type="image/svg+xml" href="/plotina-icon.svg">'
+    '<link rel="preload" href="/config.json" as="fetch">'
     '<script src="/noise/logic.js"></script>'
     '<script src="/noise/plotina-dfn.js"></script>'
     '<script src="/noise/boot.js"></script>'
@@ -248,6 +249,58 @@ class AssetRebaseTest(unittest.TestCase):
                               encoding="utf-8")
             failures = ecw.check_widget(webapp / MOUNT)
             self.assertTrue(any("root-absolute" in f for f in failures), failures)
+
+    def test_check_widget_catches_a_root_absolute_html_link(self) -> None:
+        """index.html ships <link rel="preload" href="/config.json">: a bare
+        attribute, not a JS string, so the string rewrites miss it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            webapp = make_webapp(root)
+            ecw.install_widget(make_archive(root), webapp)
+            index = webapp / MOUNT / "index.html"
+            index.write_text(
+                index.read_text(encoding="utf-8").replace(
+                    "</head>", '<link rel="preload" href="/config.json" as="fetch"></head>', 1
+                ),
+                encoding="utf-8",
+            )
+            failures = ecw.check_widget(webapp / MOUNT)
+            self.assertTrue(any("/config.json" in f for f in failures), failures)
+
+    def test_check_widget_catches_a_bare_vite_dep_entry(self) -> None:
+        """Vite keeps its lazy-chunk map as bare "assets/x.js": resolved against
+        the document that is the origin root, not the widget."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            webapp = make_webapp(root)
+            ecw.install_widget(make_archive(root), webapp)
+            bundle = webapp / MOUNT / "assets" / "index-OURS.js"
+            bundle.write_text(
+                bundle.read_text(encoding="utf-8")
+                + ';const m={f:["assets/spa-XXXX.js","assets/dist-YYYY.js"]};',
+                encoding="utf-8",
+            )
+            failures = ecw.check_widget(webapp / MOUNT)
+            self.assertTrue(any("bare" in f for f in failures), failures)
+
+    def test_install_rebases_the_html_config_preload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            webapp = make_webapp(root)
+            index_src = root / "stage" / "element-call-plotina" / "index.html"
+            ecw.install_widget(make_archive(root), webapp)
+            html = (webapp / MOUNT / "index.html").read_text(encoding="utf-8")
+            self.assertIn(f'href="{URL_PREFIX}/config.json"', html)
+            self.assertNotIn('href="/config.json"', html)
+
+    def test_install_rebases_the_vite_dep_map(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            webapp = make_webapp(root)
+            tarball = make_archive(root)
+            ecw.install_widget(tarball, webapp)
+            bundle = webapp / MOUNT / "assets" / "index-OURS.js"
+            self.assertNotIn('"assets/', bundle.read_text(encoding="utf-8"))
 
 
 class LockAndShaTest(unittest.TestCase):
