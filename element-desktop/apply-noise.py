@@ -29,11 +29,20 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 TAG = '<script src="noise/logic.js"></script><script src="noise/boot.js" defer></script>'
-# The call widget is a second document under /widgets/element-call/.  Its
-# scripts are two levels below the webapp root; without this tag the wrapper
-# only covers the app document, while Element Call asks for the microphone in
-# the widget and the browser falls back to its own (weaker) noise suppressor.
-WIDGET_TAG = '<script src="../../noise/logic.js"></script><script src="../../noise/boot.js" defer></script>'
+# The call widget is a second document under /widgets/element-call/. Its noise
+# wiring is not ours to add any more: scripts/element-call-widget.py replaces the
+# whole directory with our own Element Call (element-call.lock.json) and writes
+# these tags itself, because the bundle's publish hook calls
+# window.__plotinaAttach from plotina-dfn.js. Appending boot.js here would start
+# the denoiser a second time on a page that already routes its microphone
+# through plotina-dfn.js, so this module only asserts the tags survived the swap.
+#
+# Two levels below the webapp root: the shell serves the webapp from
+# vector://vector/webapp/, so root-absolute /noise/... would miss the archive.
+WIDGET_TAGS = (
+    '<script src="../../noise/plotina-dfn.js"></script>',
+    '<script src="../../noise/plotina-panel.js"></script>',
+)
 MARKER = "noise/boot.js"
 
 REQUIRED_ASSETS = [
@@ -69,6 +78,33 @@ def patch_html(path: Path, tag: str = TAG) -> None:
         sys.exit(f"apply-noise: no </head> in {path}; upstream layout changed")
     path.write_text(src.replace("</head>", tag + "</head>", 1), encoding="utf-8")
     print(f"patched: {path}")
+
+
+def patch_widget(path: Path) -> None:
+    """Assert the call widget carries our noise wiring; never add it.
+
+    The widget is our own Element Call (scripts/element-call-widget.py), not
+    upstream's, and that script writes these tags while it rewrites the
+    document for vector://. Adding boot.js here would initialize the denoiser a
+    second time: it would wrap getUserMedia on a page whose microphone is
+    already processed by plotina-dfn.js through the bundle's publish hook.
+    """
+    if not path.is_file():
+        sys.exit(f"apply-noise: missing Element Call widget {path}; upstream layout changed")
+    src = path.read_text(encoding="utf-8")
+    missing = [tag for tag in WIDGET_TAGS if tag not in src]
+    if missing:
+        sys.exit(
+            f"apply-noise: {path} is missing {len(missing)} noise tag(s); "
+            "scripts/element-call-widget.py did not install our widget: "
+            + ", ".join(tag for tag in missing)
+        )
+    if "noise/boot.js" in src:
+        sys.exit(
+            f"apply-noise: {path} loads noise/boot.js; the call widget is processed by "
+            "plotina-dfn.js and boot.js would wrap getUserMedia a second time"
+        )
+    print(f"widget: noise wiring present ({path})")
 
 
 BRANDING_PATH_KEYS = ("welcome_background_url", "auth_header_logo_url")
@@ -147,10 +183,7 @@ def main() -> None:
         sys.exit("apply-noise: noise/boot.js does not resolve its own path; refresh the shared noise layer")
 
     patch_html(webapp / "index.html")
-    widget_index = webapp / "widgets" / "element-call" / "index.html"
-    if not widget_index.is_file():
-        sys.exit(f"apply-noise: missing Element Call widget {widget_index}; upstream layout changed")
-    patch_html(widget_index, WIDGET_TAG)
+    patch_widget(webapp / "widgets" / "element-call" / "index.html")
     write_config(config_src, webapp / "config.json", args.brand)
 
     version = webapp / "version"

@@ -93,10 +93,29 @@
     return DEFAULT_LEVEL;
   }
 
+  /* Where this file is served from, and therefore where vendor/ and dfn/ are.
+     Same reasoning as noise/boot.js: browsers mount us at the domain root, so
+     location.origin + "/noise" is right on call.plotina.cc — but Element
+     Desktop serves the webapp as vector://vector/webapp/, where there is no
+     origin root to point at, and the widget sits two levels down. Resolving
+     from this script's own src keeps both working. document.currentScript is
+     only set while a classic script runs, which is the one moment we need it;
+     the origin-root form stays as the fallback for a missing src. */
+  var BASE = (function () {
+    var src = document.currentScript && document.currentScript.src;
+    if (!src) return location.origin + "/noise";
+    try {
+      return new URL(".", src).href.replace(/\/$/, "");
+    } catch (e) {
+      return location.origin + "/noise";
+    }
+  })();
+  // Read by the unit tests: the desktop case is a path shape no browser tab
+  // reproduces, so the value has to be observable without a running call.
+  window.__plotinaDfnBase = BASE;
+
   function base() {
-    // Absolute, not relative to the page: Element Call opens /room/ with a
-    // trailing slash, and new URL("noise/", ...) resolved to /room/noise/.
-    return location.origin + "/noise";
+    return BASE;
   }
 
   function wrapAssetFetch() {

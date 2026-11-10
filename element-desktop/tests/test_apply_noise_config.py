@@ -23,23 +23,52 @@ _spec.loader.exec_module(apply_noise)
 
 
 class WidgetNoisePatchTest(unittest.TestCase):
-    def test_widget_gets_relative_noise_tags(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            widget = Path(tmp) / "index.html"
-            widget.write_text("<html><head></head><body></body></html>", encoding="utf-8")
-            apply_noise.patch_html(widget, apply_noise.WIDGET_TAG)
-            text = widget.read_text(encoding="utf-8")
-            self.assertIn('src="../../noise/logic.js"', text)
-            self.assertIn('src="../../noise/boot.js" defer', text)
-            self.assertEqual(text.count("noise/boot.js"), 1)
+    """The call widget is no longer upstream's, so apply-noise must not patch it.
 
-    def test_widget_patch_is_idempotent(self) -> None:
+    element-desktop/scripts/element-call-widget.py replaces
+    webapp/widgets/element-call/ with our own Element Call and writes the
+    desktop noise tags into that document (../../noise/logic.js,
+    plotina-dfn.js, plotina-panel.js). Appending WIDGET_TAG on top would load
+    logic.js twice and add boot.js to a page whose microphone is already
+    processed by plotina-dfn.js — a double initialization of the denoiser.
+    apply-noise.py therefore only asserts the tags are there.
+    """
+
+    def _widget(self, tmp: str, *, tags: bool = True) -> Path:
+        widget = Path(tmp) / "index.html"
+        body = "".join(apply_noise.WIDGET_TAGS) if tags else ""
+        widget.write_text(
+            f'<html><head><script>window.__plotinaEc=true;</script>{body}</head><body></body></html>',
+            encoding="utf-8",
+        )
+        return widget
+
+    def test_widget_keeps_exactly_one_copy_of_each_tag(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            widget = Path(tmp) / "index.html"
-            widget.write_text("<html><head></head></html>", encoding="utf-8")
-            apply_noise.patch_html(widget, apply_noise.WIDGET_TAG)
-            apply_noise.patch_html(widget, apply_noise.WIDGET_TAG)
-            self.assertEqual(widget.read_text(encoding="utf-8").count("noise/boot.js"), 1)
+            widget = self._widget(tmp)
+            before = widget.read_text(encoding="utf-8")
+            apply_noise.patch_widget(widget)
+            after = widget.read_text(encoding="utf-8")
+            self.assertEqual(before, after)
+            self.assertEqual(after.count("noise/plotina-dfn.js"), 1)
+            self.assertEqual(after.count("noise/plotina-panel.js"), 1)
+            self.assertNotIn("noise/boot.js", after)
+
+    def test_widget_without_the_tags_fails_the_build(self) -> None:
+        """A widget that lost its tags would run with the browser's own (weaker)
+        noise suppression and no level panel — fail instead of shipping it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            widget = self._widget(tmp, tags=False)
+            with self.assertRaises(SystemExit) as ctx:
+                apply_noise.patch_widget(widget)
+            self.assertNotEqual(ctx.exception.code, 0)
+
+    def test_widget_tags_are_relative_for_vector(self) -> None:
+        """vector://vector/webapp/ never serves a root-absolute path."""
+        for tag in apply_noise.WIDGET_TAGS:
+            self.assertIn('src="../../noise/', tag)
+            self.assertNotIn('src="/noise/', tag)
+        self.assertFalse(any("boot.js" in tag for tag in apply_noise.WIDGET_TAGS))
 
 
 class BrandingPathsRelativeTest(unittest.TestCase):
