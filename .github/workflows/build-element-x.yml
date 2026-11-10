@@ -109,7 +109,8 @@ jobs:
             0011-plotina-locales \
             0012-plotina-about-minimal \
             0013-plotina-analytics-off \
-            0014-plotina-self-updater; do
+            0014-plotina-self-updater \
+            0015-plotina-dm-personal-names; do
             patch="$GITHUB_WORKSPACE/element-x/patches/$p.patch"
             git apply --check --verbose "$patch"
             git apply --verbose "$patch"
@@ -229,6 +230,11 @@ jobs:
           # section lets a dev install opt in, and it reads
           # update-x-dev.json from the GitHub `dev-latest` release instead of the edge host.
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0014-plotina-self-updater.patch"
+          # 0015: personal names for personal dialogues. The name is the account's own: it lives in
+          # the cc.plotina.room_aliases account data event (the same one Element Web writes), is laid
+          # over RoomInfo.name in Kotlin for the room list and the open chat, and m.room.name is
+          # never written. DM only; groups keep their name.
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0015-plotina-dm-personal-names.patch"
 
       - name: Install Pillow for the icon script
         run: python3 -m pip install --quiet pillow

@@ -11,6 +11,8 @@ patched so calls run on our own Element Call instead of the bundle inside the AP
   `plotina-push`), not Element's gateway.
 - **Sign-in** is prefilled with `plotina.cc`.
 - **Crash reports** go to GlitchTip under release `element-x@<tag>`, environment `production`.
+- **Personal names for DMs** are per account and kept in account data, so only their owner sees them
+  and the other side keeps the room's name. See `PERSONAL-NAMES.md`.
 
 ## Source
 
