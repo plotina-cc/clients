@@ -74,6 +74,10 @@ cp "$ROOT/desktop/updater.ts" src/updater.ts
 #    getUpdateFeedUrl from our updater, so Settings -> "Check for updates"
 #    appears on Linux AppImage despite upstream's Squirrel-only call throwing.
 cp "$ROOT/desktop/icon.ts" src/icon.ts
+# Protocol registration for every scheme build.plotina.json declares
+# (cc.plotina.element included): electron-builder only applies `protocols` to
+# macOS/Linux desktop files, so the shell has to claim them itself.
+cp "$ROOT/desktop/protocol-schemes.ts" src/protocol-schemes.ts
 rm -rf build/icons && cp -r "$ROOT/build/icons" build/icons
 python3 "$ROOT/desktop/patch-shell.py" src
 
@@ -128,6 +132,12 @@ echo "==> shell patch assertions"
 grep -q "getMainWindowIcon" lib/electron-main.js || { echo "build.sh: lib/electron-main.js lacks getMainWindowIcon" >&2; exit 1; }
 grep -q 'from "./updater.js"' lib/ipc.js || { echo "build.sh: lib/ipc.js does not import our updater feed" >&2; exit 1; }
 grep -q "plotinaUpdateFeed" lib/updater.js || { echo "build.sh: lib/updater.js lacks plotinaUpdateFeed" >&2; exit 1; }
+# Every scheme the variant declares must be registered, not just protocols[0]:
+# a declared-but-unclaimed scheme is what made cc.plotina.element:// open the
+# browser (QA CHECK|protocol:declared|NOT-REGISTERED).
+grep -q "protocolSchemeList" lib/protocol.js || { echo "build.sh: lib/protocol.js does not register the variant's protocol list" >&2; exit 1; }
+grep -q "electron_protocols" lib/build-config.js || { echo "build.sh: lib/build-config.js lacks the electron_protocols list" >&2; exit 1; }
+grep -q "electron_protocols" electron-builder.ts || { echo "build.sh: electron-builder.ts does not export electron_protocols" >&2; exit 1; }
 if [ -d dist/linux-unpacked ]; then
   ai=$(ls dist/*.AppImage 2>/dev/null | head -1)
   [ -n "$ai" ] || { echo "build.sh: no AppImage to inspect" >&2; exit 1; }

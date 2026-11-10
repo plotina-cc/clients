@@ -86,7 +86,7 @@ jobs:
         # windows-restart-args.test.mjs pins the silent-NSIS argument contract
         # (/S --updated --force-run) that makes the Windows update relaunch.
         # stable-direct-feed.test.mjs guards the direct /dl stable feed.
-        run: node --test tests/linux-updater.test.mjs tests/update-feed.test.mjs tests/update-channel.test.mjs tests/stable-direct-feed.test.mjs tests/update-restart.test.mjs tests/windows-restart-args.test.mjs
+        run: node --test tests/linux-updater.test.mjs tests/update-feed.test.mjs tests/update-channel.test.mjs tests/stable-direct-feed.test.mjs tests/update-restart.test.mjs tests/windows-restart-args.test.mjs tests/protocol-schemes.test.mjs
 
   # One webapp for both platforms: the desktop shell embeds a fixed asar, so the
   # overlay has to be applied once and handed to the packaging jobs.
@@ -230,6 +230,12 @@ jobs:
           # updates" feed answer (upstream's Squirrel-only autoUpdater call
           # throws on Linux, hiding the button). Must mirror scripts/build.sh.
           cp "${{ github.workspace }}/element-desktop/desktop/icon.ts" "$SRC/apps/desktop/src/icon.ts"
+          # Protocol registration for every scheme build.plotina.json declares
+          # (cc.plotina.element included): electron-builder only applies its
+          # `protocols` config to macOS bundles and Linux .desktop files, so the
+          # shell must claim them at runtime or the variant advertises a scheme
+          # nobody registers (QA CHECK|protocol:declared|NOT-REGISTERED).
+          cp "${{ github.workspace }}/element-desktop/desktop/protocol-schemes.ts" "$SRC/apps/desktop/src/protocol-schemes.ts"
           rm -rf "$SRC/apps/desktop/build/icons"
           cp -r "${{ github.workspace }}/element-desktop/build/icons" "$SRC/apps/desktop/build/icons"
           if command -v python3 >/dev/null; then PY=python3; else PY=python; fi
@@ -395,6 +401,12 @@ jobs:
           grep -q "getMainWindowIcon" lib/electron-main.js
           grep -q 'from "./updater.js"' lib/ipc.js
           grep -q "plotinaUpdateFeed" lib/updater.js
+          # Declared protocols must be claimed by the shell: this is the code the
+          # QA harness exercises as CHECK|protocol:declared (and windows-smoke
+          # below asserts the resulting registry keys on a real install).
+          grep -q "protocolSchemeList" lib/protocol.js
+          grep -q "electron_protocols" lib/build-config.js
+          grep -q "electron_protocols" electron-builder.ts
           echo "compiled shell carries the Plotina patches"
           if [ "${{ matrix.name }}" = "linux" ]; then
             ai=$(ls dist/*.AppImage | head -1)
@@ -476,8 +488,17 @@ jobs:
     name: windows smoke
     runs-on: windows-latest
     needs: build
-    timeout-minutes: 15
+    # The Windows artefact is what this job proves, so a failure in the other
+    # matrix leg (e.g. the Linux deb step) must not silently skip the smoke: the
+    # acceptance check below is the only place the protocol registry claim is
+    # verified on a real install. A missing Windows artefact fails it loudly.
+    if: always() && !cancelled()
+    timeout-minutes: 20
     steps:
+      # The declared protocol list is read from the repo, so the smoke job knows
+      # which schemes the variant promises to own.
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           name: plotina-desktop-windows
@@ -542,6 +563,48 @@ jobs:
           Start-Sleep -Seconds 3
           $left = @(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue)
           Write-Host "processes left after kill: $($left.Count)"
+
+      - name: Assert every declared protocol scheme is owned by this install
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Acceptance for CHECK|protocol:declared in qa-windows-release.yml: a
+          # scheme the variant advertises must be registered and must point at
+          # the exe we just installed. cc.plotina.element:// used to open the
+          # browser because only protocols[0] and the legacy `element` scheme
+          # were ever claimed.
+          $root = (Get-ChildItem "$env:LOCALAPPDATA\Programs" -Directory -Filter 'Plotina*')[0].FullName
+          $exe = Join-Path $root 'Plotina-Desktop.exe'
+          $declared = @((Get-Content "$env:GITHUB_WORKSPACE\element-desktop\build.plotina.json" -Raw | ConvertFrom-Json).protocols)
+          if ($declared.Count -eq 0) { throw 'build.plotina.json declares no protocol schemes' }
+          Write-Host "declared schemes: $($declared -join ', ')"
+          if (@(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue).Count -eq 0) {
+            Start-Process $exe | Out-Null
+          }
+          # The shell claims them once the main process is up, so retry for a
+          # minute instead of racing the first window.
+          $deadline = (Get-Date).AddSeconds(60)
+          do {
+            $bad = New-Object System.Collections.Generic.List[string]
+            foreach ($scheme in $declared) {
+              $key = "HKCU:\Software\Classes\$scheme"
+              if (-not (Test-Path $key)) { $bad.Add("$scheme (no HKCU\Software\Classes\$scheme)"); continue }
+              # 'URL Protocol' exists with an EMPTY value on Windows; presence,
+              # not content, is what marks the key as a scheme.
+              if (-not (Get-ItemProperty $key).PSObject.Properties['URL Protocol']) { $bad.Add("$scheme (no 'URL Protocol' value)"); continue }
+              $cmd = (Get-ItemProperty "$key\shell\open\command" -ErrorAction SilentlyContinue).'(default)'
+              if ([string]::IsNullOrEmpty($cmd)) { $bad.Add("$scheme (no shell\open\command)"); continue }
+              $quoted = [regex]::Match($cmd, '^"([^"]+)"').Groups[1].Value
+              $target = if ($quoted) { $quoted } else { ($cmd -split '\s+')[0] }
+              if ([System.IO.Path]::GetFullPath($target) -ine [System.IO.Path]::GetFullPath($exe)) {
+                $bad.Add("$scheme (command '$cmd' is not $exe)")
+              }
+            }
+            if ($bad.Count) { Start-Sleep -Seconds 3 }
+          } while ($bad.Count -and (Get-Date) -lt $deadline)
+          if ($bad.Count) { throw "declared scheme(s) not registered to this install: $($bad -join '; ')" }
+          foreach ($scheme in $declared) { Write-Host "OK $scheme -> $exe" }
+          & taskkill /IM Plotina-Desktop.exe /F /T 2>&1 | ForEach-Object { Write-Host $_ }
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
