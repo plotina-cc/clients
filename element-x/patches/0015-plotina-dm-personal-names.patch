@@ -230,7 +230,7 @@ new file mode 100644
 index 00000000..65754189
 --- /dev/null
 +++ b/features/roomdetails/impl/src/main/kotlin/io/element/android/features/roomdetails/impl/PlotinaPersonalNameDialog.kt
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,95 @@
 +/*
 + * Copyright (c) 2026 Element Creations Ltd.
 + *
@@ -301,7 +301,6 @@ index 00000000..65754189
 +                TextField(
 +                    value = name,
 +                    onValueChange = { name = it },
-+                    placeholder = stringResource(R.string.screen_room_details_plotina_personal_name_placeholder),
 +                    singleLine = true,
 +                )
 +                Row(
@@ -513,12 +512,11 @@ diff --git a/features/roomdetails/impl/src/main/res/values-ru/translations.xml b
 index 1a6b928e..210b140c 100644
 --- a/features/roomdetails/impl/src/main/res/values-ru/translations.xml
 +++ b/features/roomdetails/impl/src/main/res/values-ru/translations.xml
-@@ -64,6 +64,10 @@
+@@ -64,6 +64,9 @@
    <string name="screen_room_details_notification_mode_default">"По умолчанию"</string>
    <string name="screen_room_details_notification_title">"Уведомления"</string>
    <string name="screen_room_details_pinned_events_row_title">"Закреплённые сообщения"</string>
 +  <string name="screen_room_details_plotina_personal_name_hint">"Видно только вам. Имя комнаты у собеседника не меняется."</string>
-+  <string name="screen_room_details_plotina_personal_name_placeholder">"Например, Денчик"</string>
 +  <string name="screen_room_details_plotina_personal_name_reset">"Сбросить"</string>
 +  <string name="screen_room_details_plotina_personal_name_title">"Личное имя"</string>
    <string name="screen_room_details_profile_row_title">"Профиль"</string>
@@ -528,12 +526,11 @@ diff --git a/features/roomdetails/impl/src/main/res/values/localazy.xml b/featur
 index ce384c03..49667bad 100644
 --- a/features/roomdetails/impl/src/main/res/values/localazy.xml
 +++ b/features/roomdetails/impl/src/main/res/values/localazy.xml
-@@ -67,6 +67,10 @@
+@@ -67,6 +67,9 @@
    <string name="screen_room_details_notification_mode_default">"Default"</string>
    <string name="screen_room_details_notification_title">"Notifications"</string>
    <string name="screen_room_details_pinned_events_row_title">"Pinned messages"</string>
 +  <string name="screen_room_details_plotina_personal_name_hint">"Only you see it. The name the other side sees does not change."</string>
-+  <string name="screen_room_details_plotina_personal_name_placeholder">"For example, Denchik"</string>
 +  <string name="screen_room_details_plotina_personal_name_reset">"Reset"</string>
 +  <string name="screen_room_details_plotina_personal_name_title">"Personal name"</string>
    <string name="screen_room_details_profile_row_title">"Profile"</string>
