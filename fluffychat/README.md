@@ -19,7 +19,7 @@ listened to a call on a device yet.
 | Tag | `v2.11.3` (`UPSTREAM_TAG`), commit `6fc4920` |
 | Flutter | `3.47.8` (upstream `.fvmrc`) |
 | Call stack | `livekit_client` 2.13.1, `flutter_webrtc` 1.6.2+hotfix.4 (both from `pubspec.lock`) |
-| Patch | sixteen: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.mobile`, `0008`-`0011` Plotina name/label/links/visible strings, `0012` intro buttons, `0013` OIDC scheme, `0014` no upstream support, `0015` About dialog, `0016` in-app updater (`patches/`) |
+| Patch | twenty-one: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.mobile`, `0008`-`0011` Plotina name/label/links/visible strings, `0012` intro buttons, `0013` OIDC scheme, `0014` no upstream support, `0015` About dialog, `0016` in-app updater, `0018` no donation/support prompts, `0019` one "Обновления" settings tab, `0020` build number in the update status, `0021` UTF-8 update manifests (`patches/`). `0017` is left free for the personal-DM-names patch that lands from `wt/dm-names-fluffychat`; numbers are per directory, so nothing may reuse it |
 
 ## What is in this directory
 
@@ -43,6 +43,10 @@ scripts/fetch-model.sh             downloads the model, SHA-256 pinned
 patches/0012-plotina-intro-buttons.patch  intro "Sign in" always on-screen (see below)
 patches/0013-plotina-oidc-scheme.patch    SSO scheme cc.plotina.fluffychat (MAS)
 patches/0016-plotina-self-updater.patch   in-app updater (see "In-app updater")
+patches/0018-plotina-remove-donations.patch  no donation/support prompts
+patches/0019-plotina-updates-tab.patch      one "Обновления" settings tab
+patches/0020-plotina-version-details.patch  build number in the update status
+patches/0021-plotina-update-utf8.patch      UTF-8 update manifests
 scripts/version-code.py          the versionCode formula, used by CI and by
                                  scripts/build-android.sh
 tests/intro_plotina_test.dart    Flutter widget regression test for 0012
@@ -360,6 +364,34 @@ default (stable, also when the store is unreadable), the `devBuild` tie-break an
 the feed URLs, and `flutter test test/utils/updater/` is the harness for it.
 The Python half now also runs in CI as a build gate ("Run updater and
 versionCode tests").
+
+## Updates screen, donations, manifest encoding (patches `0018`-`0021`)
+
+Four small patches ride on top of `0016`, all inside the updater's own files:
+
+- **`0018` no donation/support prompts.** `possibleByYou` ("This release was
+  only possible thanks to your support…") becomes a plain thank-you in
+  `intl_en.arb` and `intl_ru.arb`, the `support` entry is gone from the chat-list
+  menu (`client_chooser_button.dart`: the `SettingsAction.support` case and the
+  enum value) and the "поддержать" button is gone from the update snackbar's
+  dialog actions. Nothing links to ko-fi any more.
+- **`0019` one "Обновления" settings row.** `Settings → "Обновления"` opens
+  `lib/pages/updater/plotina_updates_page.dart` — the manual check first, then
+  the `UpdateChannelTile` below a divider — instead of exposing "Проверить
+  обновления" and "Канал обновлений" as two rows of the top-level list. New
+  l10n key `updates`.
+- **`0020` build number in the update status.** New key `updateBuild`
+  ("build {code}" / "сборка {code}"), appended to the version in the
+  *up to date* / *waiting for stable* states and on the update card, read from
+  `PlotinaUpdater.currentVersionCode()` — so a dev build (same versionCode as
+  its stable base, different `-dev.<M>`) can be told apart on screen.
+- **`0021` UTF-8 update manifests.** The manifest is decoded from
+  `response.bodyBytes` with `utf8.decode(..., allowMalformed: true)`: GitHub
+  serves release assets without a charset, `package:http` then falls back to
+  Latin-1 and the Russian `notes` came out as mojibake on the `dev-latest` feed.
+
+The Dart coverage from `0016` (`flutter test test/utils/updater/`) exercises
+these paths; `0018`-`0021` add no separate harness.
 
 ## Licensing
 
