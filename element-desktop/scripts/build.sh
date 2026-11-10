@@ -79,6 +79,14 @@ cp "$ROOT/desktop/icon.ts" src/icon.ts
 # macOS/Linux desktop files, so the shell has to claim them itself.
 cp "$ROOT/desktop/protocol-schemes.ts" src/protocol-schemes.ts
 rm -rf build/icons && cp -r "$ROOT/build/icons" build/icons
+# electron-builder's default nsis.include is build/installer.nsh, and its
+# uninstaller deletes only the protocol keys its own installer wrote; the ones
+# Electron's setAsDefaultProtocolClient() writes at runtime are removed by the
+# customUnInstall hook in this file (see its header). The variant whitelist in
+# apps/desktop/electron-builder.ts drops an "nsis" block, so the copy is the
+# wiring. Must mirror the "Apply Plotina desktop sources" step in
+# .github/workflows/build-element-desktop.yml.
+cp "$ROOT/build/installer.nsh" build/installer.nsh
 python3 "$ROOT/desktop/patch-shell.py" src
 
 echo "==> installers"
