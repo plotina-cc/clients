@@ -6,9 +6,27 @@ name: Build Plotina Mobile
 # (upstream's own scripts/add-firebase-messaging.sh plus google-services.json
 # from the GOOGLE_SERVICES_JSON secret).
 #
-# Triggered by tags of the form v<upstream>-plotina-fluffy.<n>, e.g.
-# v2.11.3-plotina-fluffy.1. The client-specific part keeps this workflow from
-# firing for tags that release the other clients in this repository.
+# Triggered by tags of the form v*-plotina-mobile.<n> (and the dev form
+# v<base>-plotina-mobile.<n>-dev.<m>), e.g. v2.11.3-plotina-mobile.28.
+# The client-specific part keeps this workflow from firing for tags that
+# release the other clients in this repository.
+#
+# Dev update channel: a tag v<base>-plotina-mobile.<N>-dev.<M> (e.g.
+# v2.11.3-plotina-mobile.28-dev.1) builds an opt-in dev APK for the "Канал
+# обновлений" setting (patch 0016). It is based on the *published* stable .N
+# — "Check the dev base is published" refuses an unreleased or outdated base
+# before building — carries the SAME versionCode as that stable (only the
+# versionName becomes <base>-dev.<M>, via --build-name; equal versionCode is
+# reinstallable over the stable: AOSP checkDowngrade rejects lower codes
+# only), and is published to the fixed GitHub `dev-latest` release, whose
+# assets the app's dev feed reads:
+#
+#   https://github.com/plotina-cc/clients/releases/download/dev-latest/update-mobile-dev.json
+#
+# Nothing dev goes to plotina.cc/dl or to a per-tag release, so the stable
+# feed is untouched and users get back to it with the next stable .N+1.
+# Publishing dev-latest assets is by pushing such a tag (on command); the
+# release itself is created once by this workflow on the first dev run.
 #
 # Crash reports go to GlitchTip at sentry.plotina.cc through sentry_flutter.
 # The DSN is the SENTRY_DSN repository variable (public by design, it is
@@ -68,6 +86,14 @@ jobs:
           grep -q '^  plotina_dfn:' upstream/pubspec.yaml
           echo "plugin registered in upstream/pubspec.yaml"
 
+      # The versionCode/dev-tag formula and the logo-asset copy are the parts of
+      # the updater contract that a 30-minute build cannot otherwise prove, and
+      # both are pure Python, so they gate the build instead of being tested only
+      # on a laptop: fluffychat/tests/test_version_code.py pins that a
+      # `-dev.<M>` tag compiles to the versionCode of its published stable base.
+      - name: Run updater and versionCode tests
+        run: python3 -m unittest discover -s fluffychat/tests -p 'test_*.py' -v
+
       - name: Apply Plotina launcher icons
         working-directory: fluffychat
         run: python3 scripts/apply-plotina-icons.py upstream
@@ -112,34 +138,64 @@ jobs:
       # formula, the digit limits, the ABI digit and the monotonicity argument
       # are documented in fluffychat/scripts/version-code.py; a local
       # scripts/build-android.sh computes the same numbers.
+      #
+      # A dev tag v<base>-plotina-mobile.<N>-dev.<M> compiles to the *same*
+      # numbers as the stable .N it is based on — that is the whole design
+      # (same package, same key, equal versionCode reinstalls in place; the
+      # next stable outranks it again). Only the versionName gains the
+      # `-dev.<M>` suffix, which the app reads back as its devBuild.
       - name: Work out the Android versionCode
         id: versioncode
         working-directory: fluffychat/upstream
         run: |
           set -euo pipefail
           VERSION="$(sed -n 's/^version: \([0-9][0-9.]*\)+.*/\1/p' pubspec.yaml)"
-          if [[ "$GITHUB_REF_NAME" =~ ^v([0-9.]+)-plotina-mobile\.([0-9]+)$ ]]; then
+          if [[ "$GITHUB_REF_NAME" =~ ^v([0-9.]+)-plotina-mobile\.([0-9]+)(-dev\.([0-9]+))?$ ]]; then
             BASE="${BASH_REMATCH[1]}"
             BUILD="${BASH_REMATCH[2]}"
+            DEV="${BASH_REMATCH[4]}"
             if [ "$BASE" != "$VERSION" ]; then
               echo "::error::tag $GITHUB_REF_NAME is for $BASE but pubspec.yaml says $VERSION"
               exit 1
             fi
           else
-            echo "::warning title=Not a release tag::ref $GITHUB_REF_NAME is not v<version>-plotina-mobile.<n>; building build 0, which never offers an update over a released one."
+            echo "::warning title=Not a release tag::ref $GITHUB_REF_NAME is not v<version>-plotina-mobile.<n>[-dev.<m>]; building build 0, which never offers an update over a released one."
             BUILD=0
+            DEV=""
+          fi
+          if [ -n "$DEV" ]; then
+            VERSION_NAME="${BASE}-dev.${DEV}"
+          else
+            VERSION_NAME="$VERSION"
           fi
           CODE="$(python3 ../scripts/version-code.py "$VERSION" "$BUILD")"
           ARM64_CODE="$(python3 ../scripts/version-code.py "$VERSION" "$BUILD" arm64-v8a)"
           ARMV7_CODE="$(python3 ../scripts/version-code.py "$VERSION" "$BUILD" armeabi-v7a)"
           {
-            echo "version_name=$VERSION"
+            echo "version_name=$VERSION_NAME"
             echo "version_code=$CODE"
             echo "arm64_version_code=$ARM64_CODE"
             echo "armv7_version_code=$ARMV7_CODE"
             echo "build=$BUILD"
+            echo "dev=$DEV"
           } >> "$GITHUB_OUTPUT"
-          echo "build number $CODE -> arm64 APK $ARM64_CODE, armv7 APK $ARMV7_CODE ($VERSION, build $BUILD)"
+          echo "build number $CODE -> arm64 APK $ARM64_CODE, armv7 APK $ARMV7_CODE ($VERSION_NAME, build $BUILD${DEV:+, dev $DEV})"
+
+      # The design rule: a dev build sits on the latest *published* stable,
+      # never on a future unreleased one and never behind the current stable.
+      # version-code.py --check-dev-base compares the tag's base against the
+      # remote's published stable tags and fails the build with the reason.
+      # Stable builds and local dispatches skip this.
+      - name: Check the dev base is published
+        if: steps.versioncode.outputs.dev != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/$GITHUB_REPOSITORY/git/refs/tags" \
+            -q '.[].ref' > /tmp/published-tags.txt
+          python3 fluffychat/scripts/version-code.py \
+            --check-dev-base "$GITHUB_REF_NAME" /tmp/published-tags.txt
 
       # runner.temp is not available in workflow-level env, so the path is
       # decided here and exported for the upload step.
@@ -367,8 +423,17 @@ jobs:
           # --obfuscate is deliberately not used: it would rename symbols in the
           # whole app for little gain, and FluffyChat is not shipped to an
           # untrusted store.
+          #
+          # A dev build overrides only the *name* (2.11.3-dev.1) so the app can
+          # tell it is running one and compare devBuild numbers; the build
+          # number stays the stable one. Stable tags keep pubspec's name.
+          name_args=()
+          if [ -n "${{ steps.versioncode.outputs.dev }}" ]; then
+            name_args+=(--build-name "${{ steps.versioncode.outputs.version_name }}")
+          fi
           flutter build apk --split-per-abi "--$VARIANT" \
             --build-number "${{ steps.versioncode.outputs.version_code }}" \
+            "${name_args[@]}" \
             --dart-define=SENTRY_DSN="${SENTRY_DSN:-}" \
             --dart-define=SENTRY_RELEASE="$SENTRY_RELEASE" \
             --dart-define=SENTRY_DIST="$GITHUB_RUN_NUMBER" \
@@ -425,12 +490,16 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "::notice::versionCode $arm64_found / $armv7_found verified with $(basename "${AAPT:-$AK}")"
 
-      # What the in-app updater fetches from https://plotina.cc/dl/
-      # update-mobile.json. sha256/size describe the arm64 APK, which is what
-      # the app downloads; the versionCode is the one the arm64 APK really
-      # carries (build number + Flutter's ABI digit), because that is the number
-      # an installed app reads from its own PackageManager. 32-bit devices get
-      # "download Plotina-Mobile-armv7.apk by hand" from the app itself.
+      # What the in-app updater fetches. Stable: https://plotina.cc/dl/
+      # update-mobile.json (infra mirrors it from the per-tag release). Dev:
+      # update-mobile-dev.json on the `dev-latest` GitHub release, with the
+      # SAME versionCode as the stable base plus "devBuild": M and a
+      # -dev.<M> versionName — the app's dev channel compares M because the
+      # code is equal. sha256/size describe the arm64 APK, which is what the
+      # app downloads; the versionCode is the one the arm64 APK really
+      # carries (build number + Flutter's ABI digit), because that is the
+      # number an installed app reads from its own PackageManager. 32-bit
+      # devices get "download Plotina-Mobile-armv7.apk by hand" from the app.
       - name: Write the updater manifest
         run: |
           set -euo pipefail
@@ -443,11 +512,21 @@ jobs:
           package="$(sed -n 's/.*applicationId = "\([^"]*\)".*/\1/p' \
             fluffychat/upstream/android/app/build.gradle.kts)"
           [ -n "$package" ] || { echo "::error::no applicationId in build.gradle.kts"; exit 1; }
-          export package sha256 size
+          DEV="${{ steps.versioncode.outputs.dev }}"
+          if [ -n "$DEV" ]; then
+            manifest_file="update-mobile-dev.json"
+            apk_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/dev-latest/$APK_NAME"
+            notes="Plotina Mobile ${{ steps.versioncode.outputs.version_name }} (dev-сборка $DEV на основе ${{ steps.versioncode.outputs.build }}): тестовые изменения."
+          else
+            manifest_file="$MANIFEST_NAME"
+            apk_url="$UPDATE_APK_URL"
+            notes="Plotina Mobile ${{ steps.versioncode.outputs.version_name }} (сборка ${{ steps.versioncode.outputs.build }}): улучшения и исправления."
+          fi
+          export package sha256 size notes apk_url
           export VERSION_NAME="${{ steps.versioncode.outputs.version_name }}"
           export VERSION_CODE="$apk_code"
-          export NOTES="Plotina Mobile ${VERSION_NAME} (сборка ${{ steps.versioncode.outputs.build }}): улучшения и исправления."
-          python3 - "$MANIFEST_NAME" <<'PY'
+          export DEV_BUILD="$DEV"
+          python3 - "$manifest_file" <<'PY'
           import json, os, sys
 
           manifest = {
@@ -455,16 +534,21 @@ jobs:
               "package": os.environ["package"],
               "versionName": os.environ["VERSION_NAME"],
               "versionCode": int(os.environ["VERSION_CODE"]),
-              "apkUrl": os.environ["UPDATE_APK_URL"],
+              "apkUrl": os.environ["apk_url"],
               "sha256": os.environ["sha256"],
               "size": int(os.environ["size"]),
-              "notes": os.environ["NOTES"],
+              "notes": os.environ["notes"],
           }
+          # Dev manifests carry the M of <base>-dev.<M>; the versionCode is
+          # deliberately the stable one. Stable manifests never have the key.
+          if os.environ.get("DEV_BUILD"):
+              manifest["devBuild"] = int(os.environ["DEV_BUILD"])
           with open(sys.argv[1], "w", encoding="utf-8") as handle:
               json.dump(manifest, handle, ensure_ascii=False, indent=2)
               handle.write("\n")
           print(json.dumps(manifest, ensure_ascii=False, indent=2))
           PY
+          echo "MANIFEST_FILE=$manifest_file" >> "$GITHUB_ENV"
 
       # Uploaded before the checks on purpose: if a check rejects the APK, the
       # artifact is still there to inspect instead of costing another 30 minutes.
@@ -677,7 +761,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && steps.versioncode.outputs.dev == ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
@@ -706,3 +790,36 @@ jobs:
               -q ".assets[] | select(.name == \"$asset\") | \"\\(.name) \\(.size) bytes\"" \
               | grep -q . || { echo "::error::$asset is not attached to release $TAG"; exit 1; }
           done
+
+      # Dev builds never open a per-tag release: they overwrite the three
+      # assets of the fixed `dev-latest` release, which is the dev feed the
+      # app reads (update-mobile-dev.json + the arm64 APK it points at). The
+      # first dev run creates the release as a prerelease so GitHub never
+      # treats it as "latest"; after that every push of a *-dev.<M> tag
+      # replaces its assets atomically enough for the updater, which verifies
+      # sha256/size of whatever it downloads anyway. Stable tags and the
+      # plotina.cc/dl mirror are untouched by this step.
+      - name: Attach to dev-latest release
+        if: startsWith(github.ref, 'refs/tags/') && steps.versioncode.outputs.dev != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          dev_manifest="update-mobile-dev.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/dev-latest" > /dev/null 2>&1 ||
+            gh release create dev-latest \
+              --title "Plotina Mobile dev feed (opt-in)" \
+              --prerelease \
+              --notes "Assets for the in-app Dev update channel (Settings -> Канал обновлений). Overwritten by every v<base>-plotina-mobile.<N>-dev.<M> build; NOT a released version. update-mobile-dev.json is the manifest the app reads."
+          gh release upload dev-latest \
+            "$APK_NAME" "$APK_NAME_ARMV7" "$dev_manifest" --clobber
+          # The dev feed is the deliverable; prove all three assets are on it,
+          # and that the manifest really points at the asset on dev-latest.
+          for asset in "$APK_NAME" "$APK_NAME_ARMV7" "$dev_manifest"; do
+            gh release view dev-latest --json assets \
+              -q ".assets[] | select(.name == \"$asset\") | \"\\(.name) \\(.size) bytes\"" \
+              | grep -q . || { echo "::error::$asset is not attached to release dev-latest"; exit 1; }
+          done
+          grep -q "\"apkUrl\": \"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/dev-latest/$APK_NAME\"" "$dev_manifest" ||
+            { echo "::error::the dev manifest apkUrl does not point at dev-latest"; exit 1; }
+          echo "dev feed published: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/dev-latest/$dev_manifest"

@@ -1,0 +1,123 @@
+diff --git a/lib/l10n/intl_en.arb b/lib/l10n/intl_en.arb
+index 3c267fa..e704c9f 100644
+--- a/lib/l10n/intl_en.arb
++++ b/lib/l10n/intl_en.arb
+@@ -2311,6 +2311,7 @@
+     },
+     "download": "Download",
+     "checkForUpdates": "Check for updates",
++    "updates": "Updates",
+     "updateIsLatest": "You are already running the latest version ({version})",
+     "@updateIsLatest": {
+         "placeholders": {
+diff --git a/lib/l10n/intl_ru.arb b/lib/l10n/intl_ru.arb
+index 34b7b10..19376a2 100644
+--- a/lib/l10n/intl_ru.arb
++++ b/lib/l10n/intl_ru.arb
+@@ -2836,7 +2836,8 @@
+         }
+     },
+     "download": "Загрузить",
+-    "checkForUpdates": "\u041f\u0440\u043e\u0432\u0435\u0440\u0438\u0442\u044c \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044f",
++    "checkForUpdates": "\u041f\u0440\u043e\u0432\u0435рить \u043eбновления",
++    "updates": "\u041eбновления",
+     "updateIsLatest": "\u0423 \u0432\u0430\u0441 \u0443\u0436\u0435 \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u0430 \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u044f\u044f \u0432\u0435\u0440\u0441\u0438\u044f ({version})",
+     "@updateIsLatest": {
+         "placeholders": {
+diff --git a/lib/pages/settings/settings_view.dart b/lib/pages/settings/settings_view.dart
+index 432290e..541285e 100644
+--- a/lib/pages/settings/settings_view.dart
++++ b/lib/pages/settings/settings_view.dart
+@@ -5,7 +5,7 @@
+ 
+ import 'package:async/async.dart';
+ import 'package:fluffychat/l10n/l10n.dart';
+-import 'package:fluffychat/pages/updater/update_channel_selector.dart';
++import 'package:fluffychat/pages/updater/plotina_updates_page.dart';
+ import 'package:fluffychat/utils/fluffy_share.dart';
+ import 'package:fluffychat/utils/platform_infos.dart';
+ import 'package:fluffychat/utils/updater/plotina_updater.dart';
+@@ -195,17 +195,19 @@ class SettingsView extends StatelessWidget {
+                   ? theme.colorScheme.surfaceContainerHigh
+                   : null,
+             ),
+-            // plotina.cc: the APK is published on plotina.cc/dl, not in an
+-            // app store, so the user can check for a newer version here.
++            // plotina.cc: one update entry; the page keeps the primary
++            // "check" action at the top and the dev feed choice below it,
++            // instead of adding two rows to the top-level settings list.
+             if (PlotinaUpdater.isSupported)
+               ListTile(
+                 leading: const Icon(Icons.system_update_alt),
+-                title: Text(L10n.of(context).checkForUpdates),
+-                onTap: () =>
+-                    PlotinaUpdater.checkForUpdate(context, manual: true),
++                title: Text(L10n.of(context).updates),
++                onTap: () => Navigator.of(context).push(
++                  MaterialPageRoute(
++                    builder: (context) => const PlotinaUpdatesPage(),
++                  ),
++                ),
+               ),
+-            // plotina.cc: opt-in dev feed (GitHub `dev-latest` release).
+-            if (PlotinaUpdater.isSupported) const UpdateChannelTile(),
+             ListTile(
+               leading: const Icon(Icons.info_outline_rounded),
+               title: Text(L10n.of(context).about),
+diff --git a/lib/pages/updater/plotina_updates_page.dart b/lib/pages/updater/plotina_updates_page.dart
+new file mode 100644
+index 0000000..6989efb
+--- /dev/null
++++ b/lib/pages/updater/plotina_updates_page.dart
+@@ -0,0 +1,51 @@
++// SPDX-FileCopyrightText: 2026 Plotina
++//
++// SPDX-License-Identifier: AGPL-3.0-or-later
++
++/// plotina.cc: one settings entry for everything update-related.
++///
++/// The top-level settings list used to expose "Check for updates" and
++/// "Update channel" as two separate rows. This page keeps the primary action
++/// first and the channel choice below it, so the settings list grows by one
++/// row instead of two.
++
++library;
++
++import 'package:fluffychat/l10n/l10n.dart';
++import 'package:fluffychat/pages/updater/update_channel_selector.dart';
++import 'package:fluffychat/utils/updater/plotina_updater.dart';
++import 'package:material_ui/material_ui.dart';
++
++class PlotinaUpdatesPage extends StatelessWidget {
++  const PlotinaUpdatesPage({super.key});
++
++  @override
++  Widget build(BuildContext context) {
++    final l10n = L10n.of(context);
++    final theme = Theme.of(context);
++
++    return Scaffold(
++      backgroundColor: theme.scaffoldBackgroundColor,
++      appBar: AppBar(
++        backgroundColor: theme.appBarTheme.backgroundColor,
++        foregroundColor: theme.appBarTheme.foregroundColor,
++        title: Text(l10n.updates),
++      ),
++      body: SafeArea(
++        child: ListView(
++          padding: const EdgeInsets.symmetric(vertical: 8),
++          children: [
++            ListTile(
++              leading: const Icon(Icons.system_update_alt),
++              title: Text(l10n.checkForUpdates),
++              onTap: () =>
++                  PlotinaUpdater.checkForUpdate(context, manual: true),
++            ),
++            Divider(color: theme.dividerColor),
++            const UpdateChannelTile(),
++          ],
++        ),
++      ),
++    );
++  }
++}

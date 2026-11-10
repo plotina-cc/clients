@@ -1,0 +1,82 @@
+diff --git a/lib/l10n/intl_en.arb b/lib/l10n/intl_en.arb
+index 98e8724..3c267fa 100644
+--- a/lib/l10n/intl_en.arb
++++ b/lib/l10n/intl_en.arb
+@@ -2603,7 +2603,7 @@
+     "tagName": "Tag name",
+     "createNewTag": "Create new tag",
+     "hideRoomsInSpaces": "Hide rooms that are in a space",
+-    "possibleByYou": "This release was only possible thanks to your support. Plotina Mobile remains free, open-source, and entirely community-driven.",
++    "possibleByYou": "Thanks for using Plotina Mobile.",
+     "showThumbnailsInTimeline": "Show thumbnails of images and videos",
+     "appSubtitle": "Secure [matrix] Communication",
+     "appDescription": "Communicate encrypted over the decentralized [matrix] network in an easy and accessible way for everyone.",
+diff --git a/lib/l10n/intl_ru.arb b/lib/l10n/intl_ru.arb
+index 6959bce..34b7b10 100644
+--- a/lib/l10n/intl_ru.arb
++++ b/lib/l10n/intl_ru.arb
+@@ -2518,7 +2518,7 @@
+     },
+     "showMore": "Показать больше",
+     "showLess": "Показать меньше",
+-    "possibleByYou": "Этот релиз стал возможен благодаря вашей поддержке. Plotina Mobile остаётся бесплатным, с открытым исходным кодом и полностью управляется сообществом.",
++    "possibleByYou": "Спасибо, что пользуетесь Plotina Mobile.",
+     "hideRoomsInSpaces": "Спрятать комнаты которые в пространстве",
+     "interactiveVerification": "Интерактивная верификация",
+     "waitingForKeys": "Ожидание ключей... Пожалуйста оставьте другое устройство активным.",
+diff --git a/lib/pages/chat_list/client_chooser_button.dart b/lib/pages/chat_list/client_chooser_button.dart
+index 7c89307..39069db 100644
+--- a/lib/pages/chat_list/client_chooser_button.dart
++++ b/lib/pages/chat_list/client_chooser_button.dart
+@@ -201,11 +201,6 @@ class ClientChooserButton extends StatelessWidget {
+         case SettingsAction.invite:
+           FluffyShare.shareInviteLink(context);
+           break;
+-        case SettingsAction.support:
+-          launchUrlString(
+-            'https://ko-fi.com/post/How-can-I-support-FluffyChat-J2G325WE6I',
+-          );
+-          break;
+         case SettingsAction.settings:
+           context.go('/rooms/settings');
+           break;
+@@ -225,7 +220,6 @@ enum SettingsAction {
+   newGroup,
+   setStatus,
+   invite,
+-  support,
+   settings,
+   archive,
+ }
+diff --git a/lib/utils/show_update_snackbar.dart b/lib/utils/show_update_snackbar.dart
+index 58bd0d9..cc631a8 100644
+--- a/lib/utils/show_update_snackbar.dart
++++ b/lib/utils/show_update_snackbar.dart
+@@ -141,27 +141,6 @@ abstract class UpdateNotifier {
+               ),
+             ),
+             actions: [
+-              AdaptiveDialogAction(
+-                bigButtons: true,
+-                targetPlatform: TargetPlatform.android,
+-                onPressed: () => launchUrlString(AppConfig.helpUrl),
+-                child: Row(
+-                  mainAxisSize: .min,
+-                  spacing: 4,
+-                  children: [
+-                    Icon(
+-                      Icons.favorite,
+-                      color: Theme.of(context).colorScheme.error,
+-                    ),
+-                    Text(
+-                      l10n.support,
+-                      style: TextStyle(
+-                        color: Theme.of(context).colorScheme.error,
+-                      ),
+-                    ),
+-                  ],
+-                ),
+-              ),
+               AdaptiveDialogAction(
+                 bigButtons: true,
+                 targetPlatform: TargetPlatform.android,
