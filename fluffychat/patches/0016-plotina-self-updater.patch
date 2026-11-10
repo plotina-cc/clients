@@ -204,10 +204,10 @@ index 0000000..1e567a2
 +    <cache-path name="updates" path="updates" />
 +</paths>
 diff --git a/lib/l10n/intl_en.arb b/lib/l10n/intl_en.arb
-index 29d7b1a..7cddd8d 100644
+index 29d7b1a..98e8724 100644
 --- a/lib/l10n/intl_en.arb
 +++ b/lib/l10n/intl_en.arb
-@@ -2310,6 +2310,30 @@
+@@ -2310,6 +2310,37 @@
          }
      },
      "download": "Download",
@@ -235,14 +235,21 @@ index 29d7b1a..7cddd8d 100644
 +    "noUpdatesAvailable": "No updates available",
 +    "updateRetry": "Try again",
 +    "updateInstallPermissionHint": "Android installs apps only from sources you allow. Tap \"Open settings\", allow Plotina Mobile to install unknown apps, and return here – the download continues by itself.",
++    "updateChannelTitle": "Update channel",
++    "updateChannelStable": "Stable",
++    "updateChannelStableDescription": "Updates from the plotina.cc releases",
++    "updateChannelDev": "Dev",
++    "updateChannelDevDescription": "Test builds from the Plotina dev feed on GitHub",
++    "updateChannelDevWarning": "Dev builds are test builds and may be unstable. Chats and settings are kept when you switch back to Stable, and the next stable release will replace the dev build.",
++    "updateWaitingForStable": "This is a dev build, waiting for a stable release to switch back",
      "sendCanceled": "Sending canceled",
      "loginWithMatrixId": "Login with Matrix-ID",
      "doesNotSeemToBeAValidHomeserver": "Doesn't seem to be a compatible homeserver. Wrong URL?",
 diff --git a/lib/l10n/intl_ru.arb b/lib/l10n/intl_ru.arb
-index b165c17..417c011 100644
+index b165c17..6959bce 100644
 --- a/lib/l10n/intl_ru.arb
 +++ b/lib/l10n/intl_ru.arb
-@@ -2836,6 +2836,30 @@
+@@ -2836,6 +2836,37 @@
          }
      },
      "download": "Загрузить",
@@ -270,19 +277,27 @@ index b165c17..417c011 100644
 +    "noUpdatesAvailable": "Обновлений нет",
 +    "updateRetry": "Повторить",
 +    "updateInstallPermissionHint": "Android разрешает установку только из источников, которые вы одобрили. Нажмите «Открыть настройки», разрешите Plotina Mobile установку из неизвестных источников и вернитесь на этот экран — загрузка продолжится автоматически.",
++    "updateChannelTitle": "Канал обновлений",
++    "updateChannelStable": "Стабильный",
++    "updateChannelStableDescription": "Обновления из релизов plotina.cc",
++    "updateChannelDev": "Dev",
++    "updateChannelDevDescription": "Тестовые сборки из dev-канала Plotina на GitHub",
++    "updateChannelDevWarning": "Dev-сборки — тестовые, они могут быть нестабильными. При возврате на стабильный канал переписка и настройки сохраняются, а следующая стабильная версия заменит dev-сборку.",
++    "updateWaitingForStable": "Пока dev-сборка, ждём стабильный релиз для перехода",
      "unifiedPushDistributors": "Дистрибьюторы Unified Push:",
      "sharedLocation": "Общие геометки",
      "sound": "Звук",
 diff --git a/lib/pages/settings/settings_view.dart b/lib/pages/settings/settings_view.dart
-index d1d8d9c..e452cf7 100644
+index d1d8d9c..432290e 100644
 --- a/lib/pages/settings/settings_view.dart
 +++ b/lib/pages/settings/settings_view.dart
-@@ -4,17 +4,16 @@
+@@ -4,17 +4,17 @@
  // SPDX-License-Identifier: AGPL-3.0-or-later
  
  import 'package:async/async.dart';
 -import 'package:fluffychat/config/setting_keys.dart';
  import 'package:fluffychat/l10n/l10n.dart';
++import 'package:fluffychat/pages/updater/update_channel_selector.dart';
  import 'package:fluffychat/utils/fluffy_share.dart';
  import 'package:fluffychat/utils/platform_infos.dart';
 +import 'package:fluffychat/utils/updater/plotina_updater.dart';
@@ -296,7 +311,7 @@ index d1d8d9c..e452cf7 100644
  
  import '../../widgets/mxc_image_viewer.dart';
  import 'settings.dart';
-@@ -195,11 +194,15 @@ class SettingsView extends StatelessWidget {
+@@ -195,11 +195,17 @@ class SettingsView extends StatelessWidget {
                    ? theme.colorScheme.surfaceContainerHigh
                    : null,
              ),
@@ -314,15 +329,17 @@ index d1d8d9c..e452cf7 100644
 +                onTap: () =>
 +                    PlotinaUpdater.checkForUpdate(context, manual: true),
 +              ),
++            // plotina.cc: opt-in dev feed (GitHub `dev-latest` release).
++            if (PlotinaUpdater.isSupported) const UpdateChannelTile(),
              ListTile(
                leading: const Icon(Icons.info_outline_rounded),
                title: Text(L10n.of(context).about),
 diff --git a/lib/pages/updater/plotina_updater_page.dart b/lib/pages/updater/plotina_updater_page.dart
 new file mode 100644
-index 0000000..941a62a
+index 0000000..509154a
 --- /dev/null
 +++ b/lib/pages/updater/plotina_updater_page.dart
-@@ -0,0 +1,563 @@
+@@ -0,0 +1,585 @@
 +// SPDX-FileCopyrightText: 2026 Plotina
 +//
 +// SPDX-License-Identifier: AGPL-3.0-or-later
@@ -387,6 +404,7 @@ index 0000000..941a62a
 +  downloadFailed,
 +  verifyFailed,
 +  installFailed,
++  waitingForStable,
 +}
 +
 +class _PlotinaUpdaterPageState extends State<PlotinaUpdaterPage>
@@ -466,6 +484,13 @@ index 0000000..941a62a
 +        setState(() {
 +          _manifest = manifest;
 +          _stage = _Stage.available;
++        });
++      case UpdateDecision.waitingForStable:
++        final info = await PlotinaUpdater.packageInfoProvider();
++        if (!mounted) return;
++        setState(() {
++          _versionName = info.version;
++          _stage = _Stage.waitingForStable;
 +        });
 +    }
 +  }
@@ -574,6 +599,20 @@ index 0000000..941a62a
 +          icon: Icon(Icons.smartphone_rounded, size: 56, color: scheme.tertiary),
 +          headline: l10n.updateArm64Only,
 +          body: null,
++          actions: const [],
++        );
++      case _Stage.waitingForStable:
++        // Passive by design: nothing to install, but never the false
++        // "no updates" claim — the next stable release is what moves this
++        // device back to the normal upgrade path.
++        stage = _Info(
++          icon: Icon(
++            Icons.hourglass_top_rounded,
++            size: 56,
++            color: scheme.secondary,
++          ),
++          headline: l10n.updateWaitingForStable,
++          body: l10n.updateIsLatest(_versionName),
 +          actions: const [],
 +        );
 +      default:
@@ -886,6 +925,192 @@ index 0000000..941a62a
 +    );
 +  }
 +}
+diff --git a/lib/pages/updater/update_channel_selector.dart b/lib/pages/updater/update_channel_selector.dart
+new file mode 100644
+index 0000000..7e27294
+--- /dev/null
++++ b/lib/pages/updater/update_channel_selector.dart
+@@ -0,0 +1,180 @@
++// SPDX-FileCopyrightText: 2026 Plotina
++//
++// SPDX-License-Identifier: AGPL-3.0-or-later
++
++/// plotina.cc: the "Update channel" settings row (patch 0016, dev feed).
++///
++/// Stable is the default and the only feed that has ever been used; Dev is a
++/// strict opt-in that points this install at the `dev-latest` GitHub release
++/// (see `PlotinaUpdater.manifestUrlFor`). Switching channels persists to the
++/// shared settings store, so the choice survives updates and restarts, and
++/// switching back to stable while a dev build runs explains that the device
++/// waits for the *next* stable release (`explainChannelSwitch`) instead of
++/// pretending there is nothing to do.
++
++import 'package:fluffychat/l10n/l10n.dart';
++import 'package:fluffychat/utils/updater/plotina_updater.dart';
++import 'package:material_ui/material_ui.dart';
++
++class UpdateChannelTile extends StatelessWidget {
++  const UpdateChannelTile({super.key});
++
++  @override
++  Widget build(BuildContext context) {
++    final l10n = L10n.of(context);
++    // The notifier only carries in-session switches; the store is the truth
++    // and is re-read here on every rebuild, which is exactly what the tile
++    // must show.
++    return ValueListenableBuilder<UpdateChannel>(
++      valueListenable: PlotinaUpdater.channelNotifier,
++      builder:
++          (context, _, child) => ListTile(
++            leading: const Icon(Icons.tune_rounded),
++            title: Text(l10n.updateChannelTitle),
++            subtitle: Text(_channelLabel(l10n, PlotinaUpdater.channelProvider())),
++            onTap: () => showUpdateChannelDialog(context),
++          ),
++    );
++  }
++}
++
++String _channelLabel(L10n l10n, UpdateChannel channel) =>
++    channel == UpdateChannel.dev
++    ? l10n.updateChannelDev
++    : l10n.updateChannelStable;
++
++Future<void> showUpdateChannelDialog(BuildContext context) async {
++  final before = PlotinaUpdater.channelProvider();
++  var selected = before;
++
++  await showDialog<void>(
++    context: context,
++    builder:
++        (dialogContext) => StatefulBuilder(
++          builder: (dialogContext, setState) {
++            final dialogL10n = L10n.of(dialogContext);
++            return AlertDialog(
++              title: Text(dialogL10n.updateChannelTitle),
++              content: Column(
++                mainAxisSize: MainAxisSize.min,
++                crossAxisAlignment: CrossAxisAlignment.stretch,
++                children: [
++                  _ChannelOption(
++                    title: dialogL10n.updateChannelStable,
++                    description: dialogL10n.updateChannelStableDescription,
++                    selected: selected == UpdateChannel.stable,
++                    onTap: () => setState(() => selected = UpdateChannel.stable),
++                  ),
++                  _ChannelOption(
++                    title: dialogL10n.updateChannelDev,
++                    description: dialogL10n.updateChannelDevDescription,
++                    selected: selected == UpdateChannel.dev,
++                    onTap: () => setState(() => selected = UpdateChannel.dev),
++                  ),
++                  if (selected == UpdateChannel.dev) ...[
++                    const SizedBox(height: 8),
++                    Row(
++                      crossAxisAlignment: CrossAxisAlignment.start,
++                      children: [
++                        Icon(
++                          Icons.warning_amber_rounded,
++                          color: Theme.of(dialogContext).colorScheme.error,
++                          size: 18,
++                        ),
++                        const SizedBox(width: 8),
++                        Expanded(
++                          child: Text(
++                            dialogL10n.updateChannelDevWarning,
++                            style: Theme.of(dialogContext).textTheme.bodySmall
++                                ?.copyWith(
++                                  color:
++                                      Theme.of(
++                                        dialogContext,
++                                      ).colorScheme.onSurfaceVariant,
++                                ),
++                          ),
++                        ),
++                      ],
++                    ),
++                  ],
++                ],
++              ),
++              actions: [
++                TextButton(
++                  onPressed: () => Navigator.of(dialogContext).pop(),
++                  child: Text(dialogL10n.cancel),
++                ),
++                FilledButton(
++                  onPressed: () => Navigator.of(dialogContext).pop(true),
++                  child: Text(dialogL10n.ok),
++                ),
++              ],
++            );
++          },
++        ),
++  );
++
++  if (selected == before) return;
++  await PlotinaUpdater.setChannel(selected);
++  if (!context.mounted) return;
++  await PlotinaUpdater.explainChannelSwitch(context, selected);
++}
++
++class _ChannelOption extends StatelessWidget {
++  const _ChannelOption({
++    required this.title,
++    required this.description,
++    required this.selected,
++    required this.onTap,
++  });
++
++  final String title;
++  final String description;
++  final bool selected;
++  final VoidCallback onTap;
++
++  @override
++  Widget build(BuildContext context) {
++    final theme = Theme.of(context);
++    return InkWell(
++      onTap: onTap,
++      borderRadius: BorderRadius.circular(12),
++      child: Padding(
++        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
++        child: Row(
++          children: [
++            Icon(
++              selected
++                  ? Icons.radio_button_checked_rounded
++                  : Icons.radio_button_unchecked_rounded,
++              color:
++                  selected
++                      ? theme.colorScheme.primary
++                      : theme.colorScheme.onSurfaceVariant,
++            ),
++            const SizedBox(width: 12),
++            Expanded(
++              child: Column(
++                crossAxisAlignment: CrossAxisAlignment.start,
++                children: [
++                  Text(
++                    title,
++                    style: theme.textTheme.titleSmall?.copyWith(
++                      color: theme.colorScheme.onSurface,
++                    ),
++                  ),
++                  Text(
++                    description,
++                    style: theme.textTheme.bodySmall?.copyWith(
++                      color: theme.colorScheme.onSurfaceVariant,
++                    ),
++                  ),
++                ],
++              ),
++            ),
++          ],
++        ),
++      ),
++    );
++  }
++}
 diff --git a/lib/utils/platform_infos.dart b/lib/utils/platform_infos.dart
 index 0c2f20e..2ca80af 100644
 --- a/lib/utils/platform_infos.dart
@@ -957,10 +1182,10 @@ index dee8b07..58bd0d9 100644
      try {
 diff --git a/lib/utils/updater/plotina_updater.dart b/lib/utils/updater/plotina_updater.dart
 new file mode 100644
-index 0000000..eff6643
+index 0000000..2e9e134
 --- /dev/null
 +++ b/lib/utils/updater/plotina_updater.dart
-@@ -0,0 +1,591 @@
+@@ -0,0 +1,815 @@
 +// SPDX-FileCopyrightText: 2026 Plotina
 +//
 +// SPDX-License-Identifier: AGPL-3.0-or-later
@@ -979,6 +1204,23 @@ index 0000000..eff6643
 +///   {"client":"mobile","package":"cc.plotina.mobile","versionName":"2.11.3",
 +///    "versionCode":2112323,"apkUrl":"https://plotina.cc/dl/Plotina-Mobile.apk",
 +///    "sha256":"HEX","size":BYTES,"notes":"short text"}
++///
++/// Opt-in update channel (Settings -> "Канал обновлений", persisted in the
++/// shared preferences under `plotina.updater.channel`, default stable): a
++/// dev-channel install fetches instead
++///
++///   https://github.com/plotina-cc/clients/releases/download/dev-latest/update-mobile-dev.json
++///
++/// a static GitHub release whose assets CI overwrites on every
++/// `v<base>-plotina-mobile.<N>-dev.<M>` tag. A dev build carries the *same*
++/// versionCode as the stable `.N` it is based on (same package
++/// `cc.plotina.mobile`, same signing key; the dev manifest adds
++/// `"devBuild":M` and a `versionName` of `<base>-dev.<M>`), so dev-to-dev
++/// upgrades compare M and the next stable `.N+1` is a normal upgrade back.
++/// Equal versionCode is reinstallable by AOSP's `checkDowngrade`, which only
++/// rejects *lower* codes. Dev builds must be based on the latest *published*
++/// stable; the CI dev path validates that before building (see
++/// `fluffychat/scripts/version-code.py --check-dev-base`).
 +///
 +/// `versionCode` is the number of the arm64 APK the CI actually built: the
 +/// build number of the tag plus the ABI digit Flutter's `--split-per-abi`
@@ -1005,8 +1247,9 @@ index 0000000..eff6643
 +/// [PlotinaUpdater.streamApk] and the regression test that streams a full
 +/// body over a never-closed stream.
 +///
-+/// The manifest URL can be pointed at a local server for testing with
-+/// `--dart-define=PLOTINA_UPDATE_URL=http://10.0.2.2:8000/update-mobile.json`.
++/// The manifest URLs can be pointed at a local server for testing with
++/// `--dart-define=PLOTINA_UPDATE_URL=http://10.0.2.2:8000/update-mobile.json`
++/// and `--dart-define=PLOTINA_DEV_UPDATE_URL=http://10.0.2.2:8000/update-mobile-dev.json`.
 +library;
 +
 +import 'dart:async';
@@ -1032,16 +1275,91 @@ index 0000000..eff6643
 +    'cc.plotina.mobile/updater',
 +  );
 +
++  /// Stable feed: mirrored by infra at plotina.cc/dl from the per-tag GitHub
++  /// releases. The dev feed is a fixed GitHub release (`dev-latest`) whose
++  /// assets CI overwrites on every `v<base>-plotina-mobile.<N>-dev.<M>` tag;
++  /// it never touches the edge mirror, so opting into dev is fully reversible.
 +  static const String _defaultManifestUrl =
 +      'https://plotina.cc/dl/update-mobile.json';
-+  static const String _manifestUrl = String.fromEnvironment(
++  static const String _defaultDevManifestUrl =
++      'https://github.com/plotina-cc/clients/releases/download/dev-latest/update-mobile-dev.json';
++
++  static const String _urlOverride = String.fromEnvironment(
 +    'PLOTINA_UPDATE_URL',
-+    defaultValue: _defaultManifestUrl,
++  );
++  static const String _devUrlOverride = String.fromEnvironment(
++    'PLOTINA_DEV_UPDATE_URL',
 +  );
 +
-+  /// Last versionCode the user declined on the update dialog. Silent daily
-+  /// checks skip that version; "Check for updates" shows it again.
-+  static const String _dismissedKey = 'plotina.updater.dismissed_version_code';
++  /// The manifest URL for one channel, after `--dart-define` overrides.
++  /// Exposed for tests and for the settings UI's feed explanation.
++  static String manifestUrlFor(UpdateChannel ch) => switch (ch) {
++    UpdateChannel.stable =>
++      _urlOverride.isEmpty ? _defaultManifestUrl : _urlOverride,
++    UpdateChannel.dev =>
++      _devUrlOverride.isEmpty ? _defaultDevManifestUrl : _devUrlOverride,
++  };
++
++  /// Persisted update channel. `stable` is the default and the value of an
++  /// unreadable or uninitialized store, so a fresh or broken preference can
++  /// never silently start installing GitHub dev builds.
++  static const String _channelKey = 'plotina.updater.channel';
++
++  static UpdateChannel channelFromName(String? value) =>
++      value == 'dev' ? UpdateChannel.dev : UpdateChannel.stable;
++
++  /// Seam for tests: which channel this install uses. SharedPreferences is
++  /// loaded before `runApp`, so the real reader is synchronous.
++  static UpdateChannel Function() channelProvider = _readChannel;
++
++  static UpdateChannel _readChannel() {
++    try {
++      return channelFromName(AppSettings.store.getString(_channelKey));
++    } catch (e, s) {
++      // Before AppSettings.init() (tests, early startup) the store is
++      // unset. Default stable, never throw from an update check.
++      Logs().w('Updater: update channel unreadable, using stable', e, s);
++      return UpdateChannel.stable;
++    }
++  }
++
++  static Future<void> setChannel(UpdateChannel ch) async {
++    try {
++      await AppSettings.store.setString(
++        _channelKey,
++        ch == UpdateChannel.dev ? 'dev' : 'stable',
++      );
++    } catch (e, s) {
++      Logs().w('Updater: could not persist the update channel', e, s);
++    }
++    channelNotifier.value = ch;
++  }
++
++  /// The settings row rebuilds on this so the tile shows the saved value
++  /// without a navigation pop. The store stays the source of truth; this
++  /// only carries in-session switches.
++  static final ValueNotifier<UpdateChannel> channelNotifier =
++      ValueNotifier<UpdateChannel>(UpdateChannel.stable);
++
++  /// `2.11.3-dev.2` -> 2; every other string (a stable version name) -> null.
++  /// The dev build number comes from the APK's own versionName, which CI
++  /// writes as `--build-name <base>-dev.<M>` (see the build workflow); the
++  /// versionCode deliberately stays the stable one, so this is the only
++  /// in-app proof that an install is a dev build.
++  static final RegExp _devVersionName = RegExp(r'^\d+\.\d+\.\d+-dev\.(\d+)$');
++
++  static int? devBuildOf(String versionName) {
++    final match = _devVersionName.firstMatch(versionName.trim());
++    return match == null ? null : int.tryParse(match.group(1)!);
++  }
++
++  static bool isDevVersionName(String versionName) =>
++      devBuildOf(versionName) != null;
++
++  /// Last update the user declined on the silent dialog. A dev manifest and
++  /// its stable base share a versionCode, so the dismissed token carries the
++  /// devBuild too: `2112328` or `2112328:2`.
++  static const String _dismissedKey = 'plotina.updater.dismissed_version';
 +
 +  static const Duration _fetchTimeout = Duration(seconds: 20);
 +
@@ -1116,21 +1434,19 @@ index 0000000..eff6643
 +    }
 +  }
 +
-+  static Future<UpdateManifest?> fetchManifest() async {
++  /// Fetches the manifest of one channel; default: the persisted one.
++  static Future<UpdateManifest?> fetchManifest({UpdateChannel? channel}) async {
++    final url = manifestUrlFor(channel ?? channelProvider());
 +    try {
 +      final client = clientFactory();
 +      final http.Response response;
 +      try {
-+        response = await client
-+            .get(Uri.parse(_manifestUrl))
-+            .timeout(_fetchTimeout);
++        response = await client.get(Uri.parse(url)).timeout(_fetchTimeout);
 +      } finally {
 +        client.close();
 +      }
 +      if (response.statusCode != 200) {
-+        Logs().w(
-+          'Updater: manifest HTTP ${response.statusCode} from $_manifestUrl',
-+        );
++        Logs().w('Updater: manifest HTTP ${response.statusCode} from $url');
 +        return null;
 +      }
 +      final manifest = UpdateManifest.tryParse(response.body);
@@ -1151,10 +1467,70 @@ index 0000000..eff6643
 +    }
 +  }
 +
++  /// The comparison rules, pure so unit tests can enumerate them.
++  ///
++  /// Stable channel:
++  /// * a greater `versionCode` is the normal upgrade — including from a dev
++  ///   build back to stable: dev reuses its base's code, so the *next* stable
++  ///   release (`.N+1`) is greater than an installed `.N-dev.M`;
++  /// * the next stable has not appeared yet while a dev build runs
++  ///   (`versionCode <= localCode` and our versionName is `*-dev.M`):
++  ///   [UpdateDecision.waitingForStable] — honest "dev build, waiting", never
++  ///   a false "no updates available";
++  /// * otherwise up to date.
++  ///
++  /// Dev channel (dev feed publishes `versionCode` == its stable base plus
++  /// `devBuild: M`):
++  /// * a greater code wins regardless of M (a newer dev base, or a stable the
++  ///   dev feed fell back to);
++  /// * equal codes compare `devBuild`: dev -> dev upgrades only on a greater
++  ///   M, stable -> dev offers the dev build even though the code is equal —
++  ///   same package, same signing key, and AOSP's `checkDowngrade` rejects
++  ///   only *lower* codes, so the equal-code reinstall is permitted (verified
++  ///   by unit tests for the logic; an OEM installer test is the one thing
++  ///   this cannot prove);
++  /// * equal codes without a `devBuild` in the manifest are up to date.
++  static UpdateDecision compareUpdate({
++    required UpdateManifest manifest,
++    required int localCode,
++    required String localVersionName,
++    required UpdateChannel channel,
++  }) {
++    final localDev = devBuildOf(localVersionName);
++    final manifestDev = manifest.devBuild;
++    if (manifest.versionCode > localCode) {
++      return UpdateDecision.updateAvailable;
++    }
++    if (manifest.versionCode == localCode && channel == UpdateChannel.dev) {
++      if (manifestDev != null) {
++        if (localDev == null) return UpdateDecision.updateAvailable;
++        return manifestDev > localDev
++            ? UpdateDecision.updateAvailable
++            : UpdateDecision.upToDate;
++      }
++      return UpdateDecision.upToDate;
++    }
++    if (manifest.versionCode < localCode &&
++        channel == UpdateChannel.dev &&
++        manifestDev != null &&
++        localDev != null) {
++      // A dev feed that rolled back to an older base: never offer a downgrade.
++      return UpdateDecision.upToDate;
++    }
++    if (channel == UpdateChannel.stable && localDev != null) {
++      // Running a dev build; the stable feed has nothing newer yet.
++      return UpdateDecision.waitingForStable;
++    }
++    return UpdateDecision.upToDate;
++  }
++
 +  /// The result of comparing the manifest with this install; the updater page
 +  /// turns each value into a visible state. Kept free of BuildContext so it
 +  /// is unit-testable.
-+  static Future<UpdateDecision> decide(UpdateManifest? manifest) async {
++  static Future<UpdateDecision> decide(
++    UpdateManifest? manifest, {
++    UpdateChannel? channel,
++  }) async {
 +    if (manifest == null) return UpdateDecision.checkFailed;
 +    final localCode = await currentVersionCode();
 +    // A versionCode we cannot read must not fall through to `<= -1`: the
@@ -1163,12 +1539,22 @@ index 0000000..eff6643
 +      Logs().w('Updater: our own versionCode is unreadable, not offering');
 +      return UpdateDecision.checkFailed;
 +    }
-+    if (manifest.versionCode <= localCode) return UpdateDecision.upToDate;
-+    // The manifest offers one arm64 APK. A 32-bit-only phone cannot install
++    final effectiveChannel = channel ?? channelProvider();
++    final info = await packageInfoProvider();
++    final decision = compareUpdate(
++      manifest: manifest,
++      localCode: localCode,
++      localVersionName: info.version,
++      channel: effectiveChannel,
++    );
++    // The manifests offer one arm64 APK. A 32-bit-only phone cannot install
 +    // it, so the updater says what to get by hand instead of handing the
 +    // installer a file it rejects.
-+    if (!await canInstallArm64()) return UpdateDecision.armv7Only;
-+    return UpdateDecision.updateAvailable;
++    if (decision == UpdateDecision.updateAvailable &&
++        !await canInstallArm64()) {
++      return UpdateDecision.armv7Only;
++    }
++    return decision;
 +  }
 +
 +  /// The full handoff: permission -> (cached | streamed+verified) download ->
@@ -1425,12 +1811,12 @@ index 0000000..eff6643
 +    if (decision != UpdateDecision.updateAvailable || manifest == null) return;
 +
 +    final store = AppSettings.store;
-+    if (store.getInt(_dismissedKey) == manifest.versionCode) return;
++    if (store.getString(_dismissedKey) == _dismissToken(manifest)) return;
 +
 +    if (!context.mounted) return;
 +    final start = await showPlotinaUpdateDialog(context, manifest);
 +    if (start != true) {
-+      await store.setInt(_dismissedKey, manifest.versionCode);
++      await store.setString(_dismissedKey, _dismissToken(manifest));
 +      return;
 +    }
 +    if (!context.mounted) return;
@@ -1440,6 +1826,55 @@ index 0000000..eff6643
 +            PlotinaUpdaterPage(manifest: manifest, autoStart: true),
 +      ),
 +    );
++  }
++
++  /// What the silent dialog remembers as "declined": the devBuild is part of
++  /// the identity, so skipping `2112328-dev.1` does not also skip
++  /// `2112328-dev.2`.
++  static String _dismissToken(UpdateManifest manifest) =>
++      manifest.devBuild == null
++      ? '${manifest.versionCode}'
++      : '${manifest.versionCode}:${manifest.devBuild}';
++
++  /// Right after the user switches back to stable while a dev build is
++  /// installed: if the stable feed has nothing newer yet, say so instead of
++  /// going quiet; if the next stable is already out, offer it through the
++  /// same dialog the daily check uses. Stable installs need nothing here.
++  static Future<void> explainChannelSwitch(
++    BuildContext context,
++    UpdateChannel channel,
++  ) async {
++    if (!isSupported || channel != UpdateChannel.stable) return;
++    final info = await packageInfoProvider();
++    if (!isDevVersionName(info.version)) return;
++    final manifest = await fetchManifest(channel: UpdateChannel.stable);
++    final decision = await decide(manifest, channel: UpdateChannel.stable);
++    switch (decision) {
++      case UpdateDecision.waitingForStable:
++        if (!context.mounted) return;
++        ScaffoldMessenger.of(context).showSnackBar(
++          SnackBar(
++            content: Text(L10n.of(context).updateWaitingForStable),
++            duration: const Duration(seconds: 6),
++            behavior: SnackBarBehavior.floating,
++          ),
++        );
++      case UpdateDecision.updateAvailable:
++        if (!context.mounted || manifest == null) return;
++        final start = await showPlotinaUpdateDialog(context, manifest);
++        if (start == true && context.mounted) {
++          await Navigator.of(context).push(
++            MaterialPageRoute(
++              builder: (context) =>
++                  PlotinaUpdaterPage(manifest: manifest, autoStart: true),
++            ),
++          );
++        }
++      default:
++        // checkFailed / upToDate / armv7Only: the manual "Check for updates"
++        // page shows those with their retry paths; do not nag here.
++        break;
++    }
 +  }
 +
 +  static String prettySize(int bytes) {
@@ -1455,7 +1890,21 @@ index 0000000..eff6643
 +  }
 +}
 +
-+enum UpdateDecision { upToDate, checkFailed, armv7Only, updateAvailable }
++enum UpdateDecision {
++  upToDate,
++  checkFailed,
++  armv7Only,
++  updateAvailable,
++
++  /// A dev build is installed, the stable feed has no newer code yet. Shows
++  /// "still dev, waiting for the next stable" instead of claiming there is
++  /// nothing to update: the switch back happens with the *next* stable tag.
++  waitingForStable,
++}
++
++/// Which update feed this install follows. Persisted in the shared settings
++/// store (`plotina.updater.channel`); dev is strictly opt-in.
++enum UpdateChannel { stable, dev }
 +
 +enum InstallOutcome {
 +  installerOpened,
@@ -1554,10 +2003,10 @@ index 0000000..eff6643
 +}
 diff --git a/lib/utils/updater/update_manifest.dart b/lib/utils/updater/update_manifest.dart
 new file mode 100644
-index 0000000..5f150ad
+index 0000000..a3b0647
 --- /dev/null
 +++ b/lib/utils/updater/update_manifest.dart
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,114 @@
 +// SPDX-FileCopyrightText: 2026 Plotina
 +//
 +// SPDX-License-Identifier: AGPL-3.0-or-later
@@ -1574,6 +2023,14 @@ index 0000000..5f150ad
 +/// `versionCode` is read back out of the built arm64 APK, so it already
 +/// includes the ABI digit `--split-per-abi` adds and lives in the same number
 +/// space as the PackageManager value the updater compares it against.
++///
++/// The optional `devBuild` field carries the `M` of a
++/// `v<base>-plotina-mobile.<N>-dev.<M>` tag. A dev build deliberately shares
++/// the `versionCode` of the stable release `.N` it is based on (same package,
++/// same signing key, AOSP permits reinstall at an equal code), so the code
++/// alone cannot order dev against dev: when both sides are dev builds of the
++/// same code, `devBuild` breaks the tie (see `PlotinaUpdater.compareUpdate`).
++/// Stable manifests never carry it.
 +library;
 +
 +import 'dart:convert';
@@ -1593,6 +2050,7 @@ index 0000000..5f150ad
 +    required this.sha256,
 +    required this.size,
 +    required this.notes,
++    this.devBuild,
 +  });
 +
 +  final String client;
@@ -1605,6 +2063,10 @@ index 0000000..5f150ad
 +  final String sha256;
 +  final int size;
 +  final String notes;
++
++  /// The `M` of a `...-plotina-mobile.<N>-dev.<M>` build, or null on a stable
++  /// manifest. Only meaningful when [versionCode] equals a dev build's code.
++  final int? devBuild;
 +
 +  /// Parsed fields are validated but not trusted: the caller must still check
 +  /// `package` and verify the download against `sha256`/`size`.
@@ -1624,6 +2086,12 @@ index 0000000..5f150ad
 +        sha256: (json['sha256'] as String? ?? '').toLowerCase(),
 +        size: _toInt(json['size']),
 +        notes: json['notes'] as String? ?? '',
++        // Absent on stable manifests; a dev manifest must carry M >= 1 when
++        // it is present, so `devBuild: null` distinguishes "stable feed" from
++        // a dev feed that published a plain stable manifest.
++        devBuild: json.containsKey('devBuild')
++            ? _toInt(json['devBuild'])
++            : null,
 +      );
 +      if (!manifest.isPlausible) {
 +        Logs().w('Updater: rejecting implausible manifest', body);
@@ -1647,13 +2115,14 @@ index 0000000..5f150ad
 +      versionCode > 0 &&
 +      size > 0 &&
 +      versionName.isNotEmpty &&
++      (devBuild == null || devBuild! >= 1) &&
 +      _sha256Hex.hasMatch(sha256) &&
 +      Uri.tryParse(apkUrl)?.hasAbsolutePath == true &&
 +      // Never hand the installer a cleartext download in release builds.
 +      (kDebugMode || apkUrl.startsWith('https://'));
 +}
 diff --git a/pubspec.lock b/pubspec.lock
-index 596a36b..dc261a7 100644
+index 79b57c7..d767ded 100644
 --- a/pubspec.lock
 +++ b/pubspec.lock
 @@ -282,7 +282,7 @@ packages:
@@ -1927,10 +2396,10 @@ index 0000000..45056df
 +}
 diff --git a/test/utils/updater/plotina_updater_golden_test.dart b/test/utils/updater/plotina_updater_golden_test.dart
 new file mode 100644
-index 0000000..e3bec44
+index 0000000..a471b86
 --- /dev/null
 +++ b/test/utils/updater/plotina_updater_golden_test.dart
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,113 @@
 +// SPDX-FileCopyrightText: 2026 Plotina
 +// SPDX-License-Identifier: AGPL-3.0-or-later
 +//
@@ -1938,6 +2407,10 @@ index 0000000..e3bec44
 +// in both themes, so the colours can be inspected as pixels instead of
 +// asserted from code. Real fonts are loaded because the test harness otherwise
 +// draws Ahem boxes and the screenshot says nothing about the actual UI.
++//
++// Not part of the ordinary `flutter test` run: the reference PNGs are not
++// committed, so the capture is opt-in:
++//   PLOTINA_GOLDENS=1 flutter test --update-goldens test/utils/updater/plotina_updater_golden_test.dart
 +
 +import 'dart:io';
 +import 'dart:typed_data';
@@ -1988,14 +2461,19 @@ index 0000000..e3bec44
 +}
 +
 +void main() {
++  // The capture is opt-in (see the header): plain `flutter test` skips it so
++  // the suite stays green without un-committed reference PNGs or host paths.
++  final enabled = Platform.environment.containsKey('PLOTINA_GOLDENS');
 +  late Directory tmp;
 +  late File target;
 +
 +  setUpAll(() async {
++    if (!enabled) return;
 +    await loadFont('Roboto', '/usr/share/fonts/TTF/DejaVuSans.ttf');
 +    await loadFont(
 +      'MaterialIcons',
-+      '/home/hermes/fluffy-build/flutter/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
++      '${Platform.environment['FLUTTER_ROOT'] ?? '/home/hermes/fluffy-build/flutter'}'
++      '/bin/cache/artifacts/material_fonts/MaterialIcons-Regular.otf',
 +    );
 +  });
 +
@@ -2032,7 +2510,7 @@ index 0000000..e3bec44
 +        find.byType(PlotinaUpdaterPage),
 +        matchesGoldenFile('goldens/updater_${brightness.name}.png'),
 +      );
-+    });
++    }, skip: !enabled);
 +  }
 +}
 diff --git a/test/utils/updater/plotina_updater_page_test.dart b/test/utils/updater/plotina_updater_page_test.dart
@@ -2362,6 +2840,502 @@ index 0000000..2241428
 +    );
 +  });
 +}
+diff --git a/test/utils/updater/update_channel_test.dart b/test/utils/updater/update_channel_test.dart
+new file mode 100644
+index 0000000..2dfb4a6
+--- /dev/null
++++ b/test/utils/updater/update_channel_test.dart
+@@ -0,0 +1,490 @@
++// SPDX-FileCopyrightText: 2026 Plotina
++//
++// SPDX-License-Identifier: AGPL-3.0-or-later
++
++// The opt-in Dev update channel: URL selection, dev version parsing, the
++// devBuild tie-break (a dev build carries the SAME versionCode as its stable
++// base), the passive "waiting for the next stable" state when a dev build is
++// on the stable feed, and the persistence of the channel through the real
++// settings store.
++
++import 'dart:convert';
++import 'dart:io';
++
++import 'package:fluffychat/config/setting_keys.dart';
++import 'package:fluffychat/l10n/l10n.dart';
++import 'package:fluffychat/pages/updater/plotina_updater_page.dart';
++import 'package:fluffychat/utils/updater/plotina_updater.dart';
++import 'package:fluffychat/utils/updater/update_manifest.dart';
++import 'package:material_ui/material_ui.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:shared_preferences/shared_preferences.dart';
++
++import 'updater_fakes.dart';
++
++const devApkUrl =
++    'https://github.com/plotina-cc/clients/releases/download/'
++    'dev-latest/Plotina-Mobile.apk';
++
++void main() {
++  TestWidgetsFlutterBinding.ensureInitialized();
++
++  group('manifest URLs', () {
++    test('stable feed is the plotina.cc manifest', () {
++      expect(
++        PlotinaUpdater.manifestUrlFor(UpdateChannel.stable),
++        'https://plotina.cc/dl/update-mobile.json',
++      );
++    });
++
++    test('dev feed is the GitHub dev-latest manifest, not the edge', () {
++      final url = Uri.parse(PlotinaUpdater.manifestUrlFor(UpdateChannel.dev));
++      expect(url.toString(), kDevManifestUrl);
++      expect(url.host, 'github.com');
++      expect(url.path, contains('/releases/download/dev-latest/'));
++      expect(url.path, endsWith('update-mobile-dev.json'));
++    });
++  });
++
++  group('dev version name parsing', () {
++    test('a dev versionName yields its devBuild number', () {
++      expect(PlotinaUpdater.devBuildOf('2.11.3-dev.1'), 1);
++      expect(PlotinaUpdater.devBuildOf('2.11.3-dev.12'), 12);
++      expect(PlotinaUpdater.devBuildOf(' 2.11.3-dev.2 '), 2);
++      expect(PlotinaUpdater.isDevVersionName('2.11.3-dev.1'), isTrue);
++    });
++
++    test('stable and malformed version names are not dev builds', () {
++      expect(PlotinaUpdater.devBuildOf('2.11.3'), isNull);
++      expect(PlotinaUpdater.devBuildOf('2.11.3+3574'), isNull);
++      expect(PlotinaUpdater.devBuildOf('2.11.3-dev'), isNull);
++      expect(PlotinaUpdater.devBuildOf('2.11.3-dev.x'), isNull);
++      expect(PlotinaUpdater.devBuildOf('dev.1'), isNull);
++      expect(PlotinaUpdater.isDevVersionName('2.11.3'), isFalse);
++    });
++  });
++
++  group('channelFromName', () {
++    test('only the exact dev value opts in; everything else is stable', () {
++      expect(PlotinaUpdater.channelFromName('dev'), UpdateChannel.dev);
++      expect(PlotinaUpdater.channelFromName('stable'), UpdateChannel.stable);
++      expect(PlotinaUpdater.channelFromName(null), UpdateChannel.stable);
++      expect(PlotinaUpdater.channelFromName('Dev'), UpdateChannel.stable);
++      expect(PlotinaUpdater.channelFromName(''), UpdateChannel.stable);
++    });
++  });
++
++  group('manifest devBuild parsing', () {
++    Map<String, Object?> goodJson() => {
++      'client': 'mobile',
++      'package': kPackageName,
++      'versionName': '2.11.3-dev.1',
++      'versionCode': 2112328,
++      'apkUrl': devApkUrl,
++      'sha256': 'a' * 64,
++      'size': 100,
++      'notes': 'dev test',
++    };
++
++    test('a dev manifest keeps the stable versionCode and adds devBuild', () {
++      final json = goodJson()..['devBuild'] = 3;
++      final manifest = UpdateManifest.tryParse(jsonEncode(json));
++      expect(manifest, isNotNull);
++      expect(manifest!.versionCode, 2112328);
++      expect(manifest.devBuild, 3);
++    });
++
++    test('a stable manifest has devBuild null', () {
++      final manifest = UpdateManifest.tryParse(jsonEncode(goodJson()));
++      expect(manifest, isNotNull);
++      expect(manifest!.devBuild, isNull);
++    });
++
++    test('devBuild below 1 is rejected, not clamped', () {
++      expect(
++        UpdateManifest.tryParse(
++          jsonEncode(goodJson()..['devBuild'] = 0),
++        ),
++        isNull,
++      );
++      expect(
++        UpdateManifest.tryParse(
++          jsonEncode(goodJson()..['devBuild'] = -2),
++        ),
++        isNull,
++      );
++      expect(
++        UpdateManifest.tryParse(
++          jsonEncode(goodJson()..['devBuild'] = 'x'),
++        ),
++        isNull,
++      );
++    });
++  });
++
++  group('compareUpdate', () {
++    // v2.11.3-plotina-mobile.28        -> arm64 2112328 (stable)
++    // v2.11.3-plotina-mobile.28-dev.M  -> arm64 2112328 (dev, versionCode
++    //                                     deliberately identical)
++    // v2.11.3-plotina-mobile.29        -> arm64 2112329 (next stable)
++    const stableCode = 2112328;
++    const nextStableCode = 2112329;
++    const dev1 = '2.11.3-dev.1';
++
++    UpdateDecision decideFor({
++      required int manifestCode,
++      int? manifestDevBuild,
++      required int localCode,
++      required String localVersion,
++      required UpdateChannel channel,
++    }) => PlotinaUpdater.compareUpdate(
++      manifest: makeManifest(
++        versionCode: manifestCode,
++        versionName: manifestDevBuild == null ? '2.11.3' : dev1,
++        devBuild: manifestDevBuild,
++      ),
++      localCode: localCode,
++      localVersionName: localVersion,
++      channel: channel,
++    );
++
++    test('stable channel keeps the normal upgrade and up-to-date rules', () {
++      expect(
++        decideFor(
++          manifestCode: nextStableCode,
++          localCode: stableCode,
++          localVersion: '2.11.3',
++          channel: UpdateChannel.stable,
++        ),
++        UpdateDecision.updateAvailable,
++      );
++      expect(
++        decideFor(
++          manifestCode: stableCode,
++          localCode: stableCode,
++          localVersion: '2.11.3',
++          channel: UpdateChannel.stable,
++        ),
++        UpdateDecision.upToDate,
++      );
++      expect(
++        decideFor(
++          manifestCode: stableCode - 1,
++          localCode: stableCode,
++          localVersion: '2.11.3',
++          channel: UpdateChannel.stable,
++        ),
++        UpdateDecision.upToDate,
++      );
++    });
++
++    test('stable channel: dev build never sees "no updates" for its own base',
++        () {
++      // Equal code: the base stable of the installed dev build -> passive.
++      expect(
++        decideFor(
++          manifestCode: stableCode,
++          localCode: stableCode,
++          localVersion: dev1,
++          channel: UpdateChannel.stable,
++        ),
++        UpdateDecision.waitingForStable,
++      );
++      // Older published stable than the dev base (rollback mirror) -> passive.
++      expect(
++        decideFor(
++          manifestCode: stableCode - 1,
++          localCode: stableCode,
++          localVersion: dev1,
++          channel: UpdateChannel.stable,
++        ),
++        UpdateDecision.waitingForStable,
++      );
++      // The next stable outranks the dev code: normal upgrade back to stable.
++      expect(
++        decideFor(
++          manifestCode: nextStableCode,
++          localCode: stableCode,
++          localVersion: dev1,
++          channel: UpdateChannel.stable,
++        ),
++        UpdateDecision.updateAvailable,
++      );
++    });
++
++    test('dev channel: dev-to-dev compares devBuild, not versionCode', () {
++      expect(
++        decideFor(
++          manifestCode: stableCode,
++          manifestDevBuild: 2,
++          localCode: stableCode,
++          localVersion: dev1,
++          channel: UpdateChannel.dev,
++        ),
++        UpdateDecision.updateAvailable,
++      );
++      expect(
++        decideFor(
++          manifestCode: stableCode,
++          manifestDevBuild: 1,
++          localCode: stableCode,
++          localVersion: dev1,
++          channel: UpdateChannel.dev,
++        ),
++        UpdateDecision.upToDate,
++      );
++      expect(
++        decideFor(
++          manifestCode: stableCode,
++          manifestDevBuild: 1,
++          localCode: stableCode,
++          localVersion: '2.11.3-dev.5',
++          channel: UpdateChannel.dev,
++        ),
++        UpdateDecision.upToDate,
++      );
++    });
++
++    test('dev channel: a stable install opts in to the equal-code dev build',
++        () {
++      // versionCode is equal to the running stable; AOSP checkDowngrade only
++      // rejects *lower* codes, so the equal-code reinstall is permitted.
++      expect(
++        decideFor(
++          manifestCode: stableCode,
++          manifestDevBuild: 1,
++          localCode: stableCode,
++          localVersion: '2.11.3',
++          channel: UpdateChannel.dev,
++        ),
++        UpdateDecision.updateAvailable,
++      );
++    });
++
++    test('dev channel: a newer code wins regardless of devBuild', () {
++      expect(
++        decideFor(
++          manifestCode: nextStableCode,
++          manifestDevBuild: 1,
++          localCode: stableCode,
++          localVersion: dev1,
++          channel: UpdateChannel.dev,
++        ),
++        UpdateDecision.updateAvailable,
++      );
++      // Dev feed rolled back to an older base: never offer a downgrade.
++      expect(
++        decideFor(
++          manifestCode: stableCode - 1,
++          manifestDevBuild: 9,
++          localCode: stableCode,
++          localVersion: dev1,
++          channel: UpdateChannel.dev,
++        ),
++        UpdateDecision.upToDate,
++      );
++    });
++
++    test('dev channel with a plain (devBuild-less) manifest is up to date',
++        () {
++      expect(
++        decideFor(
++          manifestCode: stableCode,
++          localCode: stableCode,
++          localVersion: dev1,
++          channel: UpdateChannel.dev,
++        ),
++        UpdateDecision.upToDate,
++      );
++    });
++  });
++
++  group('fetchManifest channel selection', () {
++    late Directory tmp;
++
++    setUp(() => tmp = Directory.systemTemp.createTempSync('channel_fetch'));
++    tearDown(() => tmp.deleteSync(recursive: true));
++
++    test('the dev channel fetches the GitHub dev manifest', () async {
++      final platform = FakeUpdaterPlatform();
++      final client = useUpdaterFakes(
++        platform: platform,
++        manifestBody: '{}',
++        channel: UpdateChannel.dev,
++      );
++
++      await PlotinaUpdater.fetchManifest();
++
++      expect(client.requestedUrls, [kDevManifestUrl]);
++    });
++
++    test('the stable channel still fetches plotina.cc', () async {
++      final platform = FakeUpdaterPlatform();
++      final client = useUpdaterFakes(
++        platform: platform,
++        manifestBody: '{}',
++      );
++
++      await PlotinaUpdater.fetchManifest();
++
++      expect(client.requestedUrls, [kManifestUrl]);
++    });
++
++    test('an explicit channel argument overrides the persisted one', () async {
++      final platform = FakeUpdaterPlatform();
++      final client = useUpdaterFakes(
++        platform: platform,
++        manifestBody: '{}',
++        channel: UpdateChannel.stable,
++      );
++
++      await PlotinaUpdater.fetchManifest(channel: UpdateChannel.dev);
++
++      expect(client.requestedUrls, [kDevManifestUrl]);
++    });
++  });
++
++  group('decide() through the async path', () {
++    test('dev install on the dev feed gets the dev upgrade offered', () async {
++      final manifest = makeManifest(
++        versionCode: 2112328,
++        versionName: '2.11.3-dev.2',
++        devBuild: 2,
++      );
++      final platform = FakeUpdaterPlatform(versionCode: 2112328);
++      useUpdaterFakes(
++        platform: platform,
++        manifestBody: manifestJsonOf(manifest),
++        channel: UpdateChannel.dev,
++        versionName: '2.11.3-dev.1',
++      );
++
++      expect(
++        await PlotinaUpdater.decide(manifest),
++        UpdateDecision.updateAvailable,
++      );
++    });
++
++    test('dev install on the stable feed waits for the next stable', () async {
++      final manifest = makeManifest(versionCode: 2112328);
++      final platform = FakeUpdaterPlatform(versionCode: 2112328);
++      useUpdaterFakes(
++        platform: platform,
++        manifestBody: manifestJsonOf(manifest),
++        versionName: '2.11.3-dev.1',
++      );
++
++      expect(
++        await PlotinaUpdater.decide(manifest),
++        UpdateDecision.waitingForStable,
++      );
++    });
++
++    test('armv7 devices still get told, on either channel', () async {
++      final manifest = makeManifest(
++        versionCode: 2112328,
++        versionName: '2.11.3-dev.1',
++        devBuild: 1,
++      );
++      final platform = FakeUpdaterPlatform(
++        versionCode: 2112328,
++        installArm64: false,
++      );
++      useUpdaterFakes(
++        platform: platform,
++        manifestBody: manifestJsonOf(manifest),
++        channel: UpdateChannel.dev,
++      );
++
++      expect(
++        await PlotinaUpdater.decide(manifest),
++        UpdateDecision.armv7Only,
++      );
++    });
++  });
++
++  group('channel persistence', () {
++    test('default is stable; the store decides; setChannel round-trips',
++        () async {
++      SharedPreferences.setMockInitialValues({});
++      await AppSettings.init();
++
++      expect(PlotinaUpdater.channelProvider(), UpdateChannel.stable);
++
++      await PlotinaUpdater.setChannel(UpdateChannel.dev);
++      expect(AppSettings.store.getString('plotina.updater.channel'), 'dev');
++      expect(PlotinaUpdater.channelProvider(), UpdateChannel.dev);
++      expect(PlotinaUpdater.channelNotifier.value, UpdateChannel.dev);
++
++      await PlotinaUpdater.setChannel(UpdateChannel.stable);
++      expect(AppSettings.store.getString('plotina.updater.channel'), 'stable');
++      expect(PlotinaUpdater.channelProvider(), UpdateChannel.stable);
++    });
++
++    test('a stored dev preference is honoured by the real reader', () async {
++      // Simulates the state after an app restart: the value is in the store,
++      // the default channelProvider (the private real reader, restored by
++      // every earlier useUpdaterFakes teardown) must answer dev without any
++      // setChannel call this session.
++      await AppSettings.store.setString('plotina.updater.channel', 'dev');
++
++      expect(PlotinaUpdater.channelProvider(), UpdateChannel.dev);
++
++      await AppSettings.store.setString('plotina.updater.channel', 'stable');
++      expect(PlotinaUpdater.channelProvider(), UpdateChannel.stable);
++    });
++  });
++
++  group('updater page, passive stable state', () {
++    late Directory tmp;
++    late File target;
++
++    setUp(() {
++      tmp = Directory.systemTemp.createTempSync('channel_page');
++      target = File('${tmp.path}/Plotina-Mobile.apk');
++    });
++
++    tearDown(() => tmp.deleteSync(recursive: true));
++
++    testWidgets(
++      'a dev build on the stable channel shows the waiting message, '
++      'not "no updates available"',
++      (tester) async {
++        final manifest = makeManifest(versionCode: 2112328);
++        final platform = FakeUpdaterPlatform(versionCode: 2112328);
++        useUpdaterFakes(
++          platform: platform,
++          manifestBody: manifestJsonOf(manifest),
++          versionName: '2.11.3-dev.1',
++        );
++
++        await tester.pumpWidget(
++          MaterialApp(
++            localizationsDelegates: L10n.localizationsDelegates,
++            supportedLocales: L10n.supportedLocales,
++            locale: const Locale('en'),
++            home: PlotinaUpdaterPage(fileProvider: () async => target),
++          ),
++        );
++        for (var i = 0; i < 50; i++) {
++          await tester.pump(const Duration(milliseconds: 20));
++          if (find.text(
++            'This is a dev build, waiting for a stable release to switch back',
++          ).evaluate().isNotEmpty) {
++            break;
++          }
++        }
++
++        expect(
++          find.text(
++            'This is a dev build, waiting for a stable release to switch back',
++          ),
++          findsOneWidget,
++        );
++        expect(find.text('No updates available'), findsNothing);
++        expect(find.text('Download and install'), findsNothing);
++        expect(platform.installApkCalls, 0);
++      },
++    );
++  });
++}
 diff --git a/test/utils/updater/update_manifest_test.dart b/test/utils/updater/update_manifest_test.dart
 new file mode 100644
 index 0000000..a3a2f0d
@@ -2461,10 +3435,10 @@ index 0000000..a3a2f0d
 +}
 diff --git a/test/utils/updater/updater_fakes.dart b/test/utils/updater/updater_fakes.dart
 new file mode 100644
-index 0000000..8e922be
+index 0000000..4d82b1e
 --- /dev/null
 +++ b/test/utils/updater/updater_fakes.dart
-@@ -0,0 +1,217 @@
+@@ -0,0 +1,235 @@
 +// SPDX-FileCopyrightText: 2026 Plotina
 +//
 +// SPDX-License-Identifier: AGPL-3.0-or-later
@@ -2484,6 +3458,9 @@ index 0000000..8e922be
 +import 'package:http/http.dart' as http;
 +
 +const String kManifestUrl = 'https://plotina.cc/dl/update-mobile.json';
++const String kDevManifestUrl =
++    'https://github.com/plotina-cc/clients/releases/download/'
++    'dev-latest/update-mobile-dev.json';
 +const String kApkUrl = 'https://plotina.cc/dl/Plotina-Mobile.apk';
 +const String kPackageName = 'cc.plotina.mobile';
 +
@@ -2492,16 +3469,20 @@ index 0000000..8e922be
 +  int versionCode = 2112326,
 +  String? shaOverride,
 +  int? sizeOverride,
++  String versionName = '2.11.3',
++  int? devBuild,
++  String apkUrl = kApkUrl,
 +}) {
 +  return UpdateManifest(
 +    client: 'mobile',
 +    package: kPackageName,
-+    versionName: '2.11.3',
++    versionName: versionName,
 +    versionCode: versionCode,
-+    apkUrl: kApkUrl,
++    apkUrl: apkUrl,
 +    sha256: shaOverride ?? sha256.convert(apkBytes).toString(),
 +    size: sizeOverride ?? apkBytes.length,
 +    notes: 'Test release notes',
++    devBuild: devBuild,
 +  );
 +}
 +
@@ -2514,6 +3495,7 @@ index 0000000..8e922be
 +  'sha256': manifest.sha256,
 +  'size': manifest.size,
 +  'notes': manifest.notes,
++  if (manifest.devBuild != null) 'devBuild': manifest.devBuild,
 +});
 +
 +/// Doubles the `cc.plotina.mobile/updater` MethodChannel.
@@ -2597,7 +3579,7 @@ index 0000000..8e922be
 +  Future<http.StreamedResponse> send(http.BaseRequest request) async {
 +    final url = request.url.toString();
 +    requestedUrls.add(url);
-+    if (url == kManifestUrl) {
++    if (url == kManifestUrl || url == kDevManifestUrl) {
 +      // When gated, the fetch freezes until the test opens the gate - used
 +      // to catch the spinner state of the updater page.
 +      if (gateManifest) await manifestGate.future;
@@ -2649,6 +3631,11 @@ index 0000000..8e922be
 +/// Installs the fakes into [PlotinaUpdater]'s DI seams and restores whatever
 +/// was there before (the first restore therefore puts the real, private
 +/// defaults back). Returns the client for per-test assertions.
++///
++/// [channel] and [versionName] drive the dev-channel seams: with them unset
++/// the fake behaves like a stable-channel stable install (the default
++/// `channelProvider` would read an uninitialized SharedPreferences store and
++/// answer `stable`; we do not depend on that here).
 +FakeUpdaterClient useUpdaterFakes({
 +  required FakeUpdaterPlatform platform,
 +  required String manifestBody,
@@ -2657,9 +3644,12 @@ index 0000000..8e922be
 +  int manifestStatus = 200,
 +  bool closeApkStream = true,
 +  bool gateManifest = false,
++  UpdateChannel channel = UpdateChannel.stable,
++  String versionName = '2.11.3',
 +}) {
 +  final previousClientFactory = PlotinaUpdater.clientFactory;
 +  final previousPackageInfo = PlotinaUpdater.packageInfoProvider;
++  final previousChannel = PlotinaUpdater.channelProvider;
 +  final client = FakeUpdaterClient(
 +    manifestBody: manifestBody,
 +    apkChunks: apkChunks,
@@ -2672,11 +3662,13 @@ index 0000000..8e922be
 +  PlotinaUpdater.clientFactory = () => client;
 +  PlotinaUpdater.packageInfoProvider = () async => (
 +    packageName: kPackageName,
-+    version: '2.11.3',
++    version: versionName,
 +  );
++  PlotinaUpdater.channelProvider = () => channel;
 +  addTearDown(() {
 +    PlotinaUpdater.clientFactory = previousClientFactory;
 +    PlotinaUpdater.packageInfoProvider = previousPackageInfo;
++    PlotinaUpdater.channelProvider = previousChannel;
 +    platform.dispose();
 +    client.dispose();
 +  });

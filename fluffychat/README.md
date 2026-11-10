@@ -19,7 +19,7 @@ listened to a call on a device yet.
 | Tag | `v2.11.3` (`UPSTREAM_TAG`), commit `6fc4920` |
 | Flutter | `3.47.8` (upstream `.fvmrc`) |
 | Call stack | `livekit_client` 2.13.1, `flutter_webrtc` 1.6.2+hotfix.4 (both from `pubspec.lock`) |
-| Patch | sixteen: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.mobile`, `0008`-`0011` Plotina name/label/links/visible strings, `0012` intro buttons, `0013` OIDC scheme, `0014` no upstream support, `0015` About dialog, `0016` in-app updater (`patches/`) |
+| Patch | twenty-one: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.mobile`, `0008`-`0011` Plotina name/label/links/visible strings, `0012` intro buttons, `0013` OIDC scheme, `0014` no upstream support, `0015` About dialog, `0016` in-app updater, `0018` no donation/support prompts, `0019` one "Обновления" settings tab, `0020` build number in the update status, `0021` UTF-8 update manifests (`patches/`). `0017` is left free for the personal-DM-names patch that lands from `wt/dm-names-fluffychat`; numbers are per directory, so nothing may reuse it |
 
 ## What is in this directory
 
@@ -43,6 +43,10 @@ scripts/fetch-model.sh             downloads the model, SHA-256 pinned
 patches/0012-plotina-intro-buttons.patch  intro "Sign in" always on-screen (see below)
 patches/0013-plotina-oidc-scheme.patch    SSO scheme cc.plotina.fluffychat (MAS)
 patches/0016-plotina-self-updater.patch   in-app updater (see "In-app updater")
+patches/0018-plotina-remove-donations.patch  no donation/support prompts
+patches/0019-plotina-updates-tab.patch      one "Обновления" settings tab
+patches/0020-plotina-version-details.patch  build number in the update status
+patches/0021-plotina-update-utf8.patch      UTF-8 update manifests
 scripts/version-code.py          the versionCode formula, used by CI and by
                                  scripts/build-android.sh
 tests/intro_plotina_test.dart    Flutter widget regression test for 0012
@@ -314,6 +318,80 @@ Point the updater at a local server while testing with
 `fluffychat/tests/updater_manifest_test.dart` covers the parser: the contract
 above, numeric strings, uppercase sha256, missing fields and garbage all either
 parse or get rejected without throwing out of the daily check.
+
+### Dev update channel (`v<base>-plotina-mobile.<N>-dev.<M>`)
+
+**Settings → "Канал обновлений" / "Update channel"** (patch `0016`,
+`lib/pages/updater/update_channel_selector.dart`) lets one install opt into the
+dev feed instead of `plotina.cc/dl`:
+
+```
+https://github.com/plotina-cc/clients/releases/download/dev-latest/update-mobile-dev.json
+```
+
+A dev build is tagged `v2.11.3-plotina-mobile.28-dev.1` and
+
+- **keeps the versionCode of the stable `.N` it is based on** — 2110328, so the
+  arm64 APK reports 2112328, exactly the published stable's number — and changes
+  only the versionName to `2.11.3-dev.1` through `--build-name`. Same package,
+  same signing key and an *equal* versionCode reinstall over the stable in place
+  (AOSP `checkDowngrade` rejects lower codes, not equal ones), and the next
+  stable (`.29` → 2112329) is an ordinary upgrade back;
+- because the codes are equal, dev-to-dev ordering cannot use them: the app
+  parses the `-dev.<M>` suffix of its own versionName
+  (`PlotinaUpdater.devBuildOf`) and compares it against the `devBuild` field of
+  the dev manifest, so dev 2 is offered over dev 1 and a dev manifest that
+  omits `devBuild` offers nothing to an install that already carries that code
+  (`compareUpdate` returns `upToDate`, never a reinstall of the same file);
+- is published **only** to the fixed `dev-latest` prerelease (the workflow's
+  "Attach to dev-latest release" step, which creates it on the first dev run).
+  Dev artifacts never reach a per-tag release or `plotina.cc/dl`, so switching
+  the setting back to Stable is enough to be governed by released builds again;
+- must sit on the **latest published stable**: CI's "Check the dev base is
+  published" step runs `scripts/version-code.py --check-dev-base` against the
+  remote tag list and refuses a dev tag whose base was never released or is
+  behind the current stable, before the 30-minute build is spent.
+
+Locally: `PLOTINA_DEV=1 PLOTINA_BUILD=28 scripts/build-android.sh` produces
+`2.11.3-dev.1` with the stable `.28` versionCode, and
+`PLOTINA_DEV_UPDATE_URL=…` points the dev feed at a local server the same way
+`PLOTINA_UPDATE_URL` points the stable one.
+
+`fluffychat/tests/test_version_code.py` pins the tag grammar, the shared
+versionCode and the dev-base check; `upstream/test/utils/updater/`
+(`update_channel_test.dart`, `plotina_updater_flow_test.dart`) pins the channel
+default (stable, also when the store is unreadable), the `devBuild` tie-break and
+the feed URLs, and `flutter test test/utils/updater/` is the harness for it.
+The Python half now also runs in CI as a build gate ("Run updater and
+versionCode tests").
+
+## Updates screen, donations, manifest encoding (patches `0018`-`0021`)
+
+Four small patches ride on top of `0016`, all inside the updater's own files:
+
+- **`0018` no donation/support prompts.** `possibleByYou` ("This release was
+  only possible thanks to your support…") becomes a plain thank-you in
+  `intl_en.arb` and `intl_ru.arb`, the `support` entry is gone from the chat-list
+  menu (`client_chooser_button.dart`: the `SettingsAction.support` case and the
+  enum value) and the "поддержать" button is gone from the update snackbar's
+  dialog actions. Nothing links to ko-fi any more.
+- **`0019` one "Обновления" settings row.** `Settings → "Обновления"` opens
+  `lib/pages/updater/plotina_updates_page.dart` — the manual check first, then
+  the `UpdateChannelTile` below a divider — instead of exposing "Проверить
+  обновления" and "Канал обновлений" as two rows of the top-level list. New
+  l10n key `updates`.
+- **`0020` build number in the update status.** New key `updateBuild`
+  ("build {code}" / "сборка {code}"), appended to the version in the
+  *up to date* / *waiting for stable* states and on the update card, read from
+  `PlotinaUpdater.currentVersionCode()` — so a dev build (same versionCode as
+  its stable base, different `-dev.<M>`) can be told apart on screen.
+- **`0021` UTF-8 update manifests.** The manifest is decoded from
+  `response.bodyBytes` with `utf8.decode(..., allowMalformed: true)`: GitHub
+  serves release assets without a charset, `package:http` then falls back to
+  Latin-1 and the Russian `notes` came out as mojibake on the `dev-latest` feed.
+
+The Dart coverage from `0016` (`flutter test test/utils/updater/`) exercises
+these paths; `0018`-`0021` add no separate harness.
 
 ## Licensing
 

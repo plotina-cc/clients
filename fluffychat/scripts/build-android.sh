@@ -17,13 +17,18 @@ else
   echo "reusing $upstream"
 fi
 
-for patch in "$here"/patches/*.patch; do
-  if git -C "$upstream" apply --reverse --check "$patch" 2>/dev/null; then
-    echo "already applied: $(basename "$patch")"
-  else
-    git -C "$upstream" apply --verbose "$patch"
-  fi
-done
+# Local dev rebuilds often sit on an already-patched tree whose files were
+# edited further; re-applying the chain then fails on context. CI still runs
+# the strict loop; a local dev tree can set PLOTINA_SKIP_PATCHES=1.
+if [ "${PLOTINA_SKIP_PATCHES:-0}" != "1" ]; then
+  for patch in "$here"/patches/*.patch; do
+    if git -C "$upstream" apply --reverse --check "$patch" 2>/dev/null; then
+      echo "already applied: $(basename "$patch")"
+    else
+      git -C "$upstream" apply --verbose "$patch"
+    fi
+  done
+fi
 
 # In-app logos (welcome/login/empty/lock screens, update snackbar). The
 # static PNGs live in plotina_assets/, rendered by
@@ -53,25 +58,51 @@ echo "building the $variant variant"
 # an APK that must install over a released one. The formula, its digit limits
 # and the ABI digit Flutter's --split-per-abi adds on top are documented in
 # scripts/version-code.py; CI computes the same numbers.
+#
+# Dev update channel (patch 0016): a dev build is tagged
+# v<base>-plotina-mobile.<N>-dev.<M> and keeps the versionCode of the stable
+# .N; only the versionName gains -dev.<M>, and the APK is served from the
+# GitHub dev-latest feed. Build one locally with:
+#   PLOTINA_DEV=1 scripts/build-android.sh        # dev build 1 of the tag base
+# or let it read M off a checked-out dev tag. The dev feed URL can be pointed
+# at a local server with PLOTINA_DEV_UPDATE_URL.
 base_version="$(sed -n 's/^version: \([0-9][0-9.]*\)+.*/\1/p' pubspec.yaml)"
 if [ -z "${PLOTINA_BUILD:-}" ]; then
   ref="$(git -C "$here" describe --tags --match 'v*plotina-mobile.*' --abbrev=0 2>/dev/null || true)"
   case "$ref" in
-    v*plotina-mobile.*) PLOTINA_BUILD="${ref##*.}" ;;
+    v*)
+      if parsed="$(python3 "$here/scripts/version-code.py" --parse-ref "$ref" 2>/dev/null)"; then
+        PLOTINA_BUILD="$(printf '%s\n' "$parsed" | sed -n 's/^build=//p')"
+        [ -n "${PLOTINA_DEV:-}" ] || PLOTINA_DEV="$(printf '%s\n' "$parsed" | sed -n 's/^dev=//p')"
+      else
+        PLOTINA_BUILD=0
+      fi
+      ;;
     *) PLOTINA_BUILD=0 ;;
   esac
 fi
+PLOTINA_DEV="${PLOTINA_DEV:-}"
 build_number="$(python3 "$here/scripts/version-code.py" "$base_version" "$PLOTINA_BUILD")"
-echo "build number $build_number ($base_version, build $PLOTINA_BUILD)"
+build_name_args=()
+if [ -n "$PLOTINA_DEV" ]; then
+  build_name="$(python3 "$here/scripts/version-code.py" --parse-ref "v${base_version}-plotina-mobile.${PLOTINA_BUILD}-dev.${PLOTINA_DEV}" | sed -n 's/^version_name=//p')"
+  build_name_args+=(--build-name "$build_name")
+  echo "dev-channel build $build_name (versionCode stays $build_number of stable .$PLOTINA_BUILD)"
+else
+  build_name="$base_version"
+fi
+echo "build number $build_number ($build_name, build $PLOTINA_BUILD)"
 for abi in arm64-v8a armeabi-v7a; do
   echo "  --split-per-abi makes the $abi APK versionCode $(python3 "$here/scripts/version-code.py" "$base_version" "$PLOTINA_BUILD" "$abi")"
 done
 # Optional manifest URL override for testing the updater against a local
-# server, e.g. PLOTINA_UPDATE_URL=http://10.0.2.2:8000/update-mobile.json.
+# server, e.g. PLOTINA_UPDATE_URL=http://10.0.2.2:8000/update-mobile.json
+# (stable feed) and PLOTINA_DEV_UPDATE_URL=http://10.0.2.2:8000/update-mobile-dev.json.
 update_args=()
 [ -n "${PLOTINA_UPDATE_URL:-}" ] && update_args+=(--dart-define=PLOTINA_UPDATE_URL="$PLOTINA_UPDATE_URL")
+[ -n "${PLOTINA_DEV_UPDATE_URL:-}" ] && update_args+=(--dart-define=PLOTINA_DEV_UPDATE_URL="$PLOTINA_DEV_UPDATE_URL")
 # No --target-platform: Flutter's Gradle plugin forces its default ABI filter
 # (armeabi-v7a, arm64-v8a, x86_64), so building fewer platforms would package
 # x86_64 libraries from dependencies without a libflutter.so next to them.
-flutter build apk "${update_args[@]}" --build-number "$build_number" "--$variant"
+flutter build apk "${update_args[@]}" "${build_name_args[@]}" --build-number "$build_number" "--$variant"
 echo "APK: $upstream/build/app/outputs/flutter-apk/app-$variant.apk"

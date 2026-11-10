@@ -1,0 +1,27 @@
+diff --git a/lib/utils/updater/plotina_updater.dart b/lib/utils/updater/plotina_updater.dart
+index 2e9e134..1c6af72 100644
+--- a/lib/utils/updater/plotina_updater.dart
++++ b/lib/utils/updater/plotina_updater.dart
+@@ -67,6 +67,8 @@ library;
+ import 'dart:async';
+ import 'dart:io';
+ 
++import 'dart:convert';
++
+ import 'package:crypto/crypto.dart';
+ import 'package:fluffychat/config/setting_keys.dart';
+ import 'package:fluffychat/l10n/l10n.dart';
+@@ -261,7 +263,12 @@ abstract class PlotinaUpdater {
+         Logs().w('Updater: manifest HTTP ${response.statusCode} from $url');
+         return null;
+       }
+-      final manifest = UpdateManifest.tryParse(response.body);
++      // GitHub serves release assets without a charset; package:http then
++      // falls back to Latin-1 and Russian notes come out as mojibake. Decode
++      // the bytes explicitly as UTF-8.
++      final manifest = UpdateManifest.tryParse(
++        utf8.decode(response.bodyBytes, allowMalformed: true),
++      );
+       if (manifest == null) return null;
+       final info = await packageInfoProvider();
+       if (manifest.client != 'mobile' || manifest.package != info.packageName) {
