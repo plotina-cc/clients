@@ -352,7 +352,11 @@ jobs:
         working-directory: element-desktop/.build/element-web/apps/desktop
         shell: bash
         env:
-          PLOTINA_REVISION: ${{ github.ref_name }}
+          # A tag name is a valid deb revision, a branch name is not: dpkg
+          # rejects "1.12.32-plotina.wt/foo" (slash + invalid chars), which
+          # broke every workflow_dispatch run from a branch. Release builds
+          # always come from tags, so only the manual case falls back to sha.
+          PLOTINA_REVISION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.sha }}
         run: |
           # electron-builder keeps upstream's Vendor/Maintainer/Homepage and
           # the executable name in the menu entry; rewrite both in the built
