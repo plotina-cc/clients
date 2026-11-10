@@ -488,6 +488,11 @@ jobs:
     name: windows smoke
     runs-on: windows-latest
     needs: build
+    # The Windows artefact is what this job proves, so a failure in the other
+    # matrix leg (e.g. the Linux deb step) must not silently skip the smoke: the
+    # acceptance check below is the only place the protocol registry claim is
+    # verified on a real install. A missing Windows artefact fails it loudly.
+    if: always() && !cancelled()
     timeout-minutes: 20
     steps:
       # The declared protocol list is read from the repo, so the smoke job knows
