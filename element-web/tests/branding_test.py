@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -42,19 +43,101 @@ THEME_INIT_TAG = '<script src="/plotina-theme.js"></script>'
 BUNDLE_SCRIPT_TAG = f'<script src="bundles/{BUNDLE}/bundle.js"></script>'
 
 TIMELINE_BARE = "var(--timeline-text-color)"
-TIMELINE_FIXED = "var(--timeline-text-color,var(--cpd-color-text-primary))"
-TIMELINE_USES = 133  # per sheet, verified against the live v1.12.32 bundle
+TOKEN_START = "/* plotina-theme-tokens: legacy custom-theme tokens. */"
+TOKEN_END = "/* end plotina-theme-tokens */"
+
+# Every legacy custom property the pinned sheets use, with the shape it is used
+# in: bare (no fallback -> invalid at computed-value time), literal fallback
+# (the light-theme colour, wrong in the dark sheet) or the stock CPD fallback.
+# Mirrored here instead of imported, so the tests assert the outcome, not the
+# table: a table edit that breaks one of the shapes still shows up below.
+LEGACY_USES: dict[str, str | None] = {
+    # bare in the real sheets (19)
+    "--timeline-text-color": None,
+    "--timeline-text-secondary-color": None,
+    "--primary-color": None,
+    "--roomlist-separator-color": None,
+    "--roomlist-background-color": None,
+    "--roomlist-highlights-color": None,
+    "--sidebar-color": None,
+    "--timeline-highlights-color": None,
+    "--borderColor-muted": None,
+    "--accent-color-300": None,
+    "--borderColor-accent-emphasis": None,
+    "--sidebar-color-50pct": None,
+    "--timeline-text-color-50pct": None,
+    "--accent-color-1000": None,
+    "--accent-color-400": None,
+    "--bgColor-danger-muted": None,
+    "--fgColor-danger": None,
+    "--secondary-hairline-color": None,
+    "--timeline-background-color-50pct": None,
+    # literal fallbacks from the legacy Sass (theme-invariant, wrong in one theme)
+    "--secondary-content": "#2e2f32",
+    "--accent-color": "#0dbd8b",
+    "--quinary-content": "#6f7882",
+    "--tertiary-content": "#2e2f32",
+    "--alert": "#ff5b55",
+    "--system": "#f4f6fa",
+    "--quaternary-content": "#6f7882",
+    "--links": "#0086e6",
+    "--eventbubble-bg-hover": "#fafbfd",
+    "--menu-selected-color": "#f5f8fa",
+    "--strong-input-border-color": "#c7c7c7",
+    "--eventbubble-others-bg": "#f4f6fa",
+    "--eventbubble-self-bg": "#f0fbf8",
+    "--focus-bg-color": "#ddd",
+    # dead indirection whose fallback is already the stock CPD expression
+    "--timeline-background-color": "var(--cpd-color-bg-canvas-default)",
+    "--icon-button-color": "var(--cpd-color-icon-tertiary)",
+    "--other-user-pill-bg-color": "var(--cpd-color-bg-action-primary-rest)",
+    # config hooks / per-element JS values: defined with their own fallback
+    "--font-family": "\"Nunito\",sans-serif",
+    "--font-family-monospace": "\"Fira Code\",monospace",
+    "--mx-image-reserved-height": "0",
+    "--mx-line-clamp": "1",
+}
+LEGACY_DROPPED = ("--timeline-background-color", "--icon-button-color",
+                  "--other-user-pill-bg-color")
+# Everything except the dropped ones must end up declared by our block: no
+# allow-list of "known undefined" hooks.
+LEGACY_DEFINED = frozenset(LEGACY_USES) - set(LEGACY_DROPPED)
+
+# Compound tokens the definition block is allowed to reference. The fixture
+# bundle.css declares exactly these, so a value pointing at a token Element
+# does not ship fails the audit instead of shipping a second dead reference.
+CPD_TOKENS = (
+    "--cpd-color-text-primary", "--cpd-color-text-secondary",
+    "--cpd-color-text-critical-primary", "--cpd-color-text-action-accent",
+    "--cpd-color-text-link-external", "--cpd-color-icon-tertiary",
+    "--cpd-color-gray-300", "--cpd-color-gray-400", "--cpd-color-gray-500",
+    "--cpd-color-gray-600", "--cpd-color-gray-700", "--cpd-color-gray-800",
+    "--cpd-color-gray-900", "--cpd-color-gray-1200",
+    "--cpd-color-green-300", "--cpd-color-green-400", "--cpd-color-green-1000",
+    "--cpd-color-alpha-gray-300",
+    "--cpd-color-bg-canvas-default", "--cpd-color-bg-subtle-primary",
+    "--cpd-color-bg-subtle-secondary", "--cpd-color-bg-critical-subtle",
+    "--cpd-color-border-interactive-primary",
+    "--cpd-color-border-interactive-secondary",
+    "--cpd-color-border-focused",
+    "--cpd-color-bg-action-primary-rest",
+)
 
 
 def custom_theme_css() -> str:
-    """A stand-in for theme-{light,dark}-custom.css with the live shape:
-    one body rule whose background already carries a fallback, then 132
-    more rules each using the dead --timeline-text-color without one."""
+    """A stand-in for theme-{light,dark}-custom.css with the live shape: one
+    body rule plus one rule per legacy token, using the real use shapes."""
     css = ("body{background-color:var(--timeline-background-color,"
            "var(--cpd-color-bg-canvas-default));border:0;color:"
            + TIMELINE_BARE + "}\n")
-    css += (".mx_EventTile{color:" + TIMELINE_BARE + "}\n") * (TIMELINE_USES - 1)
-    assert css.count(TIMELINE_BARE) == TIMELINE_USES
+    # Upstream declares the emoji hook in :root of each custom sheet; the font
+    # stacks inherit it, so the fixture has to carry it too.
+    css += ':root{--emoji-font-family:""}\n'
+    for name, fallback in LEGACY_USES.items():
+        if name == "--timeline-text-color":
+            continue
+        value = f"var({name})" if fallback is None else f"var({name},{fallback})"
+        css += f".mx_Legacy{name[2:].title().replace('-', '')}{{color:{value}}}\n"
     return css
 
 
@@ -90,11 +173,15 @@ class AppFixture(unittest.TestCase):
 
         shutil.copyfile(FIXTURES / "error-view.js", bundles / "error-view.js")
 
-        # The distro ships both custom-theme sheets; each carries 133
-        # fallback-less --timeline-text-color uses (count verified against
-        # the live bundle, see THEMES.md) that branding.py must fix.
+        # The distro ships both custom-theme sheets; each carries the legacy
+        # custom properties (see LEGACY_USES) that branding.py must resolve.
         for name in ("theme-light-custom.css", "theme-dark-custom.css"):
             (bundles / name).write_text(custom_theme_css(), encoding="utf-8")
+        # The Compound tokens those sheets/our block reference live in
+        # bundle.css upstream; the audit resolves definitions against it.
+        (bundles / "bundle.css").write_text(
+            ":root{" + "".join(f"{token}:#123456;" for token in CPD_TOKENS)
+            + "}\n", encoding="utf-8")
         # A non-custom sheet branding must NOT touch.
         self.builtin_sheet = bundles / "theme-light.css"
         self.builtin_sheet.write_text(
@@ -282,22 +369,80 @@ class ErrorViewTest(AppFixture):
 
 
 class ThemeCustomCssTest(AppFixture):
-    """The --timeline-text-color fallback pass over the two custom sheets."""
+    """The legacy-token pass over the two custom sheets (THEME-TOKENS.md)."""
 
-    def test_both_sheets_get_the_fallback(self) -> None:
+    def test_block_defines_every_decided_token(self) -> None:
         self.brand()
         for name in ("theme-light-custom.css", "theme-dark-custom.css"):
             with self.subTest(sheet=name):
                 css = self.sheet(name)
-                self.assertNotIn(TIMELINE_BARE, css)
-                self.assertEqual(css.count(TIMELINE_FIXED), TIMELINE_USES)
+                self.assertEqual(css.count(TOKEN_START), 1)
+                self.assertEqual(css.count(TOKEN_END), 1)
+                for token in LEGACY_DEFINED:
+                    self.assertIn(f"{token}:", css)
 
-    def test_other_var_uses_survive(self) -> None:
+    def test_no_undefined_bare_use_left(self) -> None:
+        """The invariant the whole task is about: nothing resolves to empty."""
+        self.brand()
+        for name in ("theme-light-custom.css", "theme-dark-custom.css"):
+            with self.subTest(sheet=name):
+                css = self.sheet(name)
+                declared = set(re.findall(r"(--[A-Za-z0-9_-]+)\s*:", css))
+                for token in LEGACY_USES:
+                    if f"var({token})" not in css:
+                        continue  # only used with a fallback: safe
+                    self.assertIn(token, declared,
+                                  msg=f"{token} is used bare and undefined")
+
+    def test_timeline_text_is_defined_not_patched_per_use(self) -> None:
         self.brand()
         css = self.sheet("theme-light-custom.css")
-        # The sibling background fallback was already there and must not move.
-        self.assertIn("var(--timeline-background-color,"
-                      "var(--cpd-color-bg-canvas-default))", css)
+        # The uses stay as they are; the variable now carries the value.
+        self.assertIn(TIMELINE_BARE, css)
+        self.assertIn("--timeline-text-color:var(--cpd-color-text-primary);", css)
+
+    def test_dead_indirections_are_dropped_with_their_fallback(self) -> None:
+        self.brand()
+        css = self.sheet("theme-light-custom.css")
+        for token in LEGACY_DROPPED:
+            self.assertNotIn(f"var({token},", css)
+            self.assertNotIn(f"var({token})", css)
+        # The fallback text survives -- dropping must not lose the colour.
+        self.assertIn("body{background-color:var(--cpd-color-bg-canvas-default)",
+                      css)
+
+    def test_dark_sheet_overrides(self) -> None:
+        self.brand()
+        light = self.sheet("theme-light-custom.css")
+        dark = self.sheet("theme-dark-custom.css")
+        self.assertIn("--menu-selected-color:#f5f8fa;", light)
+        self.assertIn("--menu-selected-color:#343a46;", dark)
+        self.assertIn("--system:var(--cpd-color-bg-subtle-primary);", light)
+        self.assertIn("--system:var(--cpd-color-bg-subtle-secondary);", dark)
+        self.assertIn("--sidebar-color-50pct:#030c1b4d;", light)
+        self.assertIn("--sidebar-color-50pct:#00000080;", dark)
+
+    def test_config_hooks_are_defined_with_their_own_fallback(self) -> None:
+        """The four non-colour hooks are defined, not waved through.
+
+        Their value is the fallback the sheet already carried, so the rendered
+        output cannot change; inline styles (a configured font, a measured
+        image height) still beat the block.
+        """
+        self.brand()
+        for name in ("theme-light-custom.css", "theme-dark-custom.css"):
+            with self.subTest(sheet=name):
+                css = self.sheet(name)
+                self.assertIn('--font-family:"Nunito",var(--emoji-font-family)',
+                              css)
+                self.assertIn('--font-family-monospace:"Fira Code",'
+                              'var(--emoji-font-family)', css)
+                self.assertIn("--mx-image-reserved-height:0;", css)
+                self.assertIn("--mx-line-clamp:1;", css)
+                # The uses keep their fallback as well: a theme that somehow
+                # loads a different sheet still gets the stock value.
+                self.assertIn("var(--font-family,", css)
+                self.assertIn("var(--mx-line-clamp,1)", css)
 
     def test_builtin_sheets_untouched(self) -> None:
         self.brand()
@@ -324,26 +469,108 @@ class ThemeCustomCssTest(AppFixture):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("upstream layout moved", proc.stderr)
 
+    # -- the regression guard -------------------------------------------------
+    def test_new_undefined_variable_fails_the_build(self) -> None:
+        """A future upstream sheet must not bring this bug back silently."""
+        sheet = self.app / "bundles" / BUNDLE / "theme-light-custom.css"
+        sheet.write_text(custom_theme_css()
+                         + ".mx_NewThing{color:var(--brand-new-dead-token)}\n",
+                         encoding="utf-8")
+        proc = self.run_branding()
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("--brand-new-dead-token", proc.stderr)
+
+    def test_undefined_variable_with_fallback_is_allowed(self) -> None:
+        # Harmless by construction: the browser uses the fallback.
+        sheet = self.app / "bundles" / BUNDLE / "theme-light-custom.css"
+        sheet.write_text(custom_theme_css()
+                         + ".mx_NewThing{color:var(--brand-new-hint,#123)}\n",
+                         encoding="utf-8")
+        self.brand()
+
+    def test_checker_cli_passes_then_fails_without_the_block(self) -> None:
+        checker = WEBAPP / "scripts" / "check-theme-tokens.py"
+        self.assertTrue(checker.is_file())
+        self.brand()
+        ok = subprocess.run([sys.executable, str(checker), "--webapp",
+                             str(self.app)], capture_output=True, text=True)
+        self.assertEqual(ok.returncode, 0, msg=ok.stdout + ok.stderr)
+        self.assertIn("0 undefined bare uses", ok.stdout)
+
+        sheet = self.app / "bundles" / BUNDLE / "theme-light-custom.css"
+        css = sheet.read_text(encoding="utf-8")
+        sheet.write_text(css.replace(
+            "--timeline-text-color:var(--cpd-color-text-primary);", "",
+            1), encoding="utf-8")
+        bad = subprocess.run([sys.executable, str(checker), "--webapp",
+                              str(self.app)], capture_output=True, text=True)
+        self.assertNotEqual(bad.returncode, 0)
+        self.assertIn("does not define", bad.stderr)
+        self.assertIn("--timeline-text-color", bad.stderr)
+
+        # …and a dropped block is reported as such.
+        start = css.index(TOKEN_START)
+        end = css.index(TOKEN_END) + len(TOKEN_END)
+        sheet.write_text(css[:start] + css[end:], encoding="utf-8")
+        gone = subprocess.run([sys.executable, str(checker), "--webapp",
+                               str(self.app)], capture_output=True, text=True)
+        self.assertNotEqual(gone.returncode, 0)
+        self.assertIn("block missing", gone.stderr)
+
+    def test_checker_cli_fails_when_one_sheet_is_missing(self) -> None:
+        """The audit alone must reject a half-missing template.
+
+        The brand pass checks the pair before patching, but the standalone
+        CLI runs the audit only -- it must not pass a tree that lost a sheet.
+        """
+        checker = WEBAPP / "scripts" / "check-theme-tokens.py"
+        self.brand()
+        (self.app / "bundles" / BUNDLE / "theme-dark-custom.css").unlink()
+        proc = subprocess.run([sys.executable, str(checker), "--webapp",
+                               str(self.app)], capture_output=True, text=True)
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("theme-dark-custom.css", proc.stderr)
+
+    # -- unit level -----------------------------------------------------------
     def test_unit_function(self) -> None:
         branding = load_branding()
-        patched = branding.rebrand_theme_custom(custom_theme_css())
-        self.assertEqual(patched.count(TIMELINE_FIXED), TIMELINE_USES)
-        self.assertNotIn(TIMELINE_BARE, patched)
+        patched = branding.rebrand_theme_custom(custom_theme_css(),
+                                                "theme-light-custom.css")
+        self.assertIn(TOKEN_START, patched)
+        self.assertIn("--timeline-text-color:var(--cpd-color-text-primary);",
+                      patched)
+        for token in LEGACY_DROPPED:
+            self.assertNotIn(f"var({token},", patched)
         # Idempotent: re-running over the patched bytes is a no-op.
-        self.assertEqual(branding.rebrand_theme_custom(patched), patched)
+        self.assertEqual(branding.rebrand_theme_custom(
+            patched, "theme-light-custom.css"), patched)
 
     def test_unit_function_abortive_inputs(self) -> None:
         branding = load_branding()
         with self.assertRaises(branding.BrandingError):
-            branding.rebrand_theme_custom(".a{color:var(--timeline-text-color)}")
+            # A bare use of a token we drop cannot be rewritten.
+            branding.rebrand_theme_custom(
+                ".a{color:var(--timeline-background-color)}")
         with self.assertRaises(branding.BrandingError):
             branding.rebrand_theme_custom("body{color:red}")  # wrong file fed in
 
-    def test_unit_function_below_minimum_fails(self) -> None:
+    def test_unit_function_drops_keep_nested_fallbacks(self) -> None:
         branding = load_branding()
-        css = ".mx_EventTile{color:var(--timeline-text-color)}\n" * 5
-        with self.assertRaises(branding.BrandingError):
-            branding.rebrand_theme_custom(css)
+        css = (".mx_A{color:var(--timeline-text-color)}"
+               ".mx_B{background:var(--timeline-background-color,"
+               "var(--cpd-color-bg-canvas-default))}"
+               ".mx_C{color:var(--icon-button-color,"
+               "var(--cpd-color-icon-tertiary))}"
+               ".mx_D{color:var(--other-user-pill-bg-color,"
+               "var(--cpd-color-bg-action-primary-hovered))}")
+        out = branding.rebrand_theme_custom(css)
+        for token in LEGACY_DROPPED:
+            self.assertNotIn(f"var({token}", out)
+        # Per-use fallbacks survive verbatim, including the pill's hover state.
+        self.assertIn(".mx_B{background:var(--cpd-color-bg-canvas-default)}", out)
+        self.assertIn(".mx_C{color:var(--cpd-color-icon-tertiary)}", out)
+        self.assertIn(".mx_D{color:var(--cpd-color-bg-action-primary-hovered)}",
+                      out)
 
 
 class ThemeBootstrapTest(AppFixture):

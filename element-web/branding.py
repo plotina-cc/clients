@@ -90,9 +90,6 @@ from webapp_fixes import (
     REQUIRED_CUSTOM_SHEETS,
     DM_ALIASES_FILE,
     THEME_INIT_FILE,
-    TIMELINE_TEXT,
-    TIMELINE_TEXT_FIXED,
-    TIMELINE_TEXT_MIN_USES,
     BrandingError,
     add_missing as _add_missing,
     apply_locales as rebrand_locales,
@@ -117,7 +114,7 @@ ICON_LINK = f'<link rel="icon" type="image/svg+xml" href="{ICON_SVG}">'
 TOUCH_LINK = f'<link rel="apple-touch-icon" sizes="192x192" href="{ICON_192}">'
 
 # The bootstrap tag the web uses: /app is served from the site root, so the
-# src is absolute. (MODAL_*, TIMELINE_*, NOISE_TAGS, BUNDLE_LOADER_RE and
+# src is absolute. (MODAL_*, LEGACY_TOKEN_*, NOISE_TAGS, BUNDLE_LOADER_RE and
 # LOCALE_OVERRIDES come unchanged from webapp_fixes.py; see there for the
 # THEME-FIX.md / THEMES.md background of each fix.)
 THEME_INIT_TAG = theme_boot_tag(relative=False)

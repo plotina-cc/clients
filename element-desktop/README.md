@@ -225,10 +225,13 @@ Desktop.** The shared fixes live in `../element-web/webapp_fixes.py` — one
 module, consumed by both branding scripts (the PARITY RULE comment at its top
 states the same):
 
-- the `--timeline-text-color` -> `var(--cpd-color-text-primary)` fallback in
-  both `bundles/*/theme-*-custom.css` sheets (light text on light background
-  for dark-OS visitors), aborting if a sheet is missing or the 133-use count
-  drops;
+- the legacy custom-theme token block in both `bundles/*/theme-*-custom.css`
+  sheets: the 41 custom properties the Compound migration dropped are either
+  defined from the stock sheet's own CPD token (38) or dropped in favour of the
+  fallback every use already carries (3), and `scripts/check-theme-tokens.py`
+  fails the build on any custom property used without a definition or a
+  fallback — including one a new upstream sheet introduces (see
+  `../THEME-TOKENS.md`);
 - the `plotina-modal-a11y` style block keeping the device-verification dialog
   inside the viewport, injected into `index.html` exactly once and never with
   a `.mx_AuthPage_modal` margin override (stock margins pin the auth footer

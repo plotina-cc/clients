@@ -26,12 +26,16 @@ stock behaviour. Background: THEMES.md (contrast fix) and THEME-FIX.md
 
 Contents:
 
-  * patch_theme_css / apply_theme_css — every use of the dead legacy
-    --timeline-text-color in bundles/*/theme-{light,dark}-custom.css
-    gains a var(--cpd-color-text-primary) fallback (133 uses per sheet
-    at v1.12.32). A missing sheet or a dropped count aborts the build:
-    without the fallback, dark-OS visitors on the light custom theme
-    get light-on-white text.
+  * patch_theme_css / apply_theme_css — the legacy custom-theme tokens the
+    Compound migration dropped (41 names used in each
+    bundles/*/theme-{light,dark}-custom.css, none declared anywhere). Each one
+    is either DEFINED from the stock sibling sheet's own CPD token,
+    DROPPED in favour of the fallback every use already carries, or left
+    undefined on purpose (per-element/config hooks). The pass ends with
+    audit_webapp(), which fails the build on any custom property used without
+    a fallback that nothing in the shipped CSS defines — including one a new
+    upstream sheet introduces. A missing sheet or a bare use of a dropped
+    token aborts the build.
   * inject_modal_style — the `plotina-modal-a11y` <style> block that
     keeps the device-verification dialog inside the viewport. Present
     exactly once, injected after the bundle.css/theme links. It
@@ -61,47 +65,353 @@ class BrandingError(RuntimeError):
 
 
 # --------------------------------------------------------------------------
-# 1. Custom-theme contrast fix (THEMES.md): theme-{light,dark}-custom.css
-# use the dead legacy --timeline-text-color at 133 selectors per sheet,
-# always WITHOUT a fallback, so `color` becomes invalid-at-computed-value-
-# time and inherits the @media (prefers-color-scheme) tokens from <html>.
-# The sibling --timeline-background-color always carries a fallback, which
-# is why only the text is broken. Adding --cpd-color-text-primary (which
-# resolves through the body's cpd-theme-* class, i.e. the *chosen* theme)
-# restores contrast without changing any behaviour. If the variable ever
-# becomes defined again, it wins as usual.
+# 1. Custom-theme legacy tokens (THEMES.md): theme-{light,dark}-custom.css
+# were generated from the legacy Sass theme, so their rules still talk to
+# custom properties the Compound migration dropped. 41 names are used in each
+# sheet and declared NOWHERE (no CSS layer, no JS); 19 of them are used
+# without a fallback, which makes the declaration invalid-at-computed-value-
+# time (`color:var(--timeline-text-color)` -> inherit).
+#
+# Three answers, all decided per variable in the table below (the full
+# evidence -- selector, property, stock counterpart, reason -- is in
+# THEME-TOKENS.md):
+#
+#   LEGACY_TOKEN_VALUES          the token is still the right indirection and
+#                                only lost its value -> define it here, in the
+#                                sheet itself, so it only exists while the
+#                                custom theme is active. Every value is derived
+#                                from the stock sibling sheet: theme-<mode>.css
+#                                contains the SAME selector and property with
+#                                the CPD token the custom sheet was supposed to
+#                                resolve to. Nothing is invented; the only hand
+#                                work is choosing between the 1-2 places where
+#                                stock itself is inconsistent (documented).
+#   LEGACY_TOKEN_DROPPED         every use already carries the stock CPD
+#                                expression as its own fallback, so the dead
+#                                indirection is removed instead of redefined:
+#                                `var(--x,FALLBACK)` -> `FALLBACK`. This keeps
+#                                per-use fallbacks (the pill has a different
+#                                one per :hover/:active state) that a single
+#                                definition would flatten.
+#
+# Nothing is left undefined on purpose. The four non-colour hooks (font
+# stacks, per-image reserved height, line clamp) are DEFINED with the very
+# expression their uses already fall back to, copied out of the sheet, so the
+# computed value cannot move; the inline style Element writes for a configured
+# font or a measured image still wins. That keeps the invariant total -- after
+# this pass no custom property of the sheet is used without being declared --
+# instead of an allow-list that would grow with every upstream release.
+#
+# The block is appended to the END of each sheet, inside the already declared
+# `@layer app-web`, as `body,[class*="cpd-theme-"]{...}`. body is the element
+# Element puts the cpd-theme-* class on (never <html>), so referencing
+# --cpd-color-* there resolves per selected theme, and every app rule inherits
+# the computed value. Custom-property substitution happens at the element that
+# declares the property, which is exactly why this cannot live on :root.
 # --------------------------------------------------------------------------
-TIMELINE_TEXT = "var(--timeline-text-color)"
-TIMELINE_TEXT_FIXED = "var(--timeline-text-color,var(--cpd-color-text-primary))"
-TIMELINE_TEXT_MIN_USES = 133  # per sheet at element-web v1.12.32
+THEME_TOKEN_START = "/* plotina-theme-tokens: legacy custom-theme tokens. */"
+THEME_TOKEN_END = "/* end plotina-theme-tokens */"
+
+# One value serves both sheets unless the stock sheets disagree; the handful of
+# overrides live in LEGACY_TOKEN_VALUES_DARK. Format: --name: value;
+LEGACY_TOKEN_VALUES: dict[str, str] = {
+    # --- text ---------------------------------------------------------
+    # stock: var(--cpd-color-text-primary) in 131/133 declarations (the other
+    # two are the auth-body heading, where stock uses text-secondary).
+    "--timeline-text-color": "var(--cpd-color-text-primary)",
+    # stock: var(--cpd-color-gray-900) 19/29, text-secondary 4/29, #747474 5/29.
+    # gray-900 is the raw step Element itself still uses for muted copy here.
+    "--timeline-text-secondary-color": "var(--cpd-color-gray-900)",
+    # 50%-transparent counterpart of the text token (poll "edited", typing
+    # indicator); stock uses #9e9e9e(light)/#b9bec6(dark) -- see DARK.
+    "--timeline-text-color-50pct": "var(--cpd-color-gray-700)",
+    # stock: var(--cpd-color-text-secondary) 139/141.
+    "--secondary-content": "var(--cpd-color-text-secondary)",
+    # stock: var(--cpd-color-gray-800) 39/40.
+    "--tertiary-content": "var(--cpd-color-gray-800)",
+    # stock: var(--cpd-color-gray-600) 14/14.
+    "--quaternary-content": "var(--cpd-color-gray-600)",
+    # stock: var(--cpd-color-gray-400) 43/43 (icons and hairlines).
+    "--quinary-content": "var(--cpd-color-gray-400)",
+    # stock: var(--cpd-color-text-critical-primary) 39/39.
+    "--alert": "var(--cpd-color-text-critical-primary)",
+    # --- accent / links ------------------------------------------------
+    # Element writes --accent-color/--primary-color as INLINE body styles from
+    # config.json's custom_themes[].colors (theme.ts applyCustomTheme), which
+    # always beat these declarations; the block only gives the static CSS a
+    # brand value instead of nothing (and covers the loading window).
+    "--accent-color": "var(--cpd-color-text-action-accent)",
+    "--primary-color": "var(--cpd-color-text-action-accent)",
+    # stock: var(--cpd-color-text-link-external) 7/7 -- Element's own link
+    # colour, deliberately not the accent (external links read as links).
+    "--links": "var(--cpd-color-text-link-external)",
+    # The legacy accent ramp; stock maps them to the Compound green scale that
+    # our compound overrides already re-tint.
+    "--accent-color-300": "var(--cpd-color-green-300)",
+    "--accent-color-400": "var(--cpd-color-green-400)",
+    "--accent-color-1000": "var(--cpd-color-green-1000)",
+    # --- surfaces ------------------------------------------------------
+    # stock: var(--cpd-color-bg-subtle-secondary) 11/11.
+    "--panels": "var(--cpd-color-bg-subtle-secondary)",
+    # stock: bg-subtle-secondary 4/5 for the event-tile state backgrounds.
+    "--timeline-highlights-color": "var(--cpd-color-bg-subtle-secondary)",
+    # stock: var(--cpd-color-alpha-gray-300) 6/6 (selected space button).
+    "--roomlist-highlights-color": "var(--cpd-color-alpha-gray-300)",
+    # stock: bg-subtle-primary 7/14 light, bg-subtle-secondary 11/14 dark.
+    "--roomlist-background-color": "var(--cpd-color-bg-subtle-primary)",
+    # stock: bg-subtle-primary 15-17/18 light, bg-subtle-secondary dark.
+    "--system": "var(--cpd-color-bg-subtle-primary)",
+    # stock uses a bare literal (hsla(0,0%,91%,.77) light / rgba(38,39,43,.82)
+    # dark): the space-panel surface at ~90% opacity. bg-subtle-primary is the
+    # same ramp Element uses for panels -- dark matches the literal within 2/255.
+    "--sidebar-color": "var(--cpd-color-bg-subtle-primary)",
+    # stock: literal #030c1b4d / #00000080 (dialog scrim); no themeable token
+    # exists, so keep Element's own values per sheet -- see DARK.
+    "--sidebar-color-50pct": "#030c1b4d",
+    # stock: literal #f5f8fa / #343a46 (selected menu row); per sheet.
+    "--menu-selected-color": "#f5f8fa",
+    # stock: bg-subtle-primary light / #343a46 dark; per sheet.
+    "--focus-bg-color": "var(--cpd-color-bg-subtle-primary)",
+    # The auth card's 90%-opaque canvas. Stock hard-codes hsla(0,0%,96%,.9) in
+    # BOTH sheets, i.e. a near-white card in the dark theme as well (light text
+    # on white); expressing the intent against the canvas token fixes the dark
+    # theme and leaves light unchanged.
+    "--timeline-background-color-50pct":
+        "color-mix(in srgb,var(--cpd-color-bg-canvas-default) 90%,transparent)",
+    # --- borders / hairlines --------------------------------------------
+    # stock: bg-subtle-secondary 2/2.
+    "--eventbubble-bg-hover": "var(--cpd-color-bg-subtle-secondary)",
+    "--eventbubble-others-bg": "var(--cpd-color-gray-300)",
+    "--eventbubble-self-bg": "var(--cpd-color-green-300)",
+    # stock: var(--cpd-color-gray-300) 1/1 (inputs inside dialogs).
+    "--secondary-hairline-color": "var(--cpd-color-gray-300)",
+    # stock: border-interactive-primary (the same declaration's stock value).
+    "--strong-input-border-color": "var(--cpd-color-border-interactive-primary)",
+    # Separators. Stock resolves 11/15 of these to `transparent` -- modern
+    # Element's composer/autocomplete deliberately have no hairlines -- and the
+    # remaining 4 to gray-400 (outlined radio, bridge-list icons). Defining the
+    # transparent majority keeps today's look (the IACVT rule draws no border
+    # either); the 4 gray-400 hairline spots stay invisible, as in prod today.
+    "--roomlist-separator-color": "transparent",
+    # --- vendored markdown CSS (github-markdown-css) ---------------------
+    # These four are Primer token names used only by .markdown-body rules, and
+    # they are equally undefined in Element's own theme-light/theme-dark.css
+    # (stock value is literally `var(--borderColor-muted)` again). Defining
+    # them to the CPD semantic makes kbd borders and the markdown focus ring
+    # work again in our themes without touching any Element rule.
+    "--borderColor-muted": "var(--cpd-color-border-interactive-secondary)",
+    "--borderColor-accent-emphasis": "var(--cpd-color-border-focused)",
+    "--bgColor-danger-muted": "var(--cpd-color-bg-critical-subtle)",
+    "--fgColor-danger": "var(--cpd-color-text-critical-primary)",
+    # --- config / per-element hooks --------------------------------------
+    # Not theme colours: Element writes these as INLINE styles -- the font
+    # stacks from config.json custom_themes[].fonts (ThemeWatcher), the image
+    # height from ImageBody, the clamp from .mx_lineClamp's consumer. Inline
+    # beats this block, so the definition only replaces the fallback each use
+    # already carries, and it is the identical expression copied out of the
+    # sheet, so nothing can move. --font-family must NOT be defined from
+    # --cpd-font-family-sans: that token is itself `var(--font-family,...)`,
+    # which would be a cycle; the literal stack is the safe direction.
+    "--font-family":
+        '"Nunito",var(--emoji-font-family),"Apple Color Emoji",'
+        '"Segoe UI Emoji","Arial","Helvetica",sans-serif,"Noto Color Emoji"',
+    "--font-family-monospace":
+        '"Fira Code",var(--emoji-font-family),"Apple Color Emoji",'
+        '"Segoe UI Emoji","Courier",monospace,"Noto Color Emoji"',
+    # `min-height:var(--mx-image-reserved-height,0)` keeps the reserved slot
+    # collapsed until the image reports its height inline.
+    "--mx-image-reserved-height": "0",
+    # `-webkit-line-clamp:var(--mx-line-clamp,1)`: the default for the
+    # non-clamped case, overridden inline where clamping applies.
+    "--mx-line-clamp": "1",
+}
+
+# Values that differ between the two sheets (stock disagrees by theme).
+LEGACY_TOKEN_VALUES_DARK: dict[str, str] = {
+    "--timeline-text-color-50pct": "var(--cpd-color-gray-1200)",
+    "--roomlist-background-color": "var(--cpd-color-bg-subtle-secondary)",
+    "--system": "var(--cpd-color-bg-subtle-secondary)",
+    "--sidebar-color-50pct": "#00000080",
+    "--menu-selected-color": "#343a46",
+    "--focus-bg-color": "var(--cpd-color-gray-500)",
+}
+
+# Dead indirections whose every use already ends in the stock CPD expression:
+# drop the variable, keep the fallback. `var(--x,FALLBACK)` -> `FALLBACK`.
+LEGACY_TOKEN_DROPPED: dict[str, str] = {
+    "--timeline-background-color":
+        "66/66 uses fall back to var(--cpd-color-bg-canvas-default), the exact "
+        "value stock uses for the same declaration",
+    "--icon-button-color":
+        "13/13 uses fall back to var(--cpd-color-icon-tertiary), stock's value",
+    "--other-user-pill-bg-color":
+        "5/5 uses carry the stock CPD token, and it differs per state "
+        "(rest/hovered/pressed) -- one definition would flatten them",
+}
+
+# Intentionally left undefined: nothing. Every legacy name is either defined
+# from stock or rewritten to its own fallback (see LEGACY_TOKEN_DROPPED); the
+# audit enforces that with no allow-list, so a new upstream token cannot slip
+# through as "known undefined".
+
+LEGACY_TOKENS = frozenset(LEGACY_TOKEN_VALUES) | frozenset(LEGACY_TOKEN_DROPPED)
 REQUIRED_CUSTOM_SHEETS = frozenset({"theme-light-custom.css",
                                     "theme-dark-custom.css"})
 
 
-def patch_theme_css(css: str) -> str:
-    """Restore body text contrast in one Element custom-theme sheet.
+def token_block(sheet_name: str) -> str:
+    """The definition block for one custom sheet, marker-delimited."""
+    values = dict(LEGACY_TOKEN_VALUES)
+    if sheet_name == "theme-dark-custom.css":
+        values.update(LEGACY_TOKEN_VALUES_DARK)
+    decls = "".join(f"{name}:{value};" for name, value in values.items())
+    return (f"{THEME_TOKEN_START}\n"
+            f"@layer app-web{{body,[class*=\"cpd-theme-\"]{{{decls}}}}}\n"
+            f"{THEME_TOKEN_END}")
 
-    Idempotent: patched sheets pass through unchanged. Sheets that do not
-    carry the expected 133 uses fail loudly — a moved upstream layout must
-    abort the build, not ship half-fixed CSS.
+
+def _var_uses(css: str):
+    """Yield (start, end, name, fallback) for every var() in *css*.
+
+    *fallback* is the raw text after the first top-level comma, or None.
+    Balanced-paren aware, so nested var() fallbacks survive intact.
     """
-    if TIMELINE_TEXT not in css and TIMELINE_TEXT_FIXED in css:
-        return css  # already patched; re-run is a no-op
-    out = css.replace(TIMELINE_TEXT, TIMELINE_TEXT_FIXED)
-    if TIMELINE_TEXT in out:
-        raise BrandingError("custom theme CSS: --timeline-text-color survived")
-    if out.count(TIMELINE_TEXT_FIXED) < TIMELINE_TEXT_MIN_USES:
-        raise BrandingError(f"custom theme CSS: expected >={TIMELINE_TEXT_MIN_USES} "
-                            f"fallback additions, got {out.count(TIMELINE_TEXT_FIXED)}")
+    pos = 0
+    while True:
+        start = css.find("var(", pos)
+        if start < 0:
+            return
+        depth, i = 1, start + 4
+        while i < len(css) and depth:
+            if css[i] == "(":
+                depth += 1
+            elif css[i] == ")":
+                depth -= 1
+            i += 1
+        inner = css[start + 4:i - 1]
+        name, sep, fallback = inner.partition(",")
+        yield start, i, name.strip(), (fallback.strip() if sep else None)
+        pos = i
+
+
+def drop_indirection(css: str, name: str) -> tuple[str, int]:
+    """Replace every `var(--name,FALLBACK)` with `FALLBACK` in *css*.
+
+    A bare `var(--name)` cannot be rewritten (there is nothing to substitute)
+    and means upstream changed the sheet shape: that aborts the build.
+    """
+    pieces: list[str] = []
+    last = 0
+    count = 0
+    for start, end, used, fallback in _var_uses(css):
+        if used != name:
+            continue
+        if fallback is None:
+            raise BrandingError(
+                f"custom theme CSS: bare var({name}) -- it has no fallback to "
+                "keep and no definition on purpose; upstream changed the sheet")
+        pieces.append(css[last:start])
+        pieces.append(fallback)
+        last = end
+        count += 1
+    pieces.append(css[last:])
+    return "".join(pieces), count
+
+
+def strip_token_block(css: str) -> str:
+    """Remove a previously appended block (so a re-run is byte-stable)."""
+    while True:
+        start = css.find(THEME_TOKEN_START)
+        if start < 0:
+            return css
+        end = css.find(THEME_TOKEN_END, start)
+        if end < 0:
+            raise BrandingError("custom theme CSS: unterminated "
+                                "plotina-theme-tokens block")
+        end += len(THEME_TOKEN_END)
+        # Swallow exactly the newlines _insert_block() puts around the block.
+        if start and css[start - 1] == "\n":
+            start -= 1
+        if end < len(css) and css[end] == "\n":
+            end += 1
+        css = css[:start] + css[end:]
+
+
+def _insert_block(css: str, block: str) -> str:
+    """Put *block* at the end of the sheet, before the sourceMappingURL note."""
+    anchor = css.rfind("/*# sourceMappingURL=")
+    if anchor < 0:
+        return css.rstrip("\n") + "\n" + block + "\n"
+    head, tail = css[:anchor].rstrip("\n"), css[anchor:]
+    return head + "\n" + block + "\n" + tail
+
+
+def patch_theme_css(css: str, sheet_name: str = "theme-light-custom.css") -> str:
+    """Define/remove the legacy tokens of one Element custom-theme sheet.
+
+    Idempotent by construction: the previous block is stripped before the new
+    one is appended. Fails loudly when the sheet no longer looks like the one
+    this table was derived from (no legacy token left at all, or a dropped
+    variable used bare), so an upstream restructure never ships half-fixed CSS.
+    """
+    out = strip_token_block(css)
+    present = {name for _, _, name, _ in _var_uses(out)}
+    if not present & LEGACY_TOKENS:
+        raise BrandingError(
+            "custom theme CSS: none of the legacy custom-theme tokens is used; "
+            "is this really theme-*-custom.css? upstream layout moved")
+
+    dropped = 0
+    for name in LEGACY_TOKEN_DROPPED:
+        # A missing use is not an error: upstream may have dropped the token
+        # from the sheet (then there is nothing to rewrite), and a use that
+        # became bare is still caught by drop_indirection below.
+        out, count = drop_indirection(out, name)
+        dropped += count
+
+    out = _insert_block(out, token_block(sheet_name))
+
+    audit_sheet(out)
     return out
 
 
-def apply_theme_css(root: Path) -> list[str]:
-    """Patch both custom sheets under root/bundles/*/ in place."""
-    custom_sheets = sorted((root / "bundles").glob("*/theme-*-custom.css"))
-    if not custom_sheets:
-        raise BrandingError("no bundles/*/theme-*-custom.css found; upstream "
-                            "layout moved")
+def _declared(css: str) -> set[str]:
+    return set(re.findall(r"(--[A-Za-z0-9_-]+)\s*:", css))
+
+
+def undefined_uses(css: str, defined: set[str] | None = None) -> list[str]:
+    """Names used bare (no fallback) and not declared in *css* itself."""
+    declared = _declared(css) if defined is None else defined
+    out = []
+    for _, _, name, fallback in _var_uses(css):
+        if fallback is None and name not in declared:
+            out.append(name)
+    return sorted(set(out))
+
+
+def audit_sheet(css: str) -> None:
+    """One sheet: no legacy token may be used bare and undefined.
+
+    Only the legacy names are checked here: the Compound tokens the block
+    references are declared in bundle.css, i.e. outside this file, and the
+    whole-app check in audit_webapp() covers those.
+    """
+    declared = _declared(css)
+    bad = [name for name in undefined_uses(css, declared) if name in LEGACY_TOKENS]
+    if bad:
+        raise BrandingError("custom theme CSS: undefined custom propert"
+                            f"{'ies' if len(bad) > 1 else 'y'} used without a "
+                            f"fallback: {', '.join(bad)}")
+
+
+def _require_sheet_pairs(custom_sheets: list[Path]) -> None:
+    """Both custom sheets must exist side by side in every bundle directory.
+
+    Shared by the patch pass and by the audit: the standalone CLI
+    (scripts/check-theme-tokens.py) runs only the audit, and a tree that lost
+    one sheet must fail there too, not just when the brand pass happens to run
+    first.
+    """
     by_dir: dict[Path, set[str]] = {}
     for sheet in custom_sheets:
         by_dir.setdefault(sheet.parent, set()).add(sheet.name)
@@ -110,12 +420,97 @@ def apply_theme_css(root: Path) -> list[str]:
         if missing:
             raise BrandingError(f"{bdir} is missing {' and '.join(sorted(missing))}; "
                                 "expected both bundles/*/theme-*-custom.css sheets")
+
+
+def apply_theme_css(root: Path) -> list[str]:
+    """Patch both custom sheets under root/bundles/*/ in place."""
+    custom_sheets = sorted((root / "bundles").glob("*/theme-*-custom.css"))
+    if not custom_sheets:
+        raise BrandingError("no bundles/*/theme-*-custom.css found; upstream "
+                            "layout moved")
+    _require_sheet_pairs(custom_sheets)
     for sheet in custom_sheets:
         sheet.write_text(patch_theme_css(
-            sheet.read_text(encoding="utf-8", errors="replace")),
+            sheet.read_text(encoding="utf-8", errors="replace"), sheet.name),
             encoding="utf-8")
+    # Whole-app regression guard: both clients get it for free because this is
+    # the single entry point (web branding.py and desktop branding.py).
+    audit_webapp(root)
     return [f"{len(custom_sheets)} custom-theme sheet(s): "
-            "--timeline-text-color fallback added"]
+            f"{len(LEGACY_TOKEN_VALUES)} legacy token(s) defined, "
+            f"{len(LEGACY_TOKEN_DROPPED)} dead indirection(s) removed"]
+
+
+def audit_webapp(root: Path) -> list[str]:
+    """Fail unless the built app defines every custom property it uses bare.
+
+    This is the regression guard, not a byte-check of our own block: it walks
+    every CSS the app ships (all bundles plus the <style> blocks in
+    index.html), so a NEW upstream sheet that starts using an undefined
+    variable without a fallback -- exactly the bug this module exists for --
+    stops the build even though no file of ours mentions that name.
+
+    Rules:
+      * every `var(--x)` without a fallback must be declared somewhere in the
+        app CSS (this module's block counts, because it is part of the sheet);
+      * each LEGACY_TOKEN_VALUES name must be declared (the block is present);
+      * no LEGACY_TOKEN_DROPPED name may be used or defined any more;
+      * both custom sheets must carry the block markers.
+    """
+    index = root / "index.html"
+    if not index.is_file():
+        raise BrandingError(f"{index} missing; {root} is not an Element webapp root")
+    sheets = sorted((root / "bundles").glob("*/theme-*-custom.css"))
+    if not sheets:
+        raise BrandingError("no bundles/*/theme-*-custom.css found; upstream "
+                            "layout moved")
+    _require_sheet_pairs(sheets)
+
+    chunks: list[str] = [index.read_text(encoding="utf-8", errors="replace")]
+    for css_file in sorted(root.glob("bundles/**/*.css")):
+        chunks.append(css_file.read_text(encoding="utf-8", errors="replace"))
+    everything = "\n".join(chunks)
+    declared = _declared(everything)
+
+    # Scope: the two custom sheets. Those are the sheets we patch, and the
+    # only ones whose rules we are responsible for; the vendored chunks carry
+    # their own upstream dead references (bundle.css/9512.css use
+    # --cpd-color-body-primary, --cpd-color-text-placeholder, grid-* element
+    # hooks ... with no definition) that are not ours to fix. A NEW undefined
+    # variable in a custom sheet -- the regression this guards -- still fails.
+    # No allow-list: every legacy name is defined or dropped, so a sheet that
+    # needs an exception is a bug in this table, not something to wave through.
+    bad: list[str] = []
+    for sheet in sheets:
+        text = sheet.read_text(encoding="utf-8", errors="replace")
+        bad.extend(undefined_uses(text, declared))
+        if THEME_TOKEN_START not in text or THEME_TOKEN_END not in text:
+            raise BrandingError(f"{sheet}: plotina-theme-tokens block missing")
+        # Each sheet is enabled on its own, so each must carry the definitions
+        # itself -- a definition in the other theme's sheet does not help.
+        missing = sorted(set(LEGACY_TOKEN_VALUES) - _declared(text))
+        if missing:
+            raise BrandingError(
+                f"{sheet.name} does not define: " + ", ".join(missing))
+    bad = sorted(set(bad))
+    if bad:
+        raise BrandingError(
+            "custom theme sheets use custom propert"
+            f"{'ies' if len(bad) > 1 else 'y'} that nothing defines and that "
+            f"have no fallback: {', '.join(bad)}")
+
+    resurrected = sorted(set(LEGACY_TOKEN_DROPPED) & (declared |
+                                                      set(uses_named(everything))))
+    if resurrected:
+        raise BrandingError("dropped legacy tokens are back: "
+                            + ", ".join(resurrected))
+    return [f"theme token audit: {len(declared)} custom properties declared, "
+            f"0 undefined bare uses in {len(sheets)} custom sheet(s)"]
+
+
+def uses_named(css: str) -> list[str]:
+    """Every custom-property name referenced through var(), with or without fallback."""
+    return sorted({name for _, _, name, _ in _var_uses(css)})
 
 
 # --------------------------------------------------------------------------

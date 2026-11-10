@@ -7,7 +7,7 @@ Settings → Voice & Video.
 Nothing in Element's own code is patched: the image contains the stock build
 with a small Plotina overlay — the brand pass (`branding.py`, which rewrites
 `index.html`, the error-view chunk, the two `theme-*-custom.css` sheets (the
-`--timeline-text-color` contrast fix, see THEMES.md), the `config.json`
+legacy-token block, see THEME-TOKENS.md), the `config.json`
 branding block and the theme logos) plus the noise overlay (a `/noise/`
 directory and two `script` tags in `index.html`). `branding.py` also injects
 the `/plotina-theme.js` bootstrap tag before the bundle loader so a fresh

@@ -184,15 +184,14 @@ fi
 if grep -q '.mx_AuthPage_modal{' "$DEST/index.html"; then
   echo "prepare-webapp: the modal a11y block overrides .mx_AuthPage_modal margins" >&2; exit 1
 fi
-# 133 contrast fallbacks per custom sheet, no fallback-less use left.
-for sheet in "$DEST"/bundles/*/theme-light-custom.css \
-             "$DEST"/bundles/*/theme-dark-custom.css; do
-  n="$(count 'var(--timeline-text-color,var(--cpd-color-text-primary))' "$sheet")"
-  [ "$n" -eq 133 ] || { echo "prepare-webapp: $sheet has $n fallbacks, expected 133" >&2; exit 1; }
-done
-if grep -qF 'var(--timeline-text-color)' \
+# Legacy custom-theme tokens: the sheets must carry the plotina-theme-tokens
+# block that defines every dead token, and no custom property may be used
+# without a definition or a fallback (the classic case: --timeline-text-color). The
+# checker is the same one the web image runs, so the two clients cannot drift.
+"$PYTHON" "$REPO_ROOT/element-web/scripts/check-theme-tokens.py" --webapp "$DEST"
+if grep -qF 'var(--timeline-text-color,var(--cpd-color-text-primary))' \
   "$DEST"/bundles/*/theme-light-custom.css "$DEST"/bundles/*/theme-dark-custom.css; then
-  echo "prepare-webapp: a custom theme still has a bare var(--timeline-text-color)" >&2; exit 1
+  echo "prepare-webapp: per-use fallback patch still present; the token block replaced it" >&2; exit 1
 fi
 grep -q 'sign_out_before_verify' "$DEST"/i18n/ru.*.json
 # Branding assets referenced by config.json must exist in the webapp root and

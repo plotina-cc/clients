@@ -62,15 +62,33 @@ GREEN_SVG = b'<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512"><
 GREEN_192 = b"\x89PNG\r\n\x1a\n fake plotina 192"
 GREEN_512 = b"\x89PNG\r\n\x1a\n fake plotina 512"
 
-# The release webapp also carries the two custom-theme sheets and the i18n
-# tree that the shared web fixes (../element-web/webapp_fixes.py, run by
-# branding.py) require; branding fails loudly when either is missing, so
-# the fixture ships what the real .build/webapp has.
+# The release webapp also carries the two custom-theme sheets, the Compound
+# token declarations they resolve against and the i18n tree that the shared
+# web fixes (../element-web/webapp_fixes.py, run by branding.py) require;
+# branding fails loudly when any of them is missing, so the fixture ships what
+# the real .build/webapp has.
 TIMELINE_USES = 133
+CPD_STUB = (
+    "--cpd-color-text-primary", "--cpd-color-text-secondary",
+    "--cpd-color-text-critical-primary", "--cpd-color-text-action-accent",
+    "--cpd-color-text-link-external", "--cpd-color-icon-tertiary",
+    "--cpd-color-gray-300", "--cpd-color-gray-400", "--cpd-color-gray-500",
+    "--cpd-color-gray-600", "--cpd-color-gray-700", "--cpd-color-gray-800",
+    "--cpd-color-gray-900", "--cpd-color-gray-1200",
+    "--cpd-color-green-300", "--cpd-color-green-400", "--cpd-color-green-1000",
+    "--cpd-color-alpha-gray-300", "--cpd-color-bg-canvas-default",
+    "--cpd-color-bg-subtle-primary", "--cpd-color-bg-subtle-secondary",
+    "--cpd-color-bg-critical-subtle",
+    "--cpd-color-border-interactive-primary",
+    "--cpd-color-border-interactive-secondary", "--cpd-color-border-focused",
+)
 
 
 def custom_theme_css() -> str:
-    return ".mx_EventTile{color:var(--timeline-text-color)}\n" * TIMELINE_USES
+    # Upstream declares the emoji hook in :root of each custom sheet, and the
+    # legacy font stacks fall back to it.
+    return ':root{--emoji-font-family:""}\n' + \
+        ".mx_EventTile{color:var(--timeline-text-color)}\n" * TIMELINE_USES
 
 
 MANIFEST = {
@@ -103,6 +121,9 @@ class BrandingTest(unittest.TestCase):
         (bundle / "bundle.js").write_text("//\n", encoding="utf-8")
         for sheet in ("theme-light-custom.css", "theme-dark-custom.css"):
             (bundle / sheet).write_text(custom_theme_css(), encoding="utf-8")
+        (bundle / "bundle.css").write_text(
+            ":root{" + "".join(f"{token}:#123456;" for token in CPD_STUB)
+            + "}\n", encoding="utf-8")
         i18n = self.webapp / "i18n"
         i18n.mkdir()
         (i18n / "languages.json").write_text(

@@ -162,10 +162,12 @@ RUN set -eux; \
 # /tmp, never into the served /app.
 COPY branding.py /tmp/branding.py
 COPY webapp_fixes.py /tmp/webapp_fixes.py
+COPY scripts/check-theme-tokens.py /tmp/check-theme-tokens.py
 RUN set -eux; \
     apk add --no-cache --virtual .branding python3; \
     python3 /tmp/branding.py --app /app; \
-    rm -f /tmp/branding.py /tmp/webapp_fixes.py; \
+    python3 /tmp/check-theme-tokens.py --webapp /app; \
+    rm -f /tmp/branding.py /tmp/webapp_fixes.py /tmp/check-theme-tokens.py; \
     apk del .branding; \
     rm -rf /app/mobile_guide; \
     chmod 0644 /app/themes/element/img/logos/element-logo.svg; \
@@ -181,9 +183,9 @@ RUN set -eux; \
     grep -q 'plotina-theme.js"></script><script src="bundles/' /app/index.html; \
     test -s /app/plotina-dm-aliases.js; \
     test "$(grep -oF 'src="/plotina-dm-aliases.js"' /app/index.html | wc -l)" -eq 1; \
-    ! grep -q 'var(--timeline-text-color)' /app/bundles/*/theme-*-custom.css; \
-    test "$(grep -oh 'var(--timeline-text-color,var(--cpd-color-text-primary))' \
-      /app/bundles/*/theme-*-custom.css | wc -l)" -ge 266; \
+    grep -q 'plotina-theme-tokens' /app/bundles/*/theme-light-custom.css; \
+    grep -q 'plotina-theme-tokens' /app/bundles/*/theme-dark-custom.css; \
+    ! grep -qF 'var(--timeline-text-color,var(--cpd-color-text-primary))' /app/bundles/*/theme-*-custom.css; \
     grep -q 'sign_out_before_verify' /app/i18n/ru.*.json; \
     ! grep -q 'Element requires JavaScript' /app/index.html; \
     ! grep -q 'vector-icons/' /app/index.html; \
