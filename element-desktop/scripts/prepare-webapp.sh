@@ -70,9 +70,27 @@ PY
   tar xzf "$TARBALL" -C "$DEST" --strip-components=1
 fi
 
+# Replace the call widget with our own Element Call.
+#
+# The upstream tarball carries a stock Element Call under
+# webapp/widgets/element-call/, and element-web builds the call iframe URL from
+# it (./widgets/element-call/). Stock means none of element-call/patches/: no
+# per-person volume memory (0004) and no hide-this-stream control (0005), so a
+# desktop user gets neither. scripts/element-call-widget.py swaps the whole
+# directory for the archive pinned in element-call.lock.json, rebases its
+# root-absolute asset URLs for vector://vector/webapp/, and fails the build on
+# anything that is not our bundle.
+echo "==> element call widget"
+"$PYTHON" "$ROOT/scripts/element-call-widget.py" \
+  --lock "$ROOT/element-call.lock.json" --work "$WORK" --webapp "$DEST"
+
 echo "==> noise layer"
 mkdir -p "$NOISE/vendor"
-cp "$REPO_ROOT/noise/logic.js" "$REPO_ROOT/noise/boot.js" "$NOISE/"
+# logic.js/boot.js serve the app document; plotina-dfn.js/plotina-panel.js are
+# the ones the call widget loads (its microphone goes through the LiveKit track
+# processor, not through boot.js's getUserMedia wrapper).
+cp "$REPO_ROOT/noise/logic.js" "$REPO_ROOT/noise/boot.js" \
+   "$REPO_ROOT/noise/plotina-dfn.js" "$REPO_ROOT/noise/plotina-panel.js" "$NOISE/"
 cp -a "$REPO_ROOT/noise/vendor/." "$NOISE/vendor/"
 
 echo "==> noise assets"
@@ -129,8 +147,31 @@ install -m 0644 "$REPO_ROOT/NOTICE" "$DEST/NOTICE"
 
 echo "==> verify"
 grep -q 'noise/boot.js' "$DEST/index.html"
-grep -q 'noise/boot.js' "$DEST/widgets/element-call/index.html"
 grep -q 'noise/logic.js' "$DEST/index.html"
+# The call widget must be OUR Element Call, not the upstream build that shipped
+# in the tarball. Two failures matter and both are silent at runtime: an
+# upstream widget (the user loses per-person volume and hide-stream), and one
+# whose asset URLs are still root-absolute (every /assets/ 404s under
+# vector://vector/webapp/ and the iframe renders an empty #root). The checker is
+# the same one the swap uses, so the two cannot drift; it is proven to fail on
+# the upstream layout in element-desktop/tests/test_element_call_widget.py.
+"$PYTHON" "$ROOT/scripts/element-call-widget.py" --check --webapp "$DEST"
+# Direct evidence in the final bytes, independent of the helper: the two
+# features from the wish list, the per-person volume store, and the locale the
+# user reads them in.
+grep -rqs 'video_tile.hide_stream' "$DEST/widgets/element-call/assets/"
+grep -rqs 'video_tile.screen_share_visibility' "$DEST/widgets/element-call/assets/"
+grep -rqs 'cc.plotina.voice_volumes' "$DEST/widgets/element-call/assets/"
+grep -qs 'Не показывать этот стрим' "$DEST"/widgets/element-call/assets/*ru-app-*.json
+# Upstream's widget is the negative control: it must not be here at all.
+if [ -d "$DEST/widgets/element-call/noise" ]; then
+  echo "prepare-webapp: the widget carries its own noise/ tree; the webapp root owns it" >&2; exit 1
+fi
+# plotina-dfn.js resolves its model from its own src (noise/tests/dfn-base.test.mjs);
+# without it the desktop widget's microphone is never processed.
+grep -q 'document.currentScript' "$DEST/noise/plotina-dfn.js"
+test -s "$DEST/noise/plotina-dfn.js"
+test -s "$DEST/noise/plotina-panel.js"
 grep -q 'Plotina Desktop' "$DEST/index.html"
 if grep -q '>Element</title>' "$DEST/index.html"; then
   echo "prepare-webapp: the Element title is still in index.html" >&2; exit 1

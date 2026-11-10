@@ -100,6 +100,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The webapp assembly is the only place the call widget is swapped and
+      # verified, so its tests run here: test_element_call_widget.py keeps the
+      # upstream widget as a negative control (it must fail the checks) and
+      # covers the sha256 pin, the asset rebase and the noise wiring.
+      - name: Desktop webapp tests
+        run: python3 -m unittest discover -s element-desktop/tests -p 'test_*.py'
+
       - name: Assemble the webapp
         working-directory: element-desktop
         env:

@@ -63,6 +63,8 @@ it is unpacked:
 ```
 UPSTREAM_TAG              element-web tag we build against
 webapp.lock.json          release tarball URL + sha256 (tag must match UPSTREAM_TAG)
+element-call.lock.json    our Element Call release (tag + URL + sha256): the call
+                          widget that replaces the upstream one in the webapp
 build.plotina.json        electron-builder variant: appId cc.plotina.desktop,
                           package name plotina-desktop, productName Plotina Desktop
                           (the publish block here is ignored by upstream's
@@ -87,9 +89,45 @@ build/icons/              16..512 hicolor PNGs (RGBA, brand green); the Linux
 apply-noise.py            webapp overlay + config.json
 branding.py               webapp shell branding: title, icons, meta, error view,
                           plus the shared web fixes (../element-web/webapp_fixes.py)
-scripts/prepare-webapp.sh tarball -> overlay -> branding -> .build/webapp
+scripts/element-call-widget.py
+                          replaces webapp/widgets/element-call/ with our Element
+                          Call (element-call.lock.json), rebases its root-absolute
+                          asset URLs for vector://vector/webapp/, and fails the
+                          build on anything that is not our bundle
+scripts/prepare-webapp.sh tarball -> call widget -> overlay -> branding -> .build/webapp
 scripts/build.sh          clone, install, asar, installers -> dist-stable/
 ```
+
+### The call widget
+
+element-web opens the call iframe at `./widgets/element-call/`, and the upstream
+tarball ships a stock Element Call there. Stock means none of
+`../element-call/patches/`, so a desktop user gets neither per-person volume
+memory (patch 0004) nor the hide-this-stream control (patch 0005) — the features
+exist on call.plotina.cc and would silently not exist in the app.
+`scripts/prepare-webapp.sh` therefore deletes that directory and installs the
+archive `.github/workflows/build-element-call.yml` publishes, pinned by tag and
+sha256 in `element-call.lock.json`. Two things the install fixes, both of which
+fail silently at runtime if missed:
+
+- **Asset URLs.** The archive is built for a site root, so it references
+  `/assets/...`. The shell serves the webapp from `vector://vector/webapp/` and
+  the widget sits two levels down, so every one of those URLs 404s and the
+  iframe renders an empty `#root` (measured). The install rebases them onto
+  `/webapp/widgets/element-call`.
+- **The noise layer.** The archive carries its own copy and the edge's
+  `/noise/...` tags. The webapp root already owns the noise layer, and a second
+  copy inside the widget would initialize the denoiser twice. The install drops
+  it and points the tags at `../../noise/plotina-dfn.js` + `plotina-panel.js`.
+  `boot.js` stays out deliberately: it no-ops on `window.__plotinaEc`, and the
+  widget's microphone is processed by `plotina-dfn.js` through the bundle's
+  publish hook. `plotina-dfn.js` finds its model from its own `src`
+  (`noise/tests/dfn-base.test.mjs`), because `location.origin` has no meaning
+  under `vector://`.
+
+`element-desktop/tests/test_element_call_widget.py` keeps the upstream widget as
+the negative control: it must fail every check, and the sha256 mismatch and
+wrong-archive paths must exit non-zero.
 
 ## Windows auto-update
 
