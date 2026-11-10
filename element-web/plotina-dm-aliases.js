@@ -36,10 +36,12 @@ Storage: account data is per-user and server-side, so the alias follows the
 account to any device running this overlay and is invisible to other members.
 Nothing here touches room state or sync.
 
-UI: a pencil button in the open room's header opens a small dialog
-("Переименовать для себя" / "Сбросить"). The DOM anchors follow the same
-pattern as noise/boot.js and plotina-update-channel.js: locate by class,
-insert once, re-insert after re-renders.
+UI: a pencil button in the open room's header, on the same line and right
+after the room name (it sits next to the name span inside the header's flex
+row, not under it), opens a small dialog ("Переименовать для себя" /
+"Сбросить"). The DOM anchors follow the same pattern as noise/boot.js and
+plotina-update-channel.js: locate by class, insert once, re-insert after
+re-renders.
 
 Room ids: "!localpart:server" (room versions up to 11) and the opaque
 "!<base64url>" of room version 12 have nothing in common but the leading "!".
@@ -85,7 +87,6 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     ru: {
       title: "Личное имя",
       hint: "Видно только вам. Имя комнаты у собеседника не меняется.",
-      placeholder: "Например, Денчик",
       save: "Сохранить",
       reset: "Сбросить",
       cancel: "Отмена",
@@ -99,7 +100,6 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     en: {
       title: "Personal name",
       hint: "Only you see this. The room's name for everyone else is unchanged.",
-      placeholder: "e.g. Denchik",
       save: "Save",
       reset: "Reset",
       cancel: "Cancel",
@@ -459,7 +459,7 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
   var STYLE_ID = "plotina-dm-alias-style";
   var CSS = [
     ".plotina-alias-btn{display:inline-flex;align-items:center;justify-content:center;",
-    "width:28px;height:28px;margin-inline-start:8px;padding:0;border:0;border-radius:6px;",
+    "flex:0 0 auto;width:28px;height:28px;margin-inline-start:0;padding:0;border:0;border-radius:6px;",
     "background:transparent;color:inherit;cursor:pointer;opacity:.65}",
     ".plotina-alias-btn:hover{opacity:1;background:var(--cpd-color-bg-subtle-secondary,#0001)}",
     ".plotina-alias-btn svg{width:16px;height:16px}",
@@ -530,16 +530,54 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     }, 8000);
   }
 
+  /**
+   * The header box that renders the room name. In the pinned v1.12.32 the
+   * name is <span class="mx_RoomHeader_truncated"> inside the flex row
+   * .mx_RoomHeader_heading (RoomHeader.tsx: Text as div -> truncated span +
+   * status/verified icons). Older layouts exposed .mx_RoomHeader_name /
+   * .mx_RoomHeader_info; keep those as a fallback so a header change puts the
+   * pencil back under the name instead of nowhere.
+   */
+  function headerNameRow() {
+    var header = document.querySelector(".mx_RoomHeader");
+    if (!header) return null;
+    return header.querySelector(".mx_RoomHeader_heading") ||
+      header.querySelector(".mx_RoomHeader_info, .mx_RoomHeader_name");
+  }
+
+  /** Drop the pencil from whatever header is on screen (left a DM, group room). */
+  function removeHeaderButton() {
+    var buttons = document.querySelectorAll(".mx_RoomHeader .plotina-alias-btn");
+    for (var i = 0; i < buttons.length; i++) {
+      if (buttons[i].parentNode) buttons[i].parentNode.removeChild(buttons[i]);
+    }
+  }
+
+  /**
+   * Put the pencil into the name row, directly after the name text: the row is
+   * already a flex container, so the button takes its place in the flow and
+   * the name truncates around it. No absolute positioning, nothing overlaps
+   * the call/invite buttons that live outside this row.
+   */
+  function insertAfterName(row, button) {
+    var name = row.querySelector(".mx_RoomHeader_truncated");
+    if (name && name.parentNode === row) row.insertBefore(button, name.nextSibling);
+    else row.appendChild(button);
+  }
+
   function ensureHeaderButton() {
     var roomId = currentRoomId();
-    if (!roomId) return;
     // The alias is a personal-dialogue feature (QA finding): no pencil on a
     // group room, where the name belongs to the room and to everyone in it.
-    if (!isDirectRoom(roomId)) return;
-    var info = document.querySelector(".mx_RoomHeader_info, .mx_RoomHeader_name");
-    if (!info) return;
-    var existing = info.querySelector(".plotina-alias-btn");
-    if (existing) return;
+    if (!roomId || !isDirectRoom(roomId)) {
+      removeHeaderButton();
+      return;
+    }
+    var row = headerNameRow();
+    if (!row) return;
+    // Only the name row itself counts: a leftover button in another header
+    // instance must not keep this header empty.
+    if (row.querySelector(".plotina-alias-btn")) return;
     var button = document.createElement("button");
     button.type = "button";
     button.className = "plotina-alias-btn";
@@ -547,11 +585,13 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     button.title = t().button;
     button.innerHTML = PENCIL;
     button.addEventListener("click", function (ev) {
+      // The name row lives inside the "open room summary" button; without
+      // this the pencil would open the right panel behind the dialog.
       ev.preventDefault();
       ev.stopPropagation();
       openDialog(currentRoomId());
     });
-    info.appendChild(button);
+    insertAfterName(row, button);
   }
 
   function openDialog(roomId) {
@@ -582,7 +622,8 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
       "</div>";
     wrap.querySelector("h3").textContent = s.title;
     wrap.querySelector("p").textContent = s.hint;
-    wrap.querySelector("input").placeholder = s.placeholder;
+    // The field starts empty with no example text: the user asked for a bare
+    // input (the hint above already says what the name is for).
     wrap.querySelector("input").setAttribute("aria-label", s.title);
     wrap.querySelector('[data-role="save"]').textContent = s.save;
     wrap.querySelector('[data-role="reset"]').textContent = s.reset;

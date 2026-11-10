@@ -193,4 +193,21 @@ test("reset writes {} with no empty values (FINDING-3 regression)", () => {
   }
 });
 
+// ---------------------------------------------------------------- UI contract
+// Source-level pins for the two UI changes the user asked for (2026-11-10):
+// the name dialog carries no example placeholder, and the header pencil is
+// anchored to the name row instead of being appended under the name.
+const source = require("node:fs").readFileSync(nodePath.resolve(process.argv[2]), "utf8");
+
+test("the personal-name dialog has no placeholder text", () => {
+  assert.equal(/placeholder/i.test(source), false,
+    "no placeholder string and no input.placeholder assignment may stay");
+});
+
+test("the header pencil is anchored to the name row", () => {
+  assert.match(source, /mx_RoomHeader_heading/, "the flex row that renders the name is the anchor");
+  assert.match(source, /function insertAfterName/);
+  assert.doesNotMatch(source, /info\.appendChild\(button\)/, "the old under-the-name append is gone");
+});
+
 console.log("ALL OK (" + passed + " tests)");

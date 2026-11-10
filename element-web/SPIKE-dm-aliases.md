@@ -109,8 +109,10 @@ homeserver-ом: 10/10 автоматических проверок (`spike-dm-
 - после изменения карты — `recalculate()` всех комнат;
 - ждёт появления `window.mxMatrixClientPeg` (poll 250 мс) — гонки с загрузкой
   бандла нет;
-- UI: кнопка-карандаш в `.mx_RoomHeader_info` (пере-вставляется MutationObserver-ом
-  после пере-рендеров), диалог со строками ru/en, «Сохранить» / «Сбросить»;
+- UI: кнопка-карандаш справа от имени в заголовке, внутри flex-строки
+  `.mx_RoomHeader_heading` сразу за `<span class="mx_RoomHeader_truncated">`
+  (пере-вставляется MutationObserver-ом после пере-рендеров), диалог со
+  строками ru/en, «Сохранить» / «Сбросить»;
 - тестовый хэндл `window.plotinaDmAliases` (`aliases()`, `setAlias`,
   `clearAlias`, `ready()`) — им же пользуется `proof.mjs`.
 
