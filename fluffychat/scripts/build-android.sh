@@ -40,9 +40,18 @@ python3 "$here/scripts/apply-plotina-app-assets.py" "$upstream"
 : "${ANDROID_NDK_HOME:=$(ls -d "${ANDROID_HOME:-$HOME/Android/Sdk}"/ndk/* | sort -V | tail -1)}"
 export ANDROID_NDK_HOME
 
-cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 \
-  -o "$here/plotina_dfn/android/src/main/jniLibs" \
-  build --release --manifest-path "$here/plotina_dfn/rust/Cargo.toml"
+# cargo-ndk runs `cargo metadata` in the current directory before it reads
+# `--manifest-path`, so a call from the repository root fails with "could not
+# find Cargo.toml" — there is none above fluffychat/. CI builds the denoiser
+# from the crate directory for the same reason (see the "Build native denoiser"
+# step of .github/workflows/build-fluffychat.yml); do the same here. The output
+# path stays absolute, so the jniLibs still land next to the plugin.
+(
+  cd "$here/plotina_dfn/rust"
+  cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 \
+    -o "$here/plotina_dfn/android/src/main/jniLibs" \
+    build --release
+)
 
 cd "$upstream"
 flutter pub get
