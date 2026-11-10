@@ -3,7 +3,7 @@
 // Adapted from element-desktop/desktop/updater.ts (the proven reference:
 // electron-builder latest*.yml metadata + sha512 + size + AppImage atomic
 // swap + NSIS silent `/S --updated`). Differences for
-// Lite (per docs/LITE_ELECTRON_MIGRATION.md §7 and the Phase-2 decision):
+// Lite (per §7 of the internal Lite migration doc and the Phase-2 decision):
 //
 //   * Install-kind detection lives here and is reported to the renderer over
 //     IPC (preload: plotinaLite.updater). Kinds: appimage | nsis | package

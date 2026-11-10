@@ -19,7 +19,7 @@
 # and the release job only runs on tags, so a branch or dispatch build can
 # never overwrite a release.
 #
-# Layout follows docs/LITE_ELECTRON_MIGRATION.md §6.7 minus the Tauri
+# Layout follows the internal Lite migration doc §6.7 minus the Tauri
 # cross-grade jobs (the old installed base is negligible; clean installs
 # only): web -> linux/windows packaging -> smoke -> release.
 name: Build Plotina Lite Desktop (Electron)
