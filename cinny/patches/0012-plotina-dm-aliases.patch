@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..c4164b8
 --- /dev/null
 +++ b/src/app/features/room-nav/PlotinaRoomAliasPrompt.tsx
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,175 @@
 +/*
 +Copyright 2026 Plotina <thebob3r@gmail.com>
 +
@@ -47,7 +47,6 @@ index 0000000..c4164b8
 +    menu: 'Личное имя',
 +    title: 'Личное имя',
 +    hint: 'Видно только вам. Имя комнаты у собеседника не меняется.',
-+    placeholder: 'Например, Денчик',
 +    save: 'Сохранить',
 +    reset: 'Сбросить',
 +    failed: 'Не удалось сохранить имя',
@@ -56,7 +55,6 @@ index 0000000..c4164b8
 +    menu: 'Personal name',
 +    title: 'Personal name',
 +    hint: "Only you see this. The room's name for everyone else is unchanged.",
-+    placeholder: 'e.g. Denchik',
 +    save: 'Save',
 +    reset: 'Reset',
 +    failed: 'Could not save the name',
@@ -145,7 +143,6 @@ index 0000000..c4164b8
 +                  name="aliasInput"
 +                  variant="Background"
 +                  defaultValue={current}
-+                  placeholder={strings.placeholder}
 +                  aria-label={strings.title}
 +                />
 +                {error && (

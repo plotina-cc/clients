@@ -57,6 +57,15 @@ for PATCH in "$ROOT"/patches/*.patch; do
   echo "applied: $(basename "$PATCH")"
 done
 
+echo "==> no example placeholder in the alias dialog"
+# The field carries no placeholder in any locale: an example someone types into
+# the patch is neither a hint nor an instruction, so its return is a failure.
+PROMPT="$WORK/src/src/app/features/room-nav/PlotinaRoomAliasPrompt.tsx"
+if grep -n 'placeholder' "$PROMPT"; then
+  echo "test-dm-aliases: PlotinaRoomAliasPrompt.tsx must name no placeholder" >&2
+  exit 1
+fi
+
 echo "==> bundles"
 # Pure storage rules: the file has no imports, so this bundle is the file.
 "$SRC/node_modules/.bin/esbuild" "$WORK/src/src/plotina/roomAliases.ts" \
