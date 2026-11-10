@@ -81,6 +81,12 @@ FunctionEnd
 ; state in named vars at this point.
 Function un.PlotinaRemoveRuntimeProtocolKey
   Pop $PlotinaScheme
+  ; Without an install dir the needle would degrade to a bare backslash and the
+  ; comparison would match (and delete) a live association of another install.
+  ${If} $INSTDIR == ""
+    DetailPrint "Plotina: no INSTDIR in the uninstaller context, leaving protocol registrations alone"
+    Return
+  ${EndIf}
   ReadRegStr $PlotinaCommand HKCU "Software\Classes\$PlotinaScheme\shell\open\command" ""
   ${If} $PlotinaCommand == ""
     DetailPrint "Plotina: no $PlotinaScheme protocol registration to clean up"

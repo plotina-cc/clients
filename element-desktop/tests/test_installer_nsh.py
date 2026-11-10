@@ -111,6 +111,13 @@ class InstallerNshContract(unittest.TestCase):
                 self.assertTrue(target.startswith("un."), f"installer-context call: {target}")
         self.assertNotIn("${StrContains}", self.text)
 
+    def test_refuses_to_act_without_an_install_dir(self):
+        # An empty $INSTDIR would turn the needle into a bare backslash and
+        # match any registration, deleting another install's live association.
+        self.assertIn('${If} $INSTDIR == ""', self.text)
+        guard = self.text.split('${If} $INSTDIR == ""', 1)[1].split("${EndIf}", 1)[0]
+        self.assertIn("Return", guard)
+
     def test_reads_the_runtime_command_value(self):
         # The runtime association is a default value of shell\open\command;
         # anything else would compare against the wrong thing.
