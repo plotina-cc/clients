@@ -13,7 +13,7 @@
 ;
 ; Those runtime keys are not the ones electron-builder's uninstaller created
 ; (it unregisters only the associations the installer itself wrote), so they
-; survived an uninstall while the exe they name was deleted: clicking an
+; survived an uninstall while the exe they named was deleted: clicking an
 ; element:// link afterwards produced a Windows "file not found" error.
 ; Found by the Windows QA harness, check `uninstall:registry`.
 ;
@@ -25,15 +25,14 @@
 ;
 ; Wiring
 ; ------
-; electron-builder picks this file up through the default value of
-; nsis.include (build/installer.nsh inside the app directory). That default is
-; what we rely on: apps/desktop/electron-builder.ts assembles its config from a
-; whitelist of variant fields, so an "nsis.include" key in
-; element-desktop/build.plotina.json would be read by nobody. scripts/build.sh
-; and the "Apply Plotina desktop sources" step of
-; .github/workflows/build-element-desktop.yml copy this file to
-; apps/desktop/build/installer.nsh (element-desktop/tests/test_installer_nsh.py
-; fails when either copy step disappears).
+; electron-builder picks this file up through nsis.include, which scripts/
+; build.sh and the "Apply Plotina desktop sources" step of
+; .github/workflows/build-element-desktop.yml point at build/installer.nsh
+; explicitly and also copy to apps/desktop/build/installer.nsh (the default
+; location). An "nsis.include" key in element-desktop/build.plotina.json would
+; be read by nobody: apps/desktop/electron-builder.ts assembles its config from
+; a whitelist of variant fields. element-desktop/tests/test_installer_nsh.py
+; fails when a copy step disappears.
 
 !include "LogicLib.nsh"
 
@@ -46,9 +45,10 @@
 ; the installer pass.
 !ifdef BUILD_UNINSTALLER
 
-; Everything below runs in the uninstaller section, where NSIS only allows
+; Everything below runs in the uninstall section, where NSIS only allows
 ; functions declared with the "un." prefix — electron-builder's shipped
 ; StrContains.nsh helper is installer-only and cannot be called from there.
+; Named vars only: the surrounding uninstall section uses $0-$R9 itself.
 Var PlotinaScheme
 Var PlotinaCommand
 Var PlotinaNeedle
@@ -57,11 +57,22 @@ Var PlotinaNeedleLen
 Var PlotinaHaystackLen
 Var PlotinaIndex
 Var PlotinaSlice
+Var PlotinaLastChar
 Var PlotinaResult
 
-; Substring search over two strings the caller has already lowercased:
-; pushes the needle when it occurs in the haystack, "" otherwise.
-; Stack in (top first): needle, haystack. Stack out: result.
+; Case-insensitive substring search. NSIS StrCmp ignores case (StrCmpS is the
+; case-sensitive variant), which is what we need: Chromium writes the exe path
+; with the casing the process was started with, so $INSTDIR and the registered
+; command may differ in case.
+;
+; Do NOT lowercase the buffers with System::Call 'user32::CharLower': the
+; System plugin passes an ANSI char* while NSIS strings are UTF-16, so the
+; call garbles the first characters of both strings and the comparison then
+; silently fails (this is exactly how the first version of this hook passed
+; under wine and did nothing on the Windows runner).
+;
+; Stack in (top first): needle, haystack. Stack out: the needle when it occurs
+; in the haystack, "" otherwise.
 Function un.PlotinaStrContains
   Pop $PlotinaNeedle
   Pop $PlotinaHaystack
@@ -86,13 +97,9 @@ FunctionEnd
 
 ; Deletes HKCU\Software\Classes\<scheme> when that scheme's
 ; shell\open\command points into this installation. Scheme name comes in on the
-; stack. $0-$2 are used as scratch; the surrounding uninstall section keeps its
-; state in named vars at this point.
+; stack.
 Function un.PlotinaRemoveRuntimeProtocolKey
   Pop $PlotinaScheme
-  ; TEMPORARY DIAGNOSTIC (removed before merge)
-  WriteRegStr HKCU "Software\PlotinaProtocolHook" "ran" "1"
-  WriteRegStr HKCU "Software\PlotinaProtocolHook" "$PlotinaScheme.instdir" "$INSTDIR"
   ; Without an install dir the needle would degrade to a bare backslash and the
   ; comparison would match (and delete) a live association of another install.
   ${If} $INSTDIR == ""
@@ -100,31 +107,25 @@ Function un.PlotinaRemoveRuntimeProtocolKey
     Return
   ${EndIf}
   ReadRegStr $PlotinaCommand HKCU "Software\Classes\$PlotinaScheme\shell\open\command" ""
-  ; TEMPORARY DIAGNOSTIC (removed before merge)
-  WriteRegStr HKCU "Software\PlotinaProtocolHook" "$PlotinaScheme.command" "$PlotinaCommand"
   ${If} $PlotinaCommand == ""
     DetailPrint "Plotina: no $PlotinaScheme protocol registration to clean up"
     Return
   ${EndIf}
 
-  ; Case-insensitive substring match: Chromium writes the exe path with the
-  ; casing the process was started with, which need not match $INSTDIR
-  ; character for character. CharLower lowercases the buffer in place.
-  StrCpy $0 "$INSTDIR\"
-  StrCpy $1 "$PlotinaCommand"
-  System::Call 'user32::CharLower(t r0) t .r0'
-  System::Call 'user32::CharLower(t r1) t .r1'
+  ; Needle is "$INSTDIR<separator>", so a sibling "...\plotina-desktop2" never
+  ; matches "...\plotina-desktop".
+  StrCpy $PlotinaNeedle "$INSTDIR"
+  StrCpy $PlotinaLastChar "$INSTDIR" 1 -1
+  ${If} $PlotinaLastChar != "\"
+    StrCpy $PlotinaNeedle "$INSTDIR\"
+  ${EndIf}
 
-  Push $1                       ; haystack: the registered command
-  Push $0                       ; needle: "$INSTDIR\"
+  Push $PlotinaCommand         ; haystack: the registered command
+  Push $PlotinaNeedle          ; needle: the install dir plus a separator
   Call un.PlotinaStrContains
-  Pop $2
-  ; TEMPORARY DIAGNOSTIC (removed before merge)
-  WriteRegStr HKCU "Software\PlotinaProtocolHook" "$PlotinaScheme.needle" "$0"
-  WriteRegStr HKCU "Software\PlotinaProtocolHook" "$PlotinaScheme.haystack" "$1"
-  WriteRegStr HKCU "Software\PlotinaProtocolHook" "$PlotinaScheme.match" "$2"
+  Pop $PlotinaResult
 
-  ${If} $2 != ""
+  ${If} $PlotinaResult != ""
     DeleteRegKey HKCU "Software\Classes\$PlotinaScheme"
     DetailPrint "Plotina: removed the $PlotinaScheme protocol registration that pointed into $INSTDIR"
   ${Else}

@@ -657,12 +657,6 @@ jobs:
           $deadline = (Get-Date).AddSeconds(300)
           while ((Test-Path $root) -and ((Get-Date) -lt $deadline)) { Start-Sleep -Seconds 2 }
           if (Test-Path $root) { throw "the install directory $root survived the silent uninstall" }
-          if (Test-Path 'HKCU:\Software\PlotinaProtocolHook') {
-            Write-Host '---- PlotinaProtocolHook (TEMPORARY DIAGNOSTIC) ----'
-            Get-ItemProperty 'HKCU:\Software\PlotinaProtocolHook' | Format-List | Out-String | Write-Host
-          } else {
-            Write-Host 'diagnostic key absent: the uninstall hook did not run'
-          }
           $left = @()
           foreach ($s in $schemes) {
             $k = Join-Path $classes "$s\shell\open\command"

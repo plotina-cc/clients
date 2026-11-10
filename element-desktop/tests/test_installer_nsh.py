@@ -60,10 +60,18 @@ def custom_uninstall_block(text):
     return body.split("\n!macroend", 1)[0]
 
 
+def code_only(text):
+    """Строки NSIS без комментариев: тесты контракта смотрят на код, не на прозу."""
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith(";")
+    )
+
+
 class InstallerNshContract(unittest.TestCase):
     def setUp(self):
         self.assertTrue(NSH.is_file(), f"{NSH} is missing")
         self.text = read(NSH)
+        self.code = code_only(self.text)
 
     def test_defines_custom_uninstall_hook(self):
         # electron-builder's uninstaller.nsh inserts this macro if it exists.
@@ -82,19 +90,25 @@ class InstallerNshContract(unittest.TestCase):
         # Exactly one DeleteRegKey, and it lives inside the branch taken only
         # when shell\open\command contains $INSTDIR. An app reinstalled into a
         # different directory must keep its live association.
-        self.assertEqual(self.text.count("DeleteRegKey"), 1, "expected exactly one DeleteRegKey")
-        self.assertIn('${If} $2 != ""', self.text)
-        guarded = self.text.split('${If} $2 != ""', 1)[1].split("${Else}", 1)[0]
+        self.assertEqual(self.code.count("DeleteRegKey"), 1, "expected exactly one DeleteRegKey")
+        self.assertIn('${If} $PlotinaResult != ""', self.code)
+        guarded = self.code.split('${If} $PlotinaResult != ""', 1)[1].split("${Else}", 1)[0]
         self.assertIn("DeleteRegKey", guarded)
         self.assertIn('"Software\\Classes\\$PlotinaScheme"', guarded)
-        self.assertNotIn("DeleteRegKey", self.text.replace(guarded, ""))
+        self.assertNotIn("DeleteRegKey", self.code.replace(guarded, ""))
 
-    def test_match_is_case_insensitive(self):
+    def test_match_is_case_insensitive_without_touching_the_buffers(self):
         # Chromium writes the exe path with the casing the process was started
-        # with; a case-sensitive compare would silently keep the key.
-        self.assertIn("CharLower", self.text)
-        lowered = self.text.count("CharLower")
-        self.assertGreaterEqual(lowered, 2, "both the install dir and the command must be lowered")
+        # with; a case-sensitive compare would silently keep the key. NSIS
+        # StrCmp is case-insensitive, so the search needs no lowercasing.
+        # Lowercasing the buffers with the System plugin's ANSI CharLower must
+        # NOT come back: it garbled the first characters of UTF-16 NSIS
+        # strings and made the comparison fail on a real Windows runner even
+        # though the wine test passed.
+        self.assertNotIn("CharLower", self.code)
+        self.assertNotIn("System::Call", self.code)
+        self.assertIn("StrCmp $PlotinaSlice $PlotinaNeedle", self.code)
+        self.assertNotIn("StrCmpS", self.code)
 
     def test_uninstaller_only_calls_un_functions(self):
         # NSIS rejects `Call Foo` inside an uninstall section when Foo is an
@@ -216,11 +230,14 @@ Section "install"
   WriteRegStr HKCU "Software\Classes\element\shell\open\command" "" '"$INSTDIR\Plotina-Desktop.exe" "%1"'
   ; different capitalisation on purpose: the guard must be case-insensitive
   WriteRegStr HKCU "Software\Classes\io.element.desktop" "" "URL:io.element.desktop protocol"
-  WriteRegStr HKCU "Software\Classes\io.element.desktop\shell\open\command" "" '"c:\plotina-desktop\plotina-desktop.exe" "%1"'
+  WriteRegStr HKCU "Software\Classes\io.element.desktop\shell\open\command" "" '"c:\plotina-nshprobe\plotina-desktop.exe" "%1"'
   WriteRegStr HKCU "Software\Classes\cc.plotina.element" "" "URL:cc.plotina.element protocol"
   WriteRegStr HKCU "Software\Classes\cc.plotina.element\shell\open\command" "" '"$INSTDIR\Plotina-Desktop.exe" -- "%1"'
   ; a live association of another installation: must survive
   WriteRegStr HKCU "Software\Classes\outside\shell\open\command" "" '"C:\Other\Plotina-Desktop.exe" "%1"'
+  ; a directory that only shares the prefix of $INSTDIR: must survive, the
+  ; needle is "$INSTDIR\" and therefore never matches "...-NshProbe2\..."
+  WriteRegStr HKCU "Software\Classes\sibling\shell\open\command" "" '"C:\Plotina-NshProbe2\Plotina-Desktop.exe" "%1"'
   ; no command at all: nothing to compare, leave it untouched
   WriteRegStr HKCU "Software\Classes\nocommand" "" "URL:nocommand protocol"
 
@@ -312,6 +329,10 @@ class InstallerNshBehaviour(unittest.TestCase):
             self.assertTrue(
                 registry_has_key(env, r"outside\shell\open\command"),
                 "the association of another install was deleted",
+            )
+            self.assertTrue(
+                registry_has_key(env, r"sibling\shell\open\command"),
+                "an install whose directory only shares the prefix of $INSTDIR was deleted",
             )
             self.assertTrue(
                 registry_has_key(env, "nocommand"),
