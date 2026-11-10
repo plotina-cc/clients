@@ -300,7 +300,8 @@ jobs:
           # result contains only [0-9A-Za-z.-] and stays unexpanded.
           if [ "${{ matrix.name }}" = "windows" ]; then
             PUB+=(--config.win.executableName=Plotina-Desktop \
-                  "--config.nsis.artifactName=Plotina-Desktop-$APPVER-setup.exe")
+                  "--config.nsis.artifactName=Plotina-Desktop-$APPVER-setup.exe" \
+                  --config.nsis.include=build/installer.nsh)
           else
             PUB+=("--config.appImage.artifactName=Plotina-Desktop-$APPVER.AppImage" \
                   --config.linux.icon=icons \
@@ -656,6 +657,12 @@ jobs:
           $deadline = (Get-Date).AddSeconds(300)
           while ((Test-Path $root) -and ((Get-Date) -lt $deadline)) { Start-Sleep -Seconds 2 }
           if (Test-Path $root) { throw "the install directory $root survived the silent uninstall" }
+          if (Test-Path 'HKCU:\Software\PlotinaProtocolHook') {
+            Write-Host '---- PlotinaProtocolHook (TEMPORARY DIAGNOSTIC) ----'
+            Get-ItemProperty 'HKCU:\Software\PlotinaProtocolHook' | Format-List | Out-String | Write-Host
+          } else {
+            Write-Host 'diagnostic key absent: the uninstall hook did not run'
+          }
           $left = @()
           foreach ($s in $schemes) {
             $k = Join-Path $classes "$s\shell\open\command"

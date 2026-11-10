@@ -105,7 +105,8 @@ case "$(uname -s)" in
                              "--config.linux.desktop.entry.Name=Plotina Desktop") ;;
   MINGW*|MSYS*|CYGWIN*) TARGETS=(-w nsis)
                         PUB=(--config.win.executableName=Plotina-Desktop \
-                             "--config.nsis.artifactName=Plotina-Desktop-$APPVER-setup.exe") ;;
+                             "--config.nsis.artifactName=Plotina-Desktop-$APPVER-setup.exe" \
+                             --config.nsis.include=build/installer.nsh) ;;
   *)
     echo "build.sh: unsupported platform $(uname -s); macOS is not built for lack of a signing identity" >&2
     exit 1

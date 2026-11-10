@@ -90,6 +90,9 @@ FunctionEnd
 ; state in named vars at this point.
 Function un.PlotinaRemoveRuntimeProtocolKey
   Pop $PlotinaScheme
+  ; TEMPORARY DIAGNOSTIC (removed before merge)
+  WriteRegStr HKCU "Software\PlotinaProtocolHook" "ran" "1"
+  WriteRegStr HKCU "Software\PlotinaProtocolHook" "$PlotinaScheme.instdir" "$INSTDIR"
   ; Without an install dir the needle would degrade to a bare backslash and the
   ; comparison would match (and delete) a live association of another install.
   ${If} $INSTDIR == ""
@@ -97,6 +100,8 @@ Function un.PlotinaRemoveRuntimeProtocolKey
     Return
   ${EndIf}
   ReadRegStr $PlotinaCommand HKCU "Software\Classes\$PlotinaScheme\shell\open\command" ""
+  ; TEMPORARY DIAGNOSTIC (removed before merge)
+  WriteRegStr HKCU "Software\PlotinaProtocolHook" "$PlotinaScheme.command" "$PlotinaCommand"
   ${If} $PlotinaCommand == ""
     DetailPrint "Plotina: no $PlotinaScheme protocol registration to clean up"
     Return
@@ -114,6 +119,10 @@ Function un.PlotinaRemoveRuntimeProtocolKey
   Push $0                       ; needle: "$INSTDIR\"
   Call un.PlotinaStrContains
   Pop $2
+  ; TEMPORARY DIAGNOSTIC (removed before merge)
+  WriteRegStr HKCU "Software\PlotinaProtocolHook" "$PlotinaScheme.needle" "$0"
+  WriteRegStr HKCU "Software\PlotinaProtocolHook" "$PlotinaScheme.haystack" "$1"
+  WriteRegStr HKCU "Software\PlotinaProtocolHook" "$PlotinaScheme.match" "$2"
 
   ${If} $2 != ""
     DeleteRegKey HKCU "Software\Classes\$PlotinaScheme"
