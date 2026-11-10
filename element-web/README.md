@@ -51,8 +51,13 @@ config/element/
     vendor/dpdfnet.esm.js experimental DPDFNet backend (Apache-2.0)
   tests/
     branding_test.py      brand-pass unit tests (python3 -m unittest, fixture copies)
+    test_theme_custom_css_vars.py
+                          no bare var(--x) in the generated theme-*-custom.css
+                          without a definition; skips loudly when no built
+                          webapp is around (PLOTINA_WEBAPP_ROOT / _STRICT)
     theme_init.test.js    node tests for plotina-theme.js (run via branding_test.py)
     fixtures/             byte-exact upstream index.html/error-view.js/config.json
+    fixtures/theme-css/   trimmed shipped sheets: before (broken) / after (fixed)
     unit.html run.sh      logic tests (headless Chromium)
     integration.html integration.sh   real audio path with a fake microphone
 ```

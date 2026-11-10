@@ -1,0 +1,33 @@
+:root{--AddExtension-overlap:-76px;--AppTileBody-height:100%;--BaseCard_EventTile-spacing-inline:36px}
+.mx_JoinRuleSettings_recommended{color:var(--accent-color-1000)}
+.mx_Icon_bg-accent-light{background-color:var(--accent-color-300)}
+.mx_MessageComposer_wysiwyg .mx_MessageComposer_button.mx_MessageComposer_closeButtonMenu:after{background:var(--accent-color-300)}
+.mx_EditWysiwygComposer .mx_WysiwygComposer_Editor_content:focus{border-color:var(--accent-color-400)}
+.markdown-body .pl-ii{background-color:var(--bgColor-danger-muted);color:var(--fgColor-danger)}
+.markdown-body [role=button]:focus,.markdown-body a:focus,.markdown-body input[type=checkbox]:focus,.markdown-body input[type=radio]:focus{-webkit-box-shadow:none;box-shadow:none;outline:2px solid var(--borderColor-accent-emphasis);outline-offset:-2px}
+.markdown-body [role=button]:focus-visible,.markdown-body a:focus-visible,.markdown-body input[type=checkbox]:focus-visible,.markdown-body input[type=radio]:focus-visible{-webkit-box-shadow:none;box-shadow:none;outline:2px solid var(--borderColor-accent-emphasis);outline-offset:-2px}
+.markdown-body kbd{background-color:#151b23;border-bottom-color:var(--borderColor-muted);border:1px solid var(--borderColor-muted);border-radius:6px;-webkit-box-shadow:inset 0 -1px 0 var(--borderColor-muted);box-shadow:inset 0 -1px 0 var(--borderColor-muted);color:#f0f6fc;display:inline-block;font:11px ui-monospace,SFMono-Regular,SF Mono,Menlo,Consolas,Liberation Mono,monospace;line-height:10px;padding:.25rem;vertical-align:middle}
+.markdown-body .pl-ii{background-color:var(--bgColor-danger-muted);color:var(--fgColor-danger)}
+a:where(:not([data-kind]):not(.mx_MessageTimestamp)):hover,a:where(:not([data-kind]):not(.mx_MessageTimestamp)):link,a:where(:not([data-kind]):not(.mx_MessageTimestamp)):visited{color:var(--primary-color)}
+.mx_Dialog .markdown-body a{color:var(--primary-color)}
+#mx_theme_secondaryAccentColor{color:var(--roomlist-background-color)}
+.mx_ConfirmSpaceUserActionDialog .mx_ConfirmSpaceUserActionDialog_warning{background-color:var(--roomlist-background-color);border-radius:8px;color:#edf3ff;color:var(--secondary-content,#edf3ff);font-size:.75rem;line-height:.9375rem;padding:12px 8px}
+.mx_SpacePanel{--activeBackground-color:var(--roomlist-highlights-color);--activeBorder-color:var(--timeline-text-color);--activeBorder-transparent-gap:1px;--gutterSize:14px;--height-nested:24px;--height-topLevel:32px;background-color:var(--cpd-color-bg-canvas-default);border-right:1px solid var(--cpd-color-bg-subtle-primary);-webkit-box-flex:0;display:-webkit-box;display:-ms-flexbox;display:flex;-ms-flex:0 0 auto;flex:0 0 auto;margin:0;outline:1px solid transparent;padding:0;position:relative;z-index:1;-webkit-box-orient:vertical;-webkit-box-direction:normal;-ms-flex-direction:column;flex-direction:column}
+.mx_SpacePanel .mx_SpaceButton .mx_SpaceButton_icon{height:calc(var(--height-topLevel) - 14px);width:calc(var(--height-topLevel) - 14px);-ms-flex-negative:0;background-color:var(--roomlist-highlights-color);border-radius:8px;flex-shrink:0;padding:7px}
+.mx_RoomView_auxPanel_hiddenHighlights{border-bottom:1px solid var(--roomlist-separator-color);color:#ff5b55;color:var(--alert,#ff5b55);cursor:pointer;padding:10px 26px}
+.mx_RoomView_statusAreaBox_line{border-top:1px solid var(--roomlist-separator-color);height:1px;margin-left:65px}
+.mx_Dialog .mx_textinput,.mx_Dialog :not(.mx_textinput):not(.mx_Field):not(.mx_no_textinput)>input[type=search],.mx_Dialog :not(.mx_textinput):not(.mx_Field):not(.mx_no_textinput)>input[type=text],.mx_MatrixChat_wrapper .mx_textinput,.mx_MatrixChat_wrapper :not(.mx_textinput):not(.mx_Field):not(.mx_no_textinput)>input[type=search],.mx_MatrixChat_wrapper :not(.mx_textinput):not(.mx_Field):not(.mx_no_textinput)>input[type=text]{background-color:transparent;border:1px solid var(--secondary-hairline-color);border-radius:4px;-webkit-box-sizing:border-box;box-sizing:border-box;color:#61708b;display:block;margin:9px}
+.mx_SpaceRoomView_landing .mx_SpaceHierarchy_roomTile:before,.mx_SpaceRoomView_landing .mx_SpaceHierarchy_subspace_children:before{background-color:var(--sidebar-color);content:"";height:100%;left:6px;position:absolute;top:0;width:1px}
+.mx_SpacePanel .mx_SpacePanel_badgeContainer [data-badge-type=dot]{border:3px solid var(--sidebar-color);margin:0 -1px 0 0}
+.mx_Dialog_background{background-color:var(--sidebar-color-50pct);height:100%;left:0;position:fixed;top:0;width:100%;z-index:4011;z-index:var(--dialog-zIndex-standard-background)}
+.mx_SpaceCreateMenu_wrapper .mx_ContextualMenu_background{background-color:var(--sidebar-color-50pct);left:68px;opacity:.6}
+.mx_AuthPage_modal{background-color:var(--timeline-background-color-50pct);border-radius:var(--cpd-space-6x);margin:100px auto auto}
+.mx_ContextualMenu_wrapper .mx_ThreadPanel_Header_FilterOptionItem:hover{background-color:var(--timeline-highlights-color)}
+.mx_ReadReceiptGroup .mx_ReadReceiptGroup_button.mx_AccessibleButton:hover{background:var(--timeline-highlights-color)}
+body{background-color:var(--timeline-background-color,var(--cpd-color-bg-canvas-default));border:0;color:var(--timeline-text-color);
+    font:var(--cpd-font-body-md-regular)!important;-webkit-font-feature-settings:"kern" 1,"liga" 1,"calt" 1!important;font-feature-settings:"kern" 1,"liga" 1,"calt" 1!important;letter-spacing:var(--cpd-font-letter-spacing-body-md)!important;margin:0;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+.text-primary{color:var(--timeline-text-color)}
+.mx_MPollBody legend .mx_MPollBody_edited{color:var(--timeline-text-color-50pct);font-size:.75rem;opacity:.6}
+.mx_WhoIsTypingTile_label{-webkit-box-flex:1;color:var(--timeline-text-color-50pct);-ms-flex:1;flex:1;font:var(--cpd-font-body-md-semibold)}
+.mx_Dialog{background-color:var(--timeline-background-color,var(--cpd-color-bg-canvas-default));-webkit-box-sizing:border-box;box-sizing:border-box;color:var(--timeline-text-secondary-color);font-size:.9375rem;overflow-y:auto;padding:var(--cpd-space-8x) var(--cpd-space-10x);position:relative}
+.mx_Dialog button.mx_LegacyDialogButton:disabled,.mx_Dialog input.mx_LegacyDialogButton[type=submit]:disabled{background-color:var(--timeline-text-secondary-color);border:1px solid var(--timeline-text-secondary-color);opacity:.7}
