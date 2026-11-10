@@ -62,7 +62,8 @@ fails leaves them untouched (the presenter shows the generic error snackbar and 
 
 Room details of a DM → **«Личное имя»** (below the read/unread actions). It shows the current name on
 the right, opens a dialog with the name field, «Сохранить», «Сбросить» (only when a name is set) and
-«Отмена». Saving a blank field is the same as resetting. The dialog is only offered in the details
+«Отмена». Saving a blank field is the same as resetting. The name field carries no example hint in
+either locale: it is empty until the user types, as asked. The dialog is only offered in the details
 screen of a personal dialogue; groups have no such entry.
 
 ## What is not covered
