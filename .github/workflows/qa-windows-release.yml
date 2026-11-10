@@ -577,12 +577,17 @@ jobs:
           $wantSha = $env:EXPECTED_SHA
           if (-not $runId) { throw 'artifact_run_id is empty' }
 
-          $meta = (gh run view $runId --repo $env:GITHUB_REPOSITORY --json headSha,headBranch,workflowName,conclusion,event,displayTitle,url | ConvertFrom-Json)
+          $meta = (gh run view $runId --repo $env:GITHUB_REPOSITORY --json headSha,headBranch,workflowName,conclusion,event,displayTitle,url,jobs | ConvertFrom-Json)
           $meta | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $EV 'run-provenance.json') -Encoding utf8
-          $desc = 'run={0} workflow={1} branch={2} sha={3} conclusion={4} event={5}' -f $runId, $meta.workflowName, $meta.headBranch, $meta.headSha, $meta.conclusion, $meta.event
+          # A negative-control run is dispatched from a base commit whose OTHER jobs may
+          # legitimately fail (a branch dispatch of main dies in the deb branding step), so
+          # the artefact is vouched for by the `windows` build job, not by the run verdict.
+          $winJob = @($meta.jobs | Where-Object { $_.name -eq 'windows' })
+          $buildOk = if ($winJob.Count -gt 0) { $winJob[0].conclusion -eq 'success' } else { $meta.conclusion -eq 'success' }
+          $desc = 'run={0} workflow={1} branch={2} sha={3} runConclusion={4} windowsJob={5} event={6}' -f $runId, $meta.workflowName, $meta.headBranch, $meta.headSha, $meta.conclusion, ($winJob[0].conclusion -replace '^$', '(absent)'), $meta.event
           Write-Host $desc
-          Check 'artifact:provenance' (($meta.conclusion -eq 'success') -and ($wantSha -eq '' -or $meta.headSha -eq $wantSha)) $desc
-          if ($meta.conclusion -ne 'success') { throw ('run ' + $runId + ' did not succeed: ' + $meta.conclusion) }
+          Check 'artifact:provenance' ($buildOk -and ($wantSha -eq '' -or $meta.headSha -eq $wantSha)) $desc
+          if (-not $buildOk) { throw ('run ' + $runId + ' has no successful windows build job') }
           if ($wantSha -and ($meta.headSha -ne $wantSha)) { throw ('run ' + $runId + ' built ' + $meta.headSha + ', expected ' + $wantSha) }
 
           gh run download $runId --repo $env:GITHUB_REPOSITORY -n plotina-desktop-windows -D pkg
