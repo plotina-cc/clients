@@ -195,11 +195,13 @@ What it asserts, in order:
    `setup.exe`'s sha512 (base64, the form electron-builder publishes) and size
    match. Nothing is executed when they disagree.
 2. **Silent install** — the installer runs with `/S` and must exit 0.
-3. **Version** — `ProductVersion`/`FileVersion` of the installed
-   `Plotina-Desktop.exe` and the `version` inside the shipped
-   `resources/app.asar` (`package.json`, read from the asar header) are compared
-   with the tag: the asar version must be exact, exe metadata may be
-   electron-builder's numeric form but must not name a different build.
+3. **Version** — the installed `Plotina-Desktop.exe` `FileVersion` and the
+   `version` inside the shipped `resources/app.asar` (`package.json`, read from
+   the asar header) must both be exactly the tag's app version. Windows'
+   `ProductVersion` is a four-part numeric resource, so electron-builder drops
+   the prerelease there (`1.12.32.0` for `1.12.32-plotina.46-dev.1`); it only has
+   to agree on the upstream base, while the release counter is checked on
+   `FileVersion` and in the packaged app.
 4. **Window and liveness** — the app is launched, a non-zero `MainWindowHandle`
    must appear within 180 s, and the process must still be alive with a window
    after `settle_seconds`. A desktop screenshot is taken (best effort on a

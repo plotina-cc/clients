@@ -248,6 +248,7 @@ jobs:
               if ($g.Count -ge 3 -and $g.Count -le 4 -and ($g[0..2] -join '.') -eq ($w[0..2] -join '.')) {
                   if ($g.Count -eq 3) { return 'BASE-ONLY' }
                   if ($g[3] -eq $w[4]) { return 'NUMERIC' }
+                  if ($g[3] -eq '0') { return 'BASE-ZERO' }
               }
               return 'MISMATCH'
           }
@@ -299,10 +300,16 @@ jobs:
               $fv = Compare-Ver $vi.FileVersion $wantV
               $av = Compare-Ver $asarV $wantV
               Log "$label`: ProductVersion='$($vi.ProductVersion)' ($pv) FileVersion='$($vi.FileVersion)' ($fv) app.asar version='$asarV' ($av), want '$wantV'"
-              if ($pv -eq 'MISMATCH' -or $pv -eq 'MISSING') { throw "$label`: exe ProductVersion '$($vi.ProductVersion)' does not match tag version '$wantV'" }
-              if ($fv -eq 'MISMATCH') { throw "$label`: exe FileVersion '$($vi.FileVersion)' contradicts tag version '$wantV'" }
+              # Windows' version resource is four numeric parts, so electron-builder
+              # drops the prerelease suffix there: the .46 installer's exe reports
+              # ProductVersion 1.12.32.0 while FileVersion keeps the full
+              # 1.12.32-plotina.46-dev.1. The tag must therefore match exactly on
+              # FileVersion and inside the shipped app.asar; ProductVersion only has
+              # to agree on the upstream base (it may carry the counter or a 0).
+              if ($pv -eq 'MISMATCH' -or $pv -eq 'MISSING') { throw "$label`: exe ProductVersion '$($vi.ProductVersion)' does not match the tag version '$wantV' (base $($wantV.Split('-')[0]))" }
+              if ($fv -ne 'EXACT') { throw "$label`: exe FileVersion '$($vi.FileVersion)' is not the tag version '$wantV'" }
               if ($av -ne 'EXACT') { throw "$label`: the shipped app.asar reports '$asarV', the tag says '$wantV'" }
-              Write-Host "CHECK|version $label|ProductVersion=$pv FileVersion=$fv app.asar=EXACT ('$asarV')"
+              Write-Host "CHECK|version $label|ProductVersion=$pv FileVersion=EXACT app.asar=EXACT ('$asarV')"
           }
 
           function Snap([string]$label) {
