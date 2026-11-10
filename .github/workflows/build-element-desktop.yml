@@ -238,6 +238,14 @@ jobs:
           cp "${{ github.workspace }}/element-desktop/desktop/protocol-schemes.ts" "$SRC/apps/desktop/src/protocol-schemes.ts"
           rm -rf "$SRC/apps/desktop/build/icons"
           cp -r "${{ github.workspace }}/element-desktop/build/icons" "$SRC/apps/desktop/build/icons"
+          # electron-builder's default nsis.include is build/installer.nsh; its
+          # customUnInstall hook removes the protocol keys the app writes at
+          # runtime (app.setAsDefaultProtocolClient), which the uninstaller
+          # otherwise leaves behind pointing at the deleted exe. An "nsis"
+          # block in the variant file is dropped by the config whitelist in
+          # apps/desktop/electron-builder.ts, so this copy is the wiring.
+          # Must mirror element-desktop/scripts/build.sh.
+          cp "${{ github.workspace }}/element-desktop/build/installer.nsh" "$SRC/apps/desktop/build/installer.nsh"
           if command -v python3 >/dev/null; then PY=python3; else PY=python; fi
           "$PY" "${{ github.workspace }}/element-desktop/desktop/patch-shell.py" "$SRC/apps/desktop/src"
 
@@ -292,7 +300,8 @@ jobs:
           # result contains only [0-9A-Za-z.-] and stays unexpanded.
           if [ "${{ matrix.name }}" = "windows" ]; then
             PUB+=(--config.win.executableName=Plotina-Desktop \
-                  "--config.nsis.artifactName=Plotina-Desktop-$APPVER-setup.exe")
+                  "--config.nsis.artifactName=Plotina-Desktop-$APPVER-setup.exe" \
+                  --config.nsis.include=build/installer.nsh)
           else
             PUB+=("--config.appImage.artifactName=Plotina-Desktop-$APPVER.AppImage" \
                   --config.linux.icon=icons \
@@ -344,7 +353,11 @@ jobs:
         working-directory: element-desktop/.build/element-web/apps/desktop
         shell: bash
         env:
-          PLOTINA_REVISION: ${{ github.ref_name }}
+          # A tag name is a valid deb revision, a branch name is not: dpkg
+          # rejects "1.12.32-plotina.wt/foo" (slash + invalid chars), which
+          # broke every workflow_dispatch run from a branch. Release builds
+          # always come from tags, so only the manual case falls back to sha.
+          PLOTINA_REVISION: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || github.sha }}
         run: |
           # electron-builder keeps upstream's Vendor/Maintainer/Homepage and
           # the executable name in the menu entry; rewrite both in the built
@@ -605,6 +618,59 @@ jobs:
           if ($bad.Count) { throw "declared scheme(s) not registered to this install: $($bad -join '; ')" }
           foreach ($scheme in $declared) { Write-Host "OK $scheme -> $exe" }
           & taskkill /IM Plotina-Desktop.exe /F /T 2>&1 | ForEach-Object { Write-Host $_ }
+
+      # The app registers its protocols (element://, io.element.desktop://,
+      # cc.plotina.element:// — see "protocols" in element-desktop/
+      # build.plotina.json) itself on every start (apps/desktop/src/protocol.ts
+      # -> app.setAsDefaultProtocolClient), so those HKCU keys are not the ones
+      # the installer wrote and the uninstaller used to leave them behind
+      # pointing at the deleted exe (Windows QA: uninstall:registry FAIL). The
+      # customUnInstall hook in element-desktop/build/installer.nsh has to
+      # remove them; prove it on the real package, before anything is published.
+      - name: Silent uninstall leaves no protocol keys behind
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $root = (Get-ChildItem "$env:LOCALAPPDATA\Programs" -Directory -Filter 'Plotina*')[0].FullName
+          $classes = 'HKCU:\Software\Classes'
+          $schemes = @('element', 'io.element.desktop', 'cc.plotina.element')
+          $registered = @()
+          foreach ($s in $schemes) {
+            $k = Join-Path $classes "$s\shell\open\command"
+            if (-not (Test-Path $k)) { continue }
+            $cmd = "$((Get-ItemProperty -Path $k -ErrorAction SilentlyContinue).'(default)')"
+            Write-Host "before uninstall: $s -> $cmd"
+            if ($cmd -like "*$root*") { $registered += $s }
+          }
+          # The launch step above registered the schemes; without them there is
+          # nothing to prove here, and that is itself a finding worth failing on
+          # (a silent PASS would hide a regression in the runtime registration).
+          if ($registered.Count -eq 0) {
+            throw "no protocol key points into $root before the uninstall: the app did not register its schemes at startup, so this check proves nothing"
+          }
+          $uninstaller = @(Get-ChildItem $root -Filter 'Uninstall*.exe' -File -ErrorAction SilentlyContinue)[0]
+          if ($null -eq $uninstaller) { throw "no Uninstall*.exe in $root" }
+          Write-Host "uninstalling via $($uninstaller.Name) /S /currentuser"
+          $p = Start-Process $uninstaller.FullName -ArgumentList '/S', '/currentuser' -Wait -PassThru
+          Write-Host "uninstaller exit=$($p.ExitCode)"
+          # The silent uninstaller relaunches itself from %TEMP%; wait for the
+          # install directory to go away before reading the registry back.
+          $deadline = (Get-Date).AddSeconds(300)
+          while ((Test-Path $root) -and ((Get-Date) -lt $deadline)) { Start-Sleep -Seconds 2 }
+          if (Test-Path $root) { throw "the install directory $root survived the silent uninstall" }
+          $left = @()
+          foreach ($s in $schemes) {
+            $k = Join-Path $classes "$s\shell\open\command"
+            if (-not (Test-Path $k)) {
+              Write-Host "after uninstall: $s is gone"
+              continue
+            }
+            $cmd = "$((Get-ItemProperty -Path $k -ErrorAction SilentlyContinue).'(default)')"
+            Write-Host "after uninstall: $s still registered -> $cmd"
+            if ($cmd -like "*$root*") { $left += "$s -> $cmd" }
+          }
+          if ($left.Count) { throw "protocol keys still point into the removed install: $($left -join '; ')" }
+          Write-Host "the runtime protocol keys of the removed install are gone: $($registered -join ', ')"
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
