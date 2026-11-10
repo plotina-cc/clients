@@ -14,7 +14,12 @@ overrides for any *semantic* Compound token). These tests pin that contract:
   bundles/*/bundle.css of the live deployment; the allowlist below is the
   evidence, so a future edit cannot invent a token name that silently does
   nothing);
-* text-primary on the canvas meets WCAG AA (>= 4.5:1) in both themes.
+* text-primary on the canvas meets WCAG AA (>= 4.5:1) in both themes;
+* the theme *ids* agree across the three sources — ``default_theme``,
+  ``setting_defaults.theme`` and the constants in ``element-web/plotina-theme.js``
+  (upstream builds a custom id as "custom-" + the theme's ``name``, so a label
+  rename renames the id), and pre-rename ids survive only as the bootstrap's
+  migration map.
 
 Note there is no bare ``--cpd-color-bg-canvas`` token in Compound; the canvas
 token is ``--cpd-color-bg-canvas-default``. The tests enforce the real name.
@@ -175,6 +180,37 @@ def custom_themes() -> dict[str, dict]:
     return {t["name"]: t for t in themes}
 
 
+THEME_BOOTSTRAP = WEBAPP / "plotina-theme.js"
+
+# Upstream derives a custom theme's id as "custom-" + its ``name`` (there is
+# no separate id field in setting_defaults.custom_themes), so the user-facing
+# label *is* the id. The ids below are what earlier builds wrote into
+# mx_local_settings.theme, before the themes were labelled Mint Light /
+# Mint Dark; plotina-theme.js rewrites them on the next page load so a saved
+# preference keeps working.
+LEGACY_THEME_IDS = {
+    "custom-Plotina Mint": "custom-Mint Light",
+    "custom-Plotina Mint Dark": "custom-Mint Dark",
+}
+
+
+def theme_ids() -> set[str]:
+    """The ids Element derives for our custom themes: "custom-" + name."""
+    return {f"custom-{name}" for name in custom_themes()}
+
+
+def bootstrap_theme_ids() -> dict[str, str]:
+    """LIGHT_THEME / DARK_THEME constants of element-web/plotina-theme.js."""
+    src = THEME_BOOTSTRAP.read_text(encoding="utf-8")
+    ids: dict[str, str] = {}
+    for key in ("LIGHT_THEME", "DARK_THEME"):
+        match = re.search(rf'var {key} = "([^"]+)";', src)
+        if match is None:
+            raise AssertionError(f"plotina-theme.js: {key} declaration not found")
+        ids[key] = match.group(1)
+    return ids
+
+
 def srgb_lin(c: float) -> float:
     return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
 
@@ -204,9 +240,41 @@ class ThemePresenceTest(unittest.TestCase):
 
     def test_default_theme_unchanged(self) -> None:
         cfg = load_config()
-        # The internal theme id is stable for saved preferences; only its label is Mint Light.
-        self.assertEqual(cfg["default_theme"], "custom-Plotina Mint")
-        self.assertEqual(cfg["setting_defaults"]["theme"], "custom-Plotina Mint")
+        # Upstream derives a custom theme's id as "custom-" + its name, so the
+        # id follows the label: "Mint Light" -> "custom-Mint Light". A saved
+        # preference written under the pre-rename id is migrated by
+        # plotina-theme.js (see the legacy tests below).
+        self.assertEqual(cfg["default_theme"], f"custom-{LIGHT}")
+        self.assertEqual(cfg["setting_defaults"]["theme"], f"custom-{LIGHT}")
+        self.assertIn(cfg["default_theme"], theme_ids())
+
+    def test_bootstrap_ids_match_config(self) -> None:
+        # Three sources carry the theme id: default_theme, setting_defaults.theme
+        # and plotina-theme.js. They drifted apart once already (the Mint Light /
+        # Mint Dark rename changed the ids without touching the other two), so
+        # pin them against each other, not just against literals.
+        js = bootstrap_theme_ids()
+        self.assertEqual(js["LIGHT_THEME"], f"custom-{LIGHT}")
+        self.assertEqual(js["DARK_THEME"], f"custom-{DARK}")
+        cfg = load_config()
+        ids = theme_ids()
+        for value in (cfg["default_theme"], cfg["setting_defaults"]["theme"]):
+            self.assertIn(value, ids, msg=f"{value} is not a theme defined in "
+                                          f"setting_defaults.custom_themes")
+
+    def test_legacy_ids_are_mapped_not_defined(self) -> None:
+        # A rename must not leave the old id behind as a second theme: the old
+        # value lives only in the migration map of plotina-theme.js.
+        ids = theme_ids()
+        src = THEME_BOOTSTRAP.read_text(encoding="utf-8")
+        for legacy, current in LEGACY_THEME_IDS.items():
+            with self.subTest(legacy=legacy):
+                self.assertNotIn(legacy, ids,
+                                 msg=f"{legacy} is still a live theme id")
+                self.assertIn(f'"{legacy}":', src,
+                              msg=f"plotina-theme.js does not migrate {legacy}")
+                self.assertIn(current, ids,
+                              msg=f"migration target {current} is not a theme")
 
 
 class TokenCoverageTest(unittest.TestCase):

@@ -30,7 +30,7 @@
   },
   "setting_defaults": {
     "language": "ru",
-    "theme": "custom-Plotina Mint",
+    "theme": "custom-Mint Light",
     "custom_themes": [
       {
         "name": "Mint Light",
@@ -72,7 +72,7 @@
       }
     ]
   },
-  "default_theme": "custom-Plotina Mint",
+  "default_theme": "custom-Mint Light",
   "element_call": {
     "use_exclusively": true,
     "brand": "Plotina Call"

@@ -29,8 +29,9 @@ config/element/
   config.json             Element Web runtime config, including local Plotina logo
                           and branding.welcome_background_url (/plotina-bg.png)
   manifest.json           Plotina PWA manifest
-  plotina-theme.js        first-visit theme bootstrap: seeds mx_local_settings.theme
-                          from prefers-color-scheme before the bundle loads
+  plotina-theme.js        theme bootstrap: seeds mx_local_settings.theme from
+                          prefers-color-scheme before the bundle loads, and
+                          migrates theme ids saved before the Mint rename
   plotina-dm-aliases.js   personal room names: room_id -> label map in account data
                           cc.plotina.room_aliases, applied over Room.calculateRoomName
                           (see SPIKE-dm-aliases.md and FIX-dm-aliases-v12.md;
