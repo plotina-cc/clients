@@ -276,7 +276,7 @@ Coverage therefore is:
 | --- | --- |
 | Author under a message (`message.dart`) | yes |
 | Participant list, member search filter | yes |
-| DM / chat title bar | yes |
+| DM / chat title bar | yes, unless a room-level alias from patch `0017` is set for that chat: `plotinaDisplayname()` checks `cc.plotina.room_aliases` first, so a per-chat name wins over the contact name |
 | Mentions and mention fragments | yes |
 | Muted/pinned/room list names for DMs | yes |
 | Push notification texts | no — they are built server-side / in the background isolate from the raw member state |
