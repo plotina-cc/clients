@@ -140,7 +140,17 @@ jobs:
               fi
             done
             mkdir -p "rel/$tag"
-            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "rel/$tag" --clobber "$setup" latest.yml
+            # gh takes the tag as its only positional; assets go through -p, which
+            # is repeatable (newer gh accepts several file args, windows-latest's
+            # does not, so keep to -p).
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "rel/$tag" --clobber \
+              -p "$setup" -p latest.yml
+            for f in "$setup" latest.yml; do
+              if [ ! -s "rel/$tag/$f" ]; then
+                echo "::error::release $tag: '$f' was not downloaded into rel/$tag"
+                exit 1
+              fi
+            done
             ls -l "rel/$tag"
             echo "::endgroup::"
           }
