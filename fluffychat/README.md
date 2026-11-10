@@ -19,7 +19,7 @@ listened to a call on a device yet.
 | Tag | `v2.11.3` (`UPSTREAM_TAG`), commit `6fc4920` |
 | Flutter | `3.47.8` (upstream `.fvmrc`) |
 | Call stack | `livekit_client` 2.13.1, `flutter_webrtc` 1.6.2+hotfix.4 (both from `pubspec.lock`) |
-| Patch | twenty-one: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.mobile`, `0008`-`0011` Plotina name/label/links/visible strings, `0012` intro buttons, `0013` OIDC scheme, `0014` no upstream support, `0015` About dialog, `0016` in-app updater, `0018` no donation/support prompts, `0019` one "Обновления" settings tab, `0020` build number in the update status, `0021` UTF-8 update manifests (`patches/`). `0017` is left free for the personal-DM-names patch that lands from `wt/dm-names-fluffychat`; numbers are per directory, so nothing may reuse it |
+| Patch | twenty-one: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.mobile`, `0008`-`0011` Plotina name/label/links/visible strings, `0012` intro buttons, `0013` OIDC scheme, `0014` no upstream support, `0015` About dialog, `0016` in-app updater, `0017` personal names for direct chats, `0018` no donation/support prompts, `0019` one "Обновления" settings tab, `0020` build number in the update status, `0021` UTF-8 update manifests (`patches/`); numbers are per directory, so nothing may reuse one |
 
 ## What is in this directory
 
@@ -43,6 +43,7 @@ scripts/fetch-model.sh             downloads the model, SHA-256 pinned
 patches/0012-plotina-intro-buttons.patch  intro "Sign in" always on-screen (see below)
 patches/0013-plotina-oidc-scheme.patch    SSO scheme cc.plotina.fluffychat (MAS)
 patches/0016-plotina-self-updater.patch   in-app updater (see "In-app updater")
+patches/0017-plotina-personal-dm-names.patch  personal DM names (see below)
 patches/0018-plotina-remove-donations.patch  no donation/support prompts
 patches/0019-plotina-updates-tab.patch      one "Обновления" settings tab
 patches/0020-plotina-version-details.patch  build number in the update status
@@ -50,6 +51,8 @@ patches/0021-plotina-update-utf8.patch      UTF-8 update manifests
 scripts/version-code.py          the versionCode formula, used by CI and by
                                  scripts/build-android.sh
 tests/intro_plotina_test.dart    Flutter widget regression test for 0012
+tests/plotina_room_names_test.dart  Dart test for 0017 (copied into the
+                                 upstream checkout to run)
 ```
 
 The patch adds only this to `pubspec.yaml`:
@@ -174,6 +177,67 @@ CI step fails the build if any of that is missing.
   (Settings → Chat), not per call.
 - DFN3 adds its algorithmic lookahead (~10 ms). Irrelevant next to network
   jitter, but it is not zero.
+
+## Personal names for direct chats (patch `0017`)
+
+A private name for a direct chat that only this account sees — the same wish as
+in Plotina Element Web/Desktop, and the same data contract, unchanged:
+
+- account data event `cc.plotina.room_aliases`, content
+  `{"<room_id>": "<personal name>"}`;
+- the name is visible to the account owner only, `m.room.name` is never written;
+- an empty value resets the name (the room's key is removed).
+
+`Room.getLocalizedDisplayname()` lives in the `matrix` SDK (pub package
+`matrix 14.1.0`), not in this tree, and there is no fork of it. So the patch adds
+the single point in our sources: `lib/utils/plotina_room_names.dart` with
+`Room.plotinaDisplayname()`, which returns the personal name when one is set for
+a direct chat and `getLocalizedDisplayname()` otherwise. All 20 display calls
+use it plus the invite banner that builds its title by hand: the chat list and
+its filter, the chat app bar title and avatar, chat search (both tabs), the
+invite banner, the room details header, room pills and reply previews, push and
+local notifications, incoming-call dialogs, call kit params, the call page, the
+share dialog and the archive log.
+
+Groups are never renamed: `room.isDirectChat` (that is, the user's `m.direct`
+account data) decides, so a stale alias cannot rename a group, and the write
+path returns early for a non-DM.
+
+The UI is one entry in the chat list context menu (long press / right click) of a
+joined direct chat: "Личное имя" / "Personal name". The dialog is prefilled with
+the current personal name; the hint shows the room's real name; leaving the field
+empty resets it. The write goes through `client.setAccountData` only and is
+applied to the in-memory account data immediately, so the screen behind the
+dialog re-renders without a restart.
+
+A name set elsewhere (Element Web/Desktop) arrives as account data in `/sync`,
+and FluffyChat already rebuilds the chat list on an account-data-only sync
+(`SyncUpdate.hasRoomUpdate`), so no polling or extra listener is needed.
+
+Robustness: the parser accepts the decoded map or a JSON string, trims values,
+skips blank values, non-strings and keys that are not room ids (a `!` sigil —
+which room v12 opaque ids keep), and returns an empty map for missing or corrupt
+data instead of throwing.
+
+Tests: `tests/plotina_room_names_test.dart`, 19 cases — parsing (empty,
+malformed JSON, junk values, opaque room v12 ids), the DM/group decision, set and
+reset semantics, and a real `Client` where the write is proven to hit
+`/user/.../account_data/cc.plotina.room_aliases` only: no `/state/` request and
+no `m.room.name` in any request body. The patch carries the same file at
+`test/plotina_room_names_test.dart`, so a patched checkout can run it right away:
+
+```
+flutter pub get && flutter gen-l10n
+flutter test test/plotina_room_names_test.dart
+```
+
+Not covered: the dialog itself has no widget test (it is plain
+`showTextInputDialog` plus a menu entry), and the end-to-end check with two
+accounts on a real homeserver belongs to QA. A name changed in *another* client
+while the chat itself is open reaches the chat list on the next sync, but the app
+bar title of the already-open chat re-renders on its next room update (or on
+re-entering the chat), not instantly. The hidden-notification-preview setting was
+not re-checked for names in notifications.
 
 ## Building
 
