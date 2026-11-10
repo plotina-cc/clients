@@ -33,6 +33,7 @@ UPSTREAM_TAG         the cinny-desktop tag we build against
 apply-noise.py       copies noise/ into dist and inserts the tags into the call document
 branding.py          applies Plotina icons, HTML metadata and manifest to the dist
 tests/               unit tests for branding.py (python3 -m unittest discover -s cinny/tests)
+                     and for the DM-name patch (scripts/test-dm-aliases.sh)
 tauri.plotina.json   build override: no beforeBuildCommand, updater disabled
 noise.lock.json      URL and sha256 of the two model binaries (wasm and .tar.gz)
 scripts/build.sh     local Linux build (AppImage + deb)
@@ -79,6 +80,46 @@ General shows the noise slider above Appearance with the default level 60
 `window.__plotinaNoise.isSupported()` is `true` and `window.__plotinaNoiseStats`
 counts `callRequests`, `otherAudioRequests`, `processed` and `failed` — that is
 how an upstream change in the constraint shape shows up.
+
+## Personal names for direct chats
+
+`patches/0012-plotina-dm-aliases.patch`. A dialogue can be called one thing for
+this account and keep its own name for everybody else. The name lives in the
+account's own account data, type `cc.plotina.room_aliases`,
+`{"<room_id>": "<personal name>"}` — the same event Element Web/Desktop writes
+(`element-web/plotina-dm-aliases.js`), so a name set in one client shows up in
+the other. `m.room.name` is never written; an empty value means reset and drops
+the key.
+
+The patch rides the SDK instead of patching React. matrix-js-sdk computes every
+room's displayed name in `Room.calculateRoomName()` and lets the application
+override the answer through `client.roomNameGenerator(roomId, state)`; Cinny
+never sets that hook, so `0012` installs one in `src/client/initMatrix.ts` and
+answers only for personal dialogues (listed in `m.direct`, an `is_direct`
+invite, or exactly two joined members — the same rule the Element overlay uses).
+One point covers the chat list, the open chat's header, room settings,
+notifications, message search and the A→Z room order, because all of them read
+`Room.name`/`Room.normalizedName`. Account data is not room state, so the patch
+also listens for the event and calls `Room.recalculate()` — which emits
+`Room.name` — and the list repaints without a reload.
+
+That listener alone is not enough on a cold start, which is why the patch also
+recomputes on `ClientEvent.Room` and once the first sync is applied
+(`SyncState.Prepared`). The SDK's first `/sync` carries global account data
+before the room sections, and it recalculates a brand-new room *before*
+`storeRoom()` — so inside the generator `client.getRoom(id)` is still empty for
+that room, the room is born with its member-list name, and nothing recomputes
+it: the chat list showed the old name until the room was opened or a message
+arrived (the defect QA found after a client restart). Both hooks are covered by
+`tests/dm_aliases.test.mjs`, including a rehearsal of that exact SDK order.
+
+The way in is the room's context menu: "Личное имя" / "Personal name", shown for
+direct chats only, with Save and Reset. Storage rules and the client glue are
+covered by `tests/dm_aliases.test.mjs`; `scripts/test-dm-aliases.sh` exports the
+pinned tag, applies `patches/`, bundles the two modules the patch adds with the
+esbuild from Cinny's dependency tree and runs `node --test` (node 18+). The
+Electron build needs nothing of its own: `stage-web.sh` stages this same web
+dist, so both Lite surfaces carry the name.
 
 ## Error reporting
 

@@ -1,0 +1,597 @@
+diff --git a/src/app/features/room-nav/PlotinaRoomAliasPrompt.tsx b/src/app/features/room-nav/PlotinaRoomAliasPrompt.tsx
+new file mode 100644
+index 0000000..c4164b8
+--- /dev/null
++++ b/src/app/features/room-nav/PlotinaRoomAliasPrompt.tsx
+@@ -0,0 +1,178 @@
++/*
++Copyright 2026 Plotina <thebob3r@gmail.com>
++
++SPDX-License-Identifier: AGPL-3.0-only
++
++Plotina: the "personal name" dialog for a direct chat.
++
++One field and two actions, in the shape of the other prompts in this folder
++(LeaveRoomPrompt, InviteUserPrompt). The value is written to this account's
++own account data, never to the room: see src/plotina/roomAliases.ts for the
++contract and src/app/state/plotinaAliases.ts for the writer. Saving an empty
++field is the reset, so a dialog whose alias was set elsewhere still offers
++"Reset" without the user having to clear the field first.
++*/
++import React, { FormEventHandler, useState } from 'react';
++import { Room } from 'matrix-js-sdk';
++import FocusTrap from 'focus-trap-react';
++import {
++  Button,
++  Box,
++  Dialog,
++  Header,
++  Icon,
++  IconButton,
++  Icons,
++  Input,
++  Overlay,
++  OverlayBackdrop,
++  OverlayCenter,
++  Spinner,
++  Text,
++  color,
++  config,
++} from 'folds';
++import { useMatrixClient } from '../../hooks/useMatrixClient';
++import { setPlotinaAlias, usePlotinaAlias } from '../../state/plotinaAliases';
++import { stopPropagation } from '../../utils/keyboard';
++
++const STRINGS = {
++  ru: {
++    menu: 'Личное имя',
++    title: 'Личное имя',
++    hint: 'Видно только вам. Имя комнаты у собеседника не меняется.',
++    placeholder: 'Например, Денчик',
++    save: 'Сохранить',
++    reset: 'Сбросить',
++    failed: 'Не удалось сохранить имя',
++  },
++  en: {
++    menu: 'Personal name',
++    title: 'Personal name',
++    hint: "Only you see this. The room's name for everyone else is unchanged.",
++    placeholder: 'e.g. Denchik',
++    save: 'Save',
++    reset: 'Reset',
++    failed: 'Could not save the name',
++  },
++};
++
++// Same fallback as the rest of the Plotina overlays: no language is Russian,
++// a "ru" prefix is Russian, anything else English.
++export const plotinaAliasStrings = () => {
++  const value = (document.documentElement.lang || navigator.language || '').toLowerCase();
++  if (!value) return STRINGS.ru;
++  return value.indexOf('ru') === 0 ? STRINGS.ru : STRINGS.en;
++};
++
++type PlotinaRoomAliasPromptProps = {
++  room: Room;
++  onDone: () => void;
++  onCancel: () => void;
++};
++
++export function PlotinaRoomAliasPrompt({ room, onDone, onCancel }: PlotinaRoomAliasPromptProps) {
++  const mx = useMatrixClient();
++  const [strings] = useState(plotinaAliasStrings);
++  const current = usePlotinaAlias(room.roomId);
++  const [busy, setBusy] = useState(false);
++  const [error, setError] = useState<string>();
++
++  const save = (name: string) => {
++    if (busy) return;
++    setBusy(true);
++    setError(undefined);
++    setPlotinaAlias(mx, room.roomId, name).then(onDone, (err: unknown) => {
++      setBusy(false);
++      setError(err instanceof Error ? err.message : String(err));
++    });
++  };
++
++  const handleSubmit: FormEventHandler<HTMLFormElement> = (evt) => {
++    evt.preventDefault();
++    const form = evt.target as HTMLFormElement | undefined;
++    const input = form?.aliasInput as HTMLInputElement | undefined;
++    save(input?.value ?? '');
++  };
++
++  return (
++    <Overlay open backdrop={<OverlayBackdrop />}>
++      <OverlayCenter>
++        <FocusTrap
++          focusTrapOptions={{
++            initialFocus: false,
++            onDeactivate: onCancel,
++            clickOutsideDeactivates: true,
++            escapeDeactivates: stopPropagation,
++          }}
++        >
++          <Dialog variant="Surface">
++            <Header
++              style={{
++                padding: `0 ${config.space.S200} 0 ${config.space.S400}`,
++                borderBottomWidth: config.borderWidth.B300,
++              }}
++              variant="Surface"
++              size="500"
++            >
++              <Box grow="Yes">
++                <Text size="H4">{strings.title}</Text>
++              </Box>
++              <IconButton size="300" onClick={onCancel} radii="300">
++                <Icon src={Icons.Cross} />
++              </IconButton>
++            </Header>
++            <Box
++              as="form"
++              onSubmit={handleSubmit}
++              style={{ padding: config.space.S400 }}
++              direction="Column"
++              gap="400"
++            >
++              <Box direction="Column" gap="200">
++                <Text priority="400" size="T300">
++                  {strings.hint}
++                </Text>
++                <Input
++                  size="500"
++                  autoFocus
++                  name="aliasInput"
++                  variant="Background"
++                  defaultValue={current}
++                  placeholder={strings.placeholder}
++                  aria-label={strings.title}
++                />
++                {error && (
++                  <Text size="T200" style={{ color: color.Critical.Main }}>
++                    {strings.failed}: {error}
++                  </Text>
++                )}
++              </Box>
++              <Box gap="200" justifyContent="End">
++                {current && (
++                  <Button
++                    type="button"
++                    variant="Critical"
++                    fill="None"
++                    onClick={() => save('')}
++                    aria-disabled={busy}
++                  >
++                    <Text size="B400">{strings.reset}</Text>
++                  </Button>
++                )}
++                <Button
++                  type="submit"
++                  variant="Primary"
++                  before={busy ? <Spinner fill="Solid" variant="Primary" size="200" /> : undefined}
++                  aria-disabled={busy}
++                >
++                  <Text size="B400">{strings.save}</Text>
++                </Button>
++              </Box>
++            </Box>
++          </Dialog>
++        </FocusTrap>
++      </OverlayCenter>
++    </Overlay>
++  );
++}
+diff --git a/src/app/features/room-nav/RoomNavItem.tsx b/src/app/features/room-nav/RoomNavItem.tsx
+index 0834111..8a49056 100644
+--- a/src/app/features/room-nav/RoomNavItem.tsx
++++ b/src/app/features/room-nav/RoomNavItem.tsx
+@@ -61,6 +61,8 @@ import { useAutoDiscoveryInfo } from '../../hooks/useAutoDiscoveryInfo';
+ import { livekitSupport } from '../../hooks/useLivekitSupport';
+ import { StateEvent } from '../../../types/matrix/room';
+ import { webRTCSupported } from '../../utils/rtc';
++import { isPlotinaDirectRoom, usePlotinaAlias } from '../../state/plotinaAliases';
++import { PlotinaRoomAliasPrompt, plotinaAliasStrings } from './PlotinaRoomAliasPrompt';
+ 
+ type RoomNavItemMenuProps = {
+   room: Room;
+@@ -82,6 +84,13 @@ const RoomNavItemMenu = forwardRef<HTMLDivElement, RoomNavItemMenuProps>(
+ 
+     const [invitePrompt, setInvitePrompt] = useState(false);
+ 
++    // Plotina: the personal-name entry is offered for direct chats only -- a
++    // group room keeps the name its members see.
++    const [strings] = useState(plotinaAliasStrings);
++    const [aliasPrompt, setAliasPrompt] = useState(false);
++    const alias = usePlotinaAlias(room.roomId);
++    const canSetAlias = isPlotinaDirectRoom(mx, room);
++
+     const handleMarkAsRead = () => {
+       markAsRead(mx, room.roomId, hideActivity);
+       requestClose();
+@@ -114,6 +123,16 @@ const RoomNavItemMenu = forwardRef<HTMLDivElement, RoomNavItemMenuProps>(
+             }}
+           />
+         )}
++        {aliasPrompt && (
++          <PlotinaRoomAliasPrompt
++            room={room}
++            onDone={() => {
++              setAliasPrompt(false);
++              requestClose();
++            }}
++            onCancel={() => setAliasPrompt(false)}
++          />
++        )}
+         <Box direction="Column" gap="100" style={{ padding: config.space.S100 }}>
+           <MenuItem
+             onClick={handleMarkAsRead}
+@@ -174,6 +193,19 @@ const RoomNavItemMenu = forwardRef<HTMLDivElement, RoomNavItemMenuProps>(
+               Copy Link
+             </Text>
+           </MenuItem>
++          {canSetAlias && (
++            <MenuItem
++              onClick={() => setAliasPrompt(true)}
++              size="300"
++              after={<Icon size="100" src={Icons.Pencil} />}
++              radii="300"
++              aria-pressed={aliasPrompt}
++            >
++              <Text style={{ flexGrow: 1 }} as="span" size="T300" truncate>
++                {alias ? `${strings.menu}: ${alias}` : strings.menu}
++              </Text>
++            </MenuItem>
++          )}
+           <MenuItem
+             onClick={handleRoomSettings}
+             size="300"
+diff --git a/src/app/state/plotinaAliases.ts b/src/app/state/plotinaAliases.ts
+new file mode 100644
+index 0000000..d6c1194
+--- /dev/null
++++ b/src/app/state/plotinaAliases.ts
+@@ -0,0 +1,205 @@
++/*
++Copyright 2026 Plotina <thebob3r@gmail.com>
++
++SPDX-License-Identifier: AGPL-3.0-only
++
++Plotina: personal names for direct chats -- the client side.
++
++The storage rules are in src/plotina/roomAliases.ts (pure, unit-tested). This
++file is the only place that talks to the Matrix client and to React:
++
++  * readPlotinaAliases()  -- current map, straight from account data;
++  * getPlotinaAlias()     -- one room's personal name, for code that is not a
++                             React component;
++  * isPlotinaDirectRoom() -- "is this a personal dialogue?", answered from room
++                             data (m.direct, the is_direct invite flag, two
++                             joined members), never from the id's shape;
++  * setPlotinaAlias()     -- the only writer: merges into the map and, for a
++                             blank name, drops the key;
++  * usePlotinaAlias()     -- the map as a React hook, re-read on the account
++                             data event;
++  * installPlotinaRoomNames() -- the single display point.
++
++Why the SDK hook and not a component: matrix-js-sdk computes a room's display
++name in Room.calculateRoomName() and lets the application override the answer
++through client.roomNameGenerator(roomId, state) -- Room.roomNameGenerator()
++calls it first and falls back to stock behaviour on null. Cinny never sets it
++(src/client/initMatrix.ts), so the whole client keeps reading the stock name.
++Installing one generator therefore covers every surface at once: the chat list
++(RoomNavItem), the open chat's header (RoomViewHeader), room settings and call
++tiles through useRoomName(), and the 27 direct room.name reads in
++notifications, search, the A-Z room order and the room card. Nothing is
++rewritten in the DOM and no React state has to be kept in sync -- Room.name and
++Room.normalizedName (what the room search matches on) simply come out with the
++personal name.
++
++Account data is not part of the room state, so the SDK does not recalculate a
++room when it changes: installPlotinaRoomNames() listens for the account data
++event and calls Room.recalculate(), which is what emits Room.name -- the signal
++every consumer already listens to -- so the list repaints without a reload.
++The same recompute runs once the room exists (ClientEvent.Room) and once the
++first sync is applied (SyncState.Prepared), because on a cold start the account
++data arrives before the rooms and a new room is named before it is in the
++client -- see the comment at the end of installPlotinaRoomNames().
++*/
++import { ClientEvent, MatrixClient, MatrixEvent, Room, SyncState } from 'matrix-js-sdk';
++import { useAccountData } from '../hooks/useAccountData';
++import { AccountDataEvent } from '../../types/matrix/accountData';
++import {
++  ALIASES_EVENT_TYPE,
++  RoomAliases,
++  aliasFor,
++  aliasesWith,
++  parseAliases,
++  resolveRoomName,
++} from '../../plotina/roomAliases';
++import { getAccountData, getMDirects, isDirectInvite } from '../utils/room';
++
++const EMPTY_ALIASES: RoomAliases = {};
++const EMPTY_ROOM_IDS = new Set<string>();
++
++// Parsing costs a pass over the map and this is read from calculateRoomName()
++// for every room on every sync, from the A-Z room comparator and from
++// notification handlers. Account data events are immutable, so keying the
++// cache on the event object gives one parse per change.
++const parsedByEvent = new WeakMap<MatrixEvent, RoomAliases>();
++const directsByEvent = new WeakMap<MatrixEvent, Set<string>>();
++
++export const readPlotinaAliases = (mx: MatrixClient): RoomAliases => {
++  const event = getAccountData(mx, ALIASES_EVENT_TYPE as unknown as AccountDataEvent);
++  if (!event) return EMPTY_ALIASES;
++
++  const cached = parsedByEvent.get(event);
++  if (cached) return cached;
++
++  const parsed = parseAliases(event.getContent());
++  parsedByEvent.set(event, parsed);
++  return parsed;
++};
++
++const readPlotinaDirectRooms = (mx: MatrixClient): Set<string> => {
++  const event = getAccountData(mx, AccountDataEvent.Direct);
++  if (!event) return EMPTY_ROOM_IDS;
++
++  const cached = directsByEvent.get(event);
++  if (cached) return cached;
++
++  const parsed = getMDirects(event);
++  directsByEvent.set(event, parsed);
++  return parsed;
++};
++
++export const getPlotinaAlias = (mx: MatrixClient, roomId: string): string | undefined =>
++  aliasFor(readPlotinaAliases(mx), roomId);
++
++/**
++ * Is this a personal dialogue for the signed-in account? The answer comes from
++ * room data, not from the id: room version 12 ids are opaque "!<base64url>"
++ * with no server part, so any shape rule would silently skip production DMs
++ * (the defect QA found in Element Web).
++ *
++ * Same three tests as the Element Web overlay, so both clients agree on what
++ * may carry a personal name: a room m.direct lists, a room joined through an
++ * is_direct invite, or a room with exactly two joined members (how a
++ * one-to-one chat looks when another client never wrote m.direct). Spaces are
++ * never direct, and a group room is never masked.
++ */
++export const isPlotinaDirectRoom = (mx: MatrixClient, room: Room): boolean => {
++  if (readPlotinaDirectRooms(mx).has(room.roomId)) return true;
++  if (isDirectInvite(room, mx.getUserId())) return true;
++  if (room.isSpaceRoom()) return false;
++  return room.getJoinedMemberCount() === 2;
++};
++
++/** The name this account renders for the room: personal name or real name. */
++export const plotinaRoomName = (mx: MatrixClient, room: Room): string =>
++  resolveRoomName(room.name, getPlotinaAlias(mx, room.roomId), isPlotinaDirectRoom(mx, room));
++
++/**
++ * Set ("Денчик") or reset (blank) one personal name. Only account data is
++ * written -- m.room.name and the room state stay untouched, which is the whole
++ * point: the other participants never learn about this name.
++ */
++export const setPlotinaAlias = async (
++  mx: MatrixClient,
++  roomId: string,
++  name: string
++): Promise<void> => {
++  const next = aliasesWith(readPlotinaAliases(mx), roomId, name);
++  // Upstream types know the spec's own account data only; a custom type needs
++  // the same cast Cinny itself uses for in.cinny.spaces (SpaceTabs.tsx).
++  await mx.setAccountData(ALIASES_EVENT_TYPE as any, next as any);
++};
++
++/** Current personal name of one room, as a hook (re-renders on the event). */
++export const usePlotinaAlias = (roomId: string): string | undefined => {
++  const event = useAccountData(ALIASES_EVENT_TYPE);
++  return aliasFor(parseAliases(event?.getContent()), roomId);
++};
++
++type PlotinaRoomNamesClient = MatrixClient & { plotinaRoomNames?: boolean };
++
++/** Recompute one room's cached name; Room.name listeners repaint the list. */
++const recalculateOneRoom = (room: Room) => {
++  try {
++    room.recalculate(); // emits Room.name when the displayed name changes
++  } catch {
++    /* one broken room must not stop the others */
++  }
++};
++
++/**
++ * Recompute every room the client knows. Cheap: Room.recalculate() only emits
++ * Room.name for a room whose displayed name actually changed.
++ */
++export const recalculatePlotinaRoomNames = (mx: MatrixClient) => {
++  mx.getRooms().forEach(recalculateOneRoom);
++};
++
++export const installPlotinaRoomNames = (mx: PlotinaRoomNamesClient) => {
++  if (mx.plotinaRoomNames) return;
++  // The whole point is to hand the SDK a generator on the client it computed
++  // names with; there is no other place the SDK reads it from.
++  // eslint-disable-next-line no-param-reassign
++  mx.plotinaRoomNames = true;
++
++  // Return null for everything we do not answer, so the SDK keeps its own
++  // behaviour (member lists, "Empty room", the generated name of a group).
++  // eslint-disable-next-line no-param-reassign
++  mx.roomNameGenerator = (roomId: string): string | null => {
++    const alias = getPlotinaAlias(mx, roomId);
++    if (!alias) return null;
++    const room = mx.getRoom(roomId);
++    if (!room || !isPlotinaDirectRoom(mx, room)) return null;
++    return alias;
++  };
++
++  // Account data is not room state: nothing recalculates by itself, and the
++  // room list, the header and the notification titles would keep the old name
++  // until the next reload.
++  const handleAccountData = (event: MatrixEvent) => {
++    if (event.getType() === ALIASES_EVENT_TYPE) recalculatePlotinaRoomNames(mx);
++  };
++  mx.on(ClientEvent.AccountData, handleAccountData);
++
++  // Cold start. Two SDK facts leave a room with the stock name and nothing
++  // recomputes it later, because account data is not room state:
++  //
++  //   * the first /sync carries global account data BEFORE the room sections
++  //     (matrix-js-sdk sync.js), so the handler above runs against an empty
++  //     room list -- the alias is stored by then, but no room sees it;
++  //   * for a brand-new room the SDK calls Room.recalculate() BEFORE
++  //     storeRoom() and ClientEvent.Room, so inside the generator
++  //     mx.getRoom(roomId) is still undefined for that room and the name it is
++  //     born with is the member-list one. The list then shows that name until
++  //     the room is opened or an event arrives in it.
++  //
++  // A room is in the client's map by ClientEvent.Room, and after
++  // SyncState.Prepared the whole first sync is applied, so every room that was
++  // born before its alias and every alias that arrived before its room is
++  // recomputed here -- on the first paint, not on the next room event.
++  mx.on(ClientEvent.Room, recalculateOneRoom);
++  mx.on(ClientEvent.Sync, (state: SyncState) => {
++    if (state === SyncState.Prepared) recalculatePlotinaRoomNames(mx);
++  });
++};
+diff --git a/src/client/initMatrix.ts b/src/client/initMatrix.ts
+index 498d4f7..ce2a9c3 100644
+--- a/src/client/initMatrix.ts
++++ b/src/client/initMatrix.ts
+@@ -2,6 +2,7 @@ import { createClient, MatrixClient, IndexedDBStore, IndexedDBCryptoStore } from
+ 
+ import { cryptoCallbacks } from './secretStorageKeys';
+ import { clearNavToActivePathStore } from '../app/state/navToActivePath';
++import { installPlotinaRoomNames } from '../app/state/plotinaAliases';
+ import { pushSessionToSW } from '../sw-session';
+ 
+ type Session = {
+@@ -37,6 +38,11 @@ export const initClient = async (session: Session): Promise<MatrixClient> => {
+ 
+   mx.setMaxListeners(50);
+ 
++  // Plotina: personal names for direct chats (cc.plotina.room_aliases). The
++  // generator is installed before the first sync, so every room name the
++  // client computes from here on resolves through it.
++  installPlotinaRoomNames(mx);
++
+   return mx;
+ };
+ 
+diff --git a/src/plotina/roomAliases.ts b/src/plotina/roomAliases.ts
+new file mode 100644
+index 0000000..36d0cdf
+--- /dev/null
++++ b/src/plotina/roomAliases.ts
+@@ -0,0 +1,108 @@
++/*
++Copyright 2026 Plotina <thebob3r@gmail.com>
++
++SPDX-License-Identifier: AGPL-3.0-only
++
++Plotina: personal names for direct chats -- the data contract.
++
++A person may want to call a dialogue "Денчик" while the other side keeps
++seeing their own name. Renaming the room would write m.room.name into the room
++state and rename it for everyone, so the name lives in this account's own
++account data instead:
++
++    cc.plotina.room_aliases = { "<room_id>": "<personal name>" }
++
++Only the owner of the account can read it (account data is per-user), it
++follows the account to every device, and nothing is sent to the other
++participants. An empty value means "reset": the key is dropped from the map on
++write. Element Web/Desktop reads and writes the same event
++(element-web/plotina-dm-aliases.js), so a name set in one client shows up in
++the other.
++
++This file is deliberately dependency-free: every function is pure, so the
++storage rules can be pinned with plain node and no browser or Matrix client
++(cinny/tests/dm_aliases.test.mjs, run by cinny/scripts/test-dm-aliases.sh).
++The React/Matrix glue is in src/app/state/plotinaAliases.ts.
++*/
++
++export const ALIASES_EVENT_TYPE = 'cc.plotina.room_aliases';
++
++export type RoomAliases = Record<string, string>;
++
++const EMPTY_ALIASES: RoomAliases = {};
++
++/**
++ * Account data content -> alias map. Anything that is not a flat object of
++ * string values is read as "no aliases": a broken or half-written event must
++ * leave the client working exactly as it did before the feature existed.
++ *
++ * Room ids are not validated here on purpose. "!localpart:server" (room
++ * versions up to 11) and the opaque "!<base64url>" of room version 12 have
++ * nothing in common but the leading "!", and a format rule stricter than that
++ * silently drops every v12 room -- the defect QA found in Element Web. The id
++ * is only ever used as a map key, so it needs no shape check at all.
++ */
++export const parseAliases = (raw: unknown): RoomAliases => {
++  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return EMPTY_ALIASES;
++
++  // Object.keys, not Object.entries: cinny's tsconfig pins lib ES2016.
++  const source = raw as Record<string, unknown>;
++  const out: RoomAliases = {};
++  Object.keys(source).forEach((roomId) => {
++    if (!roomId) return;
++    const value = source[roomId];
++    if (typeof value !== 'string') return;
++    const name = value.trim();
++    if (name) out[roomId] = name;
++  });
++  return out;
++};
++
++/** The alias for one room, or undefined when the room has no personal name. */
++export const aliasFor = (aliases: RoomAliases, roomId: string): string | undefined => {
++  const name = aliases[roomId];
++  if (typeof name !== 'string') return undefined;
++  const trimmed = name.trim();
++  return trimmed || undefined;
++};
++
++/**
++ * The map after setting (or, for a blank name, clearing) one alias. Returns a
++ * new object and never stores an empty value, so a reset leaves no key behind
++ * -- the account data event stays as {} because Matrix has no way to delete
++ * account data (matrix-js-sdk implements deleteAccountData as a write of {}).
++ */
++export const aliasesWith = (
++  aliases: RoomAliases,
++  roomId: string,
++  name: string | null | undefined
++): RoomAliases => {
++  const next: RoomAliases = { ...aliases };
++  if (!roomId) return next;
++
++  const wanted = typeof name === 'string' ? name.trim() : '';
++  if (wanted) {
++    next[roomId] = wanted;
++  } else {
++    delete next[roomId];
++  }
++  return next;
++};
++
++/**
++ * The name to render. The personal name wins only for a direct chat: a room
++ * that a group shares keeps its own name even if a stale alias is around, so
++ * the mask can never hide a group room from its members.
++ */
++export const resolveRoomName = (
++  name: string | undefined,
++  alias: string | undefined,
++  isDirect: boolean
++): string => {
++  const personal = isDirect ? alias : undefined;
++  if (personal) return personal;
++  return name ?? '';
++};
++
++/** True when the map holds no aliases (used to skip work on the common case). */
++export const hasAliases = (aliases: RoomAliases): boolean => Object.keys(aliases).length > 0;
