@@ -33,6 +33,7 @@ Components carried inside those builds:
 | DeepFilterNet | [Rikorose/DeepFilterNet](https://github.com/Rikorose/DeepFilterNet/tree/v0.5.6) | `v0.5.6` (`fluffychat/plotina_dfn/rust/Cargo.toml`, `element-x/pins.env`) | MIT OR Apache-2.0 |
 | mezon-noise-suppression | [mezonai/mezon-noise-suppression](https://github.com/mezonai/mezon-noise-suppression) | vendored file, `noise/vendor/dfn.esm.js` | MIT OR Apache-2.0 |
 | Element Call Android | [element-hq/element-call-android](https://github.com/element-hq/element-call-android/tree/v0.1.0-rc.8) | `v0.1.0-rc.8` prebuilt AAR in Element X (`element-x/pins.env`) | AGPL-3.0-or-later |
+| matrix-dart-sdk (FluffyChat) | [plotina-cc/matrix-dart-sdk](https://github.com/plotina-cc/matrix-dart-sdk/tree/v14.1.0-plotina.1) — fork of [famedly/matrix-dart-sdk](https://github.com/famedly/matrix-dart-sdk/tree/v14.1.0), patch `plotina/contact-names` | `v14.1.0-plotina.1` (`dependency_overrides` in `fluffychat/patches/0023-plotina-contact-names.patch`) | AGPL-3.0-or-later |
 
 ## Rebuilding
 

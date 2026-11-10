@@ -1,0 +1,668 @@
+diff --git a/lib/utils/client_manager.dart b/lib/utils/client_manager.dart
+index 3967a7f..94223e3 100644
+--- a/lib/utils/client_manager.dart
++++ b/lib/utils/client_manager.dart
+@@ -13,6 +13,7 @@ import 'package:fluffychat/utils/init_with_restore.dart';
+ import 'package:fluffychat/utils/matrix_live_kit_calls/matrix_live_kit_call_member.dart';
+ import 'package:fluffychat/utils/notification_background_handler.dart';
+ import 'package:fluffychat/utils/platform_infos.dart';
++import 'package:fluffychat/utils/plotina_contact_names.dart';
+ import 'package:flutter/foundation.dart';
+ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+ import 'package:flutter_vodozemac/flutter_vodozemac.dart' as vod;
+@@ -118,7 +119,7 @@ abstract class ClientManager {
+     final shareKeysWith = AppSettings.shareKeysWith.value;
+     final enableSoftLogout = AppSettings.enableSoftLogout.value;
+ 
+-    return Client(
++    final client = Client(
+       clientName,
+       httpClient: CustomHttpClient.createHTTPClient(),
+       verificationMethods: {
+@@ -154,6 +155,11 @@ abstract class ClientManager {
+         seconds: AppSettings.sendTimelineEventTimeout.value,
+       ),
+     );
++    // Plotina: let the SDK resolve personal contact names, so every place that
++    // derives a name from member state goes through one point instead of the
++    // ~70 call sites in this tree. See utils/plotina_contact_names.dart.
++    PlotinaContactNames.install(client);
++    return client;
+   }
+ 
+   static WindowsInitializationSettings get windowsNotificationSettings =>
+diff --git a/lib/utils/plotina_contact_names.dart b/lib/utils/plotina_contact_names.dart
+new file mode 100644
+index 0000000..d236122
+--- /dev/null
++++ b/lib/utils/plotina_contact_names.dart
+@@ -0,0 +1,158 @@
++// SPDX-FileCopyrightText: 2026 Plotina
++//
++// SPDX-License-Identifier: AGPL-3.0-or-later
++
++import 'dart:convert';
++
++import 'package:matrix/matrix.dart';
++
++/// Plotina: personal names for contacts.
++///
++/// The name is stored in the account data event `cc.plotina.contact_names` as
++/// `{"<mxid>": "<personal name>"}`. It is private to the account: nothing is
++/// ever written to `m.room.member`, so nobody else sees it and no room state
++/// changes.
++///
++/// The names are applied by the matrix SDK itself, not at the ~70 call sites
++/// that read `User.displayName` / `User.calcDisplayname()`: [install] hands the
++/// SDK one resolver ([Client.localNameResolver] from the `plotina/contact-names`
++/// patch on our fork of `matrix-dart-sdk`), and every name the SDK derives from
++/// member state goes through it — the author line under a message, the
++/// participant list, the member search filter, mentions and mention fragments,
++/// and the title of a direct chat (which the SDK builds from
++/// `hero.calcDisplayname()`).
++///
++/// Everything in this file is defensive on purpose: a missing, empty or corrupt
++/// event must never stop the app from rendering names, and a user the resolver
++/// does not know must come back as `null` so the SDK keeps its own behaviour.
++const String plotinaContactNamesType = 'cc.plotina.contact_names';
++
++/// Matrix ids look like `@localpart:server`. This only keeps junk out of the
++/// map — it is never used to decide what a user is.
++bool _looksLikeUserId(String userId) {
++  final trimmed = userId.trim();
++  if (trimmed.length < 4 || !trimmed.startsWith('@')) return false;
++  final colon = trimmed.indexOf(':');
++  return colon > 1 && colon < trimmed.length - 1;
++}
++
++/// Parses the content of the `cc.plotina.contact_names` account data event.
++///
++/// Accepts the normal Matrix shape (a JSON object, already decoded into a map
++/// by the SDK) and, for tolerance, a string holding that JSON. Anything else —
++/// `null`, a list, a number, malformed JSON, non-string or blank values — is
++/// skipped instead of throwing.
++Map<String, String> parsePlotinaContactNames(Object? content) {
++  var raw = content;
++  if (raw is String) {
++    if (raw.trim().isEmpty) return const <String, String>{};
++    try {
++      raw = jsonDecode(raw);
++    } catch (_) {
++      return const <String, String>{};
++    }
++  }
++  if (raw is! Map) return const <String, String>{};
++  final names = <String, String>{};
++  for (final entry in raw.entries) {
++    final userId = entry.key;
++    final name = entry.value;
++    if (userId is! String || !_looksLikeUserId(userId)) continue;
++    if (name is! String) continue;
++    final trimmed = name.trim();
++    if (trimmed.isEmpty) continue;
++    names[userId] = trimmed;
++  }
++  return names;
++}
++
++/// The personal name of [userId], or `null` if there is none.
++String? plotinaContactNameFor(Map<String, String> names, String? userId) {
++  if (userId == null || userId.isEmpty) return null;
++  return names[userId];
++}
++
++/// Returns the account data content to write after setting [name] for [userId].
++///
++/// `null` or a blank [name] removes the user's key, so a reset never leaves an
++/// empty value behind: when the last name goes, the event body is `{}`.
++/// Entries that are not non-blank strings under a valid mxid are dropped, so
++/// the event never ends up holding unnamed contacts.
++Map<String, Object?> plotinaContactNamesAfterSet(
++  Object? current,
++  String userId,
++  String? name,
++) {
++  final next = <String, Object?>{};
++  if (current is Map) {
++    for (final entry in current.entries) {
++      final key = entry.key;
++      final value = entry.value;
++      if (key is! String || !_looksLikeUserId(key) || key == userId) continue;
++      if (value is! String) continue;
++      final trimmed = value.trim();
++      if (trimmed.isEmpty) continue;
++      next[key] = trimmed;
++    }
++  }
++  final trimmed = (name ?? '').trim();
++  if (trimmed.isNotEmpty) next[userId] = trimmed;
++  return next;
++}
++
++/// Reads and writes the personal names of the signed-in account.
++class PlotinaContactNames {
++  const PlotinaContactNames._();
++
++  static const String type = plotinaContactNamesType;
++
++  /// All personal names of [client], keyed by mxid.
++  static Map<String, String> namesOf(Client client) =>
++      parsePlotinaContactNames(client.accountData[type]?.content);
++
++  /// The personal name of [userId] for [client], or `null` if it has none.
++  static String? nameOf(Client client, String? userId) =>
++      plotinaContactNameFor(namesOf(client), userId);
++
++  /// Sets the personal name of [userId]; blank or `null` resets it.
++  ///
++  /// Writes only the [type] account data event. `m.room.member` and the other
++  /// side's profile are never touched.
++  static Future<void> setName(
++    Client client,
++    String userId,
++    String? name,
++  ) async {
++    final ownUserId = client.userID;
++    if (ownUserId == null) return;
++    if (!_looksLikeUserId(userId)) return;
++    final content = plotinaContactNamesAfterSet(
++      client.accountData[type]?.content,
++      userId,
++      name,
++    );
++    await client.setAccountData(ownUserId, type, content);
++    // The /sync echo carries the same event a moment later; applying it here as
++    // well means the open chat and the member list update without waiting.
++    client.accountData[type] = BasicEvent(type: type, content: content);
++    // Account data does not fire a room update, so the widgets that read names
++    // (timeline, member list, chat title) would keep the old one until the next
++    // sync. Bump every room once — cheap, and it makes the rename immediate.
++    // `onUpdate` is deprecated in favour of filtering `client.onSync`, which
++    // cannot express a local edit that no sync will echo, and it is still the
++    // stream every room-scoped widget listens to.
++    for (final room in client.rooms) {
++      // ignore: deprecated_member_use
++      room.onUpdate.add(room.id);
++    }
++  }
++
++  /// Installs the resolver on [client] so the SDK reads these names.
++  ///
++  /// Call once per client, on creation. The SDK asks the resolver whenever it
++  /// derives a name from member state; it is a plain lookup in the locally held
++  /// account data, so no request is made and a missing event costs nothing.
++  static void install(Client client) {
++    client.localNameResolver = (userId) => nameOf(client, userId);
++  }
++}
+diff --git a/lib/widgets/member_actions_popup_menu_button.dart b/lib/widgets/member_actions_popup_menu_button.dart
+index 567e647..78e570f 100644
+--- a/lib/widgets/member_actions_popup_menu_button.dart
++++ b/lib/widgets/member_actions_popup_menu_button.dart
+@@ -4,6 +4,7 @@
+ // SPDX-License-Identifier: AGPL-3.0-or-later
+ 
+ import 'package:fluffychat/l10n/l10n.dart';
++import 'package:fluffychat/utils/plotina_contact_names.dart';
+ import 'package:fluffychat/widgets/permission_slider_dialog.dart';
+ import 'package:material_ui/material_ui.dart';
+ import 'package:matrix/matrix.dart';
+@@ -74,6 +75,21 @@ Future<void> showMemberActionsPopupMenu({
+             ],
+           ),
+         ),
++      // Plotina: a personal name for this contact. It is stored in our own
++      // account data and shown only to this account. On yourself it would only
++      // rename your own messages locally, which is confusing, so it is not
++      // offered — `isMe` is computed above.
++      if (!isMe)
++        PopupMenuItem(
++          value: _MemberActions.plotinaPersonalName,
++          child: Row(
++            children: [
++              const Icon(Icons.badge_outlined),
++              const SizedBox(width: 18),
++              Text(l10n.plotinaPersonalName),
++            ],
++          ),
++        ),
+       if (user.membership == Membership.knock)
+         PopupMenuItem(
+           value: _MemberActions.approve,
+@@ -218,6 +234,28 @@ Future<void> showMemberActionsPopupMenu({
+   if (!context.mounted) return;
+ 
+   switch (action) {
++    case _MemberActions.plotinaPersonalName:
++      final client = user.room.client;
++      // The dialog and its strings come from patch 0017, which already ships
++      // them for direct-chat names; here they apply to a contact.
++      final input = await showTextInputDialog(
++        context: context,
++        title: l10n.plotinaPersonalName,
++        message: l10n.plotinaPersonalNameDescription,
++        okLabel: l10n.ok,
++        cancelLabel: l10n.cancel,
++        hintText: user.rawDisplayName ?? user.id,
++        initialText: PlotinaContactNames.nameOf(client, user.id),
++        maxLength: 255,
++      );
++      if (input == null) return;
++      if (!context.mounted) return;
++      final result = await showFutureLoadingDialog(
++        context: context,
++        future: () => PlotinaContactNames.setName(client, user.id, input),
++      );
++      if (result.error != null) return;
++      return;
+     case _MemberActions.mention:
+       onMention?.call();
+       return;
+@@ -364,6 +402,7 @@ Future<void> showMemberActionsPopupMenu({
+ enum _MemberActions {
+   info,
+   mention,
++  plotinaPersonalName,
+   setPowerLevel,
+   makeAdmin,
+   makeModerator,
+diff --git a/pubspec.lock b/pubspec.lock
+index d767ded..97f2c90 100644
+--- a/pubspec.lock
++++ b/pubspec.lock
+@@ -1295,10 +1295,11 @@ packages:
+   matrix:
+     dependency: "direct main"
+     description:
+-      name: matrix
+-      sha256: "5c7afb10467790769c87285545eb2de79c40696dcc1f4fe515b63c69674671da"
+-      url: "https://pub.dev"
+-    source: hosted
++      path: "."
++      ref: "v14.1.0-plotina.1"
++      resolved-ref: "70371c652b94d567a120e1b13177e9d75db17067"
++      url: "https://github.com/plotina-cc/matrix-dart-sdk.git"
++    source: git
+     version: "14.1.0"
+   media_kit:
+     dependency: transitive
+diff --git a/pubspec.yaml b/pubspec.yaml
+index 7bc75ea..963845a 100644
+--- a/pubspec.yaml
++++ b/pubspec.yaml
+@@ -153,3 +153,13 @@ flutter_launcher_icons:
+ # 2. Always link an (upstream?) issue
+ # 3. Explain how and when this can be removed (overrides must be temporarily)
+ dependency_overrides:
++  # plotina.cc: personal names for contacts. `User.displayName` resolves the
++  # name through one resolver installed by the app (see
++  # lib/utils/plotina_contact_names.dart), so the override is a single commit
++  # on top of the released 14.1.0 instead of a change in ~70 call sites here.
++  # Fork: plotina-cc/matrix-dart-sdk, branch plotina/contact-names. Remove it
++  # once the hook is upstream, or rebase that one commit onto a newer release.
++  matrix:
++    git:
++      url: https://github.com/plotina-cc/matrix-dart-sdk.git
++      ref: v14.1.0-plotina.1
+diff --git a/test/plotina_contact_names_test.dart b/test/plotina_contact_names_test.dart
+new file mode 100644
+index 0000000..4a5868a
+--- /dev/null
++++ b/test/plotina_contact_names_test.dart
+@@ -0,0 +1,356 @@
++// SPDX-FileCopyrightText: 2026 Plotina
++//
++// SPDX-License-Identifier: AGPL-3.0-or-later
++
++// Regression test for patches/0023-plotina-contact-names.patch:
++// personal names for contacts, stored in the account data event
++// `cc.plotina.contact_names` and applied through the single resolver the app
++// installs on the matrix SDK (`Client.localNameResolver`).
++//
++// What it pins down:
++//  * a name that is set is what the SDK shows for that user;
++//  * a name that is not set leaves the real displayname alone;
++//  * an empty map leaves every name alone;
++//  * junk in the account data falls back to the real name and never throws;
++//  * a reset removes the key, so no empty values are left behind;
++//  * the write goes to account data only — no `m.room.member`, no room state.
++//
++// How to run (inside a fully patched upstream checkout):
++//   flutter pub get
++//   flutter gen-l10n
++//   flutter test test/plotina_contact_names_test.dart   # after copying it there
++//
++// No homeserver and no encryption is needed: the write is asserted on the HTTP
++// request that reaches the (fake) http client.
++// ignore_for_file: depend_on_referenced_packages
++
++import 'dart:convert';
++
++import 'package:fluffychat/utils/plotina_contact_names.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:http/http.dart' as http;
++import 'package:matrix/matrix.dart';
++import 'package:sqflite_common_ffi/sqflite_ffi.dart';
++
++const _me = '@plotina:homeserver.test';
++const _bob = '@bob:homeserver.test';
++const _alice = '@alice:homeserver.test';
++
++/// Answers every request with `{}` and remembers it, so the test can prove
++/// exactly which endpoints the contact-name code hit.
++class _RecordingHttpClient extends http.BaseClient {
++  final List<http.Request> requests = [];
++
++  @override
++  Future<http.StreamedResponse> send(http.BaseRequest request) async {
++    final recorded = request as http.Request;
++    requests.add(recorded);
++    return http.StreamedResponse(
++      Stream.value(utf8.encode('{}')),
++      200,
++      request: request,
++      headers: {'content-type': 'application/json'},
++    );
++  }
++
++  Iterable<http.Request> get puts => requests.where((r) => r.method == 'PUT');
++
++  Iterable<String> get bodies => requests.map((r) => r.body);
++}
++
++Future<Client> _prepareClient(_RecordingHttpClient recorder) async {
++  sqfliteFfiInit();
++  final client = Client(
++    'Plotina contact names test',
++    httpClient: recorder,
++    database: await MatrixSdkDatabase.init(
++      'plotina_contact_names_test',
++      database: await databaseFactoryFfi.openDatabase(':memory:'),
++      sqfliteFactory: databaseFactoryFfi,
++    ),
++  );
++  await client.init(
++    newToken: 'plotina-test-token',
++    newUserID: _me,
++    newDeviceID: 'PLOTINATEST',
++    newDeviceName: 'Plotina contact names test',
++    newHomeserver: Uri.parse('https://homeserver.test'),
++    waitForFirstSync: false,
++  );
++  PlotinaContactNames.install(client);
++  return client;
++}
++
++/// A room carrying a real member state for each of [users], so the SDK has a
++/// displayname to fall back to.
++Room _roomWith(Client client, Map<String, String> users) {
++  final room = Room(id: '!chat:homeserver.test', client: client);
++  for (final entry in users.entries) {
++    room.setState(
++      User(
++        entry.key,
++        membership: 'join',
++        displayName: entry.value,
++        room: room,
++      ),
++    );
++  }
++  return room;
++}
++
++void _storeAccountData(Client client, Object? content) {
++  client.accountData[plotinaContactNamesType] = BasicEvent(
++    type: plotinaContactNamesType,
++    content: content is Map<String, Object?> ? content : const {},
++  );
++}
++
++void main() {
++  TestWidgetsFlutterBinding.ensureInitialized();
++
++  group('parsePlotinaContactNames', () {
++    test('reads the documented shape', () {
++      expect(
++        parsePlotinaContactNames({_bob: 'Боб', _alice: ' Алиса '}),
++        {_bob: 'Боб', _alice: 'Алиса'},
++      );
++    });
++
++    test('empty, missing and foreign values give an empty map', () {
++      expect(parsePlotinaContactNames(null), isEmpty);
++      expect(parsePlotinaContactNames(const <String, Object?>{}), isEmpty);
++      expect(parsePlotinaContactNames(const <Object?>[1, 2]), isEmpty);
++      expect(parsePlotinaContactNames(42), isEmpty);
++      expect(parsePlotinaContactNames(''), isEmpty);
++      expect(parsePlotinaContactNames('   '), isEmpty);
++      expect(parsePlotinaContactNames(true), isEmpty);
++    });
++
++    test('broken JSON does not throw', () {
++      expect(parsePlotinaContactNames('{not json'), isEmpty);
++      expect(parsePlotinaContactNames('"just a string"'), isEmpty);
++      expect(parsePlotinaContactNames('null'), isEmpty);
++      expect(parsePlotinaContactNames('[1,2,3]'), isEmpty);
++    });
++
++    test('accepts a JSON string holding the object', () {
++      expect(parsePlotinaContactNames('{"$_bob":" Боб "}'), {_bob: 'Боб'});
++    });
++
++    test('skips blank names, non-string values and non-mxid keys', () {
++      expect(
++        parsePlotinaContactNames({
++          _bob: '',
++          _alice: '   ',
++          '@carol:homeserver.test': 42,
++          'not-an-mxid': 'X',
++          '@': 'X',
++          '@:server': 'X',
++          '@nocolon': 'X',
++          '@ok:homeserver.test': 'Ok',
++        }),
++        {'@ok:homeserver.test': 'Ok'},
++      );
++    });
++
++    test('the lookup helper tolerates a missing id', () {
++      expect(plotinaContactNameFor({_bob: 'Боб'}, _bob), 'Боб');
++      expect(plotinaContactNameFor({_bob: 'Боб'}, _alice), isNull);
++      expect(plotinaContactNameFor({_bob: 'Боб'}, null), isNull);
++      expect(plotinaContactNameFor({_bob: 'Боб'}, ''), isNull);
++    });
++  });
++
++  group('plotinaContactNamesAfterSet', () {
++    test('adds a name and keeps the others', () {
++      expect(
++        plotinaContactNamesAfterSet({_alice: 'Алиса'}, _bob, ' Боб '),
++        {_alice: 'Алиса', _bob: 'Боб'},
++      );
++    });
++
++    test('a blank or null name removes the key and leaves no empty value', () {
++      expect(plotinaContactNamesAfterSet({_bob: 'Боб'}, _bob, ''), isEmpty);
++      expect(plotinaContactNamesAfterSet({_bob: 'Боб'}, _bob, null), isEmpty);
++      expect(plotinaContactNamesAfterSet({_bob: 'Боб'}, _bob, '   '), isEmpty);
++      expect(
++        plotinaContactNamesAfterSet({_bob: 'Боб', _alice: 'Алиса'}, _bob, ''),
++        {_alice: 'Алиса'},
++      );
++    });
++
++    test('replaces an existing name', () {
++      expect(
++        plotinaContactNamesAfterSet({_bob: 'Боб'}, _bob, 'Роберт'),
++        {_bob: 'Роберт'},
++      );
++    });
++
++    test('junk in the stored event is dropped, not carried over', () {
++      expect(
++        plotinaContactNamesAfterSet({
++          _bob: '',
++          'junk': 'X',
++          _alice: 42,
++          '@ok:homeserver.test': ' Ok ',
++        }, _bob, 'Боб'),
++        {'@ok:homeserver.test': 'Ok', _bob: 'Боб'},
++      );
++      expect(plotinaContactNamesAfterSet('not a map', _bob, 'Боб'), {
++        _bob: 'Боб',
++      });
++    });
++  });
++
++  group('the resolver the SDK reads', () {
++    late _RecordingHttpClient recorder;
++    late Client client;
++    late Room room;
++
++    setUp(() async {
++      recorder = _RecordingHttpClient();
++      client = await _prepareClient(recorder);
++      room = _roomWith(client, {_bob: 'Bob', _alice: 'Alice M'});
++    });
++
++    tearDown(() async {
++      await client.logout();
++    });
++
++    /// The user as the SDK would resolve it from the room's member state — the
++    /// `StrippedStateEvent` stored in the room carries no `asUser`, so rebuild
++    /// the `User` from exactly that content.
++    User user(String id) {
++      final state = room.getState(EventTypes.RoomMember, id)!;
++      return User.fromState(
++        stateKey: state.stateKey!,
++        content: state.content,
++        typeKey: state.type,
++        senderId: state.senderId,
++        room: room,
++      );
++    }
++
++    test('is installed on the client, so the SDK uses it', () {
++      expect(client.localNameResolver, isNotNull);
++    });
++
++    test('an empty map leaves the real names alone', () {
++      _storeAccountData(client, const <String, Object?>{});
++      expect(user(_bob).displayName, 'Bob');
++      expect(user(_bob).calcDisplayname(), 'Bob');
++      expect(user(_alice).calcDisplayname(), 'Alice M');
++    });
++
++    test('no event at all leaves the real names alone', () {
++      client.accountData.remove(plotinaContactNamesType);
++      expect(user(_bob).displayName, 'Bob');
++    });
++
++    test('a name that is set is what the SDK shows', () {
++      _storeAccountData(client, {_bob: 'Боб'});
++      expect(user(_bob).displayName, 'Боб');
++      expect(user(_bob).calcDisplayname(), 'Боб');
++      // The member state itself is untouched.
++      expect(
++        room.getState(EventTypes.RoomMember, _bob)?.content['displayname'],
++        'Bob',
++      );
++      expect(user(_bob).rawDisplayName, 'Bob');
++      // Users the map does not mention are unaffected.
++      expect(user(_alice).displayName, 'Alice M');
++    });
++
++    test('junk in the account data falls back to the real name', () {
++      for (final junk in <Object?>[
++        'not json',
++        '{broken',
++        <Object?>[1, 2, 3],
++        42,
++        {_bob: 42},
++        {_bob: ''},
++        {'junk': 'X'},
++      ]) {
++        _storeAccountData(client, junk);
++        expect(user(_bob).displayName, 'Bob', reason: 'junk: $junk');
++        expect(user(_bob).calcDisplayname(), 'Bob', reason: 'junk: $junk');
++      }
++    });
++
++    test('the chat title built from heroes uses the name', () {
++      room.summary.mHeroes = [_bob];
++      expect(room.getLocalizedDisplayname(), contains('Bob'));
++      _storeAccountData(client, {_bob: 'Боб'});
++      expect(room.getLocalizedDisplayname(), contains('Боб'));
++    });
++
++    test('mentions are built from the name', () {
++      _storeAccountData(client, {_bob: 'Robert'});
++      expect(user(_bob).mention, '@Robert');
++      // A name with spaces is bracketed, and only Bob's name changed, so no
++      // disambiguating hash is added.
++      _storeAccountData(client, {_bob: 'Robert P'});
++      expect(user(_bob).mention, '@[Robert P]');
++    });
++  });
++
++  group('PlotinaContactNames.setName', () {
++    late _RecordingHttpClient recorder;
++    late Client client;
++
++    setUp(() async {
++      recorder = _RecordingHttpClient();
++      client = await _prepareClient(recorder);
++    });
++
++    tearDown(() async {
++      await client.logout();
++    });
++
++    test('writes only the contact-names account data event', () async {
++      recorder.requests.clear();
++      await PlotinaContactNames.setName(client, _bob, 'Боб');
++
++      final puts = recorder.puts.toList();
++      expect(puts, hasLength(1));
++      expect(puts.single.url.path, contains('/account_data/'));
++      expect(puts.single.url.path, contains(plotinaContactNamesType));
++      expect(puts.single.url.path, isNot(contains('/state/')));
++      expect(puts.single.url.path, isNot(contains('m.room.member')));
++      expect(jsonDecode(puts.single.body), {_bob: 'Боб'});
++    });
++
++    test('applies the change locally as well', () async {
++      await PlotinaContactNames.setName(client, _bob, 'Боб');
++      expect(client.accountData[plotinaContactNamesType]?.content, {
++        _bob: 'Боб',
++      });
++      expect(PlotinaContactNames.nameOf(client, _bob), 'Боб');
++    });
++
++    test('a reset writes {} and leaves no empty value behind', () async {
++      await PlotinaContactNames.setName(client, _bob, 'Боб');
++      recorder.requests.clear();
++      await PlotinaContactNames.setName(client, _bob, '');
++
++      final puts = recorder.puts.toList();
++      expect(puts, hasLength(1));
++      expect(jsonDecode(puts.single.body), <String, Object?>{});
++      expect(PlotinaContactNames.nameOf(client, _bob), isNull);
++    });
++
++    test('a reset keeps the names of other contacts', () async {
++      await PlotinaContactNames.setName(client, _bob, 'Боб');
++      await PlotinaContactNames.setName(client, _alice, 'Алиса');
++      recorder.requests.clear();
++      await PlotinaContactNames.setName(client, _bob, null);
++
++      expect(jsonDecode(recorder.puts.single.body), {_alice: 'Алиса'});
++    });
++
++    test('a name is trimmed before it is stored', () async {
++      await PlotinaContactNames.setName(client, _bob, '  Боб  ');
++      expect(jsonDecode(recorder.puts.single.body), {_bob: 'Боб'});
++    });
++  });
++}

@@ -48,10 +48,13 @@ patches/0018-plotina-remove-donations.patch  no donation/support prompts
 patches/0019-plotina-updates-tab.patch      one "Обновления" settings tab
 patches/0020-plotina-version-details.patch  build number in the update status
 patches/0021-plotina-update-utf8.patch      UTF-8 update manifests
+patches/0023-plotina-contact-names.patch    personal names for contacts (see below)
 scripts/version-code.py          the versionCode formula, used by CI and by
                                  scripts/build-android.sh
 tests/intro_plotina_test.dart    Flutter widget regression test for 0012
 tests/plotina_room_names_test.dart  Dart test for 0017 (copied into the
+                                 upstream checkout to run)
+tests/plotina_contact_names_test.dart  Dart test for 0023 (copied into the
                                  upstream checkout to run)
 ```
 
@@ -238,6 +241,77 @@ while the chat itself is open reaches the chat list on the next sync, but the ap
 bar title of the already-open chat re-renders on its next room update (or on
 re-entering the chat), not instantly. The hidden-notification-preview setting was
 not re-checked for names in notifications.
+
+## Personal names for contacts (patch `0023`)
+
+A second, *contact*-level feature, separate from the DM names above: rename a
+person, not a chat keyed by room id. This one also covers the author line under a
+message, the participant list and mentions, so it lives in the matrix SDK rather
+than at the ~70 call sites in this tree.
+
+**Storage.** `cc.plotina.contact_names`, global account data, one map:
+
+```json
+{"@user:server": "Имя"}
+```
+
+Private to the account and never written to `m.room.member`, so nobody else's
+profile changes and no room state moves. A reset (blank field) removes the key;
+when the last name goes the event body is `{}` with no empty values left in it.
+
+**How it is applied.** `fluffychat/patches/0023` overrides the `matrix` package
+with our fork `plotina-cc/matrix-dart-sdk` (tag `v14.1.0-plotina.1`, branch
+`plotina/contact-names`, one commit on top of the released 14.1.0). The fork adds
+`Client.localNameResolver`; the app installs one closure in
+`ClientManager.createClient` (`lib/utils/plotina_contact_names.dart`) and
+`User.displayName` becomes `resolveLocalName(id) ?? <member state name>`. The
+member state name stays readable as `User.rawDisplayName`.
+
+That single override is what makes every place work: `calcDisplayname` reads
+`displayName`, `mention` and `mentionFragments` read `displayName`, and
+`Room.getLocalizedDisplayname` builds a DM title from `hero.calcDisplayname()`.
+Coverage therefore is:
+
+| Place | Covered |
+| --- | --- |
+| Author under a message (`message.dart`) | yes |
+| Participant list, member search filter | yes |
+| DM / chat title bar | yes |
+| Mentions and mention fragments | yes |
+| Muted/pinned/room list names for DMs | yes |
+| Push notification texts | no — they are built server-side / in the background isolate from the raw member state |
+| Anything on the other side of the chat | no — by design, this is a private name |
+
+**UI.** "Личное имя" is an entry in the member context menu
+(`member_actions_popup_menu_button.dart`, offered for other people, not
+yourself). It reuses `showTextInputDialog` and the `plotinaPersonalName*` strings
+that patch `0017` already ships, so `intl_en.arb`/`intl_ru.arb` carry one set of
+strings for both features and the two patches do not conflict: `0017` appends
+them at the end of the ARB files, `0023` only reads them. `0023` does not touch
+`cc.plotina.room_aliases` or `0017`'s code at all; the old room-bound model stays
+in place until it is removed by its own card.
+
+**Robustness.** The parser accepts the decoded map or a JSON string, trims
+values, and skips blank values, non-strings and keys that are not mxids, returning
+an empty map for missing or corrupt data instead of throwing. A resolver that
+throws, or returns `null`/`''`/whitespace, leaves the upstream SDK behaviour
+exactly as it was.
+
+Tests: `tests/plotina_contact_names_test.dart`, 22 cases — parsing and junk
+tolerance, set/reset semantics (a reset writes `{}`), the resolver in a real
+`Client` (name set, name absent, empty map, junk, `rawDisplayName` intact, DM
+title from heroes, mentions) and a real write proven to hit
+`/user/.../account_data/cc.plotina.contact_names` only — no `/state/` request and
+no `m.room.member` in any body. The patch carries the same file at
+`test/plotina_contact_names_test.dart`:
+
+```
+flutter pub get && flutter gen-l10n
+flutter test test/plotina_contact_names_test.dart
+```
+
+Not covered: the dialog has no widget test, and the end-to-end check with two
+accounts on a real homeserver belongs to QA.
 
 ## Building
 
