@@ -6,4 +6,7 @@ plotina_dfn/assets/*.tar.gz
 
 # Produced by cargo ndk
 plotina_dfn/rust/target/
+# The crate is resolved by the app build (cargo-ndk writes the lock file next
+# to Cargo.toml), so it is a build artifact here, not a pinned dependency.
+plotina_dfn/rust/Cargo.lock
 plotina_dfn/android/src/main/jniLibs/
