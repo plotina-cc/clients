@@ -756,17 +756,24 @@ jobs:
               if ($uninstallers.Count -eq 0) { throw ('no Uninstall*.exe in ' + $root) }
               $uninst = $uninstallers[0]
 
-              # ---------- 2. the uninstaller must actually carry the hook ----------
-              # A clean registry after uninstall could also come from electron-builder's own
-              # unregister step, so prove the Plotina hook is compiled into this uninstaller.
+              # ---------- 2. who removes the keys? ----------
+              # NSIS compresses the uninstaller payload, so the hook's DetailPrint strings
+              # are not greppable in the exe (probe below) - that proves nothing either way.
+              # Attribution rests on two measurements instead: the installer writes NO
+              # protocol keys at install time (logged below), so electron-builder's own
+              # uninstaller has nothing to unregister, and the runtime keys that appear
+              # after the first launch are gone after the uninstall anyway. The
+              # negative-control run of this harness on the unfixed base build shows what
+              # the same steps produce without the hook.
               $bytes = [IO.File]::ReadAllBytes($uninst.FullName)
-              $asc = [Text.Encoding]::ASCII.GetString($bytes)
-              $uni = [Text.Encoding]::Unicode.GetString($bytes)
-              $hint = 'Plotina: removed the'
-              Check 'uninstaller:hook-compiled' ($asc.Contains($hint) -or $uni.Contains($hint)) ('string "' + $hint + '" embedded in ' + $uninst.Name)
-              $missingScheme = @()
-              foreach ($s in $schemes) { if (-not ($asc.Contains($s) -or $uni.Contains($s))) { $missingScheme += $s } }
-              Check 'uninstaller:hook-schemes' ($missingScheme.Count -eq 0) ('scheme names embedded in the uninstaller; missing: ' + (($missingScheme -join ', ') -replace '^$', '(none)'))
+              $even = $bytes.Length - ($bytes.Length % 2)
+              $blobs = @(
+                  [Text.Encoding]::ASCII.GetString($bytes),
+                  [Text.Encoding]::Unicode.GetString($bytes, 0, $even),
+                  [Text.Encoding]::Unicode.GetString($bytes, 1, $even - 2)
+              )
+              $found = @($schemes | Where-Object { $n = $_; @($blobs | Where-Object { $_.Contains($n) }).Count -gt 0 })
+              Log ('UNINSTALLER ' + $uninst.Name + ' ' + $bytes.Length + ' bytes; scheme names greppable in the payload: ' + (($found -join ', ') -replace '^$', '(none)') + ' (NSIS compresses its payload, so absence is expected)')
 
               # ---------- 3. state right after the install ----------
               foreach ($s in $schemes) {
@@ -821,6 +828,10 @@ jobs:
                   Check ('protocol:registry:' + $s) ($st.CommandExists -and $into) ('key=' + $st.KeyExists + ' command=' + $st.Command)
                   Set-Content -Path (Join-Path $EV ('registry-before-uninstall-' + $s + '.txt')) -Value ('== HKCU\Software\Classes\' + $s + "`n" + (RegQuery ('HKCU\Software\Classes\' + $s))) -Encoding utf8
 
+                  if (-not $st.CommandExists) {
+                      Check ('protocol:launch:' + $s) $false ('scheme is not registered at all (no HKCU\Software\Classes\' + $s + '\shell\open\command), so it cannot open the app')
+                      continue
+                  }
                   Kill-App
                   Start-Sleep -Seconds 2
                   $uri = $s + '://plotina.test/qa-registration'
@@ -859,21 +870,42 @@ jobs:
                   Log ('PROTOCOL after uninstall ' + $s + ' key=' + $st.KeyExists + ' command=' + $st.Command)
                   Check ('uninstall:registry:' + $s) (-not $stale) ('keyExists=' + $st.KeyExists + ' commandExists=' + $st.CommandExists + ' command=' + $st.Command)
               }
-              $scan = (& reg.exe query 'HKCU\Software\Classes' /s /f $root 2>&1 | Out-String)
-              Set-Content -Path (Join-Path $EV 'registry-scan-classes.txt') -Value $scan -Encoding utf8
-              $hits = @($scan -split "`r?`n" | Where-Object { $_ -match [regex]::Escape($root) })
-              Check 'uninstall:no-stale-path-in-classes' ($hits.Count -eq 0) (($hits -join ' ; ') -replace '^$', '(no value under HKCU\Software\Classes mentions the removed install dir)')
-
-              # A scheme with no handler must not start anything any more.
-              $stillOpens = $false
-              try {
-                  Start-Process 'element://plotina.test/qa-after-uninstall' | Out-Null
-                  $w2 = Wait-Window 25
-                  if ($null -ne $w2) { $stillOpens = $true }
-              } catch {
-                  Log ('PROTOCOL post-uninstall launch failed as expected: ' + $_.Exception.Message)
+              # Every class under HKCU\Software\Classes whose shell\open\command still
+              # points into the removed install dir would be a handler for a deleted exe.
+              $staleKeys = @()
+              $scanned = 0
+              foreach ($cls in @(Get-ChildItem 'HKCU:\Software\Classes' -ErrorAction SilentlyContinue)) {
+                  $cmdPath = $cls.PSPath + '\shell\open\command'
+                  if (-not (Test-Path $cmdPath)) { continue }
+                  $scanned++
+                  $cmd = $null
+                  try { $cmd = (Get-ItemProperty -Path $cmdPath -ErrorAction SilentlyContinue).'(default)' } catch { }
+                  if ($cmd -and ($cmd -like ('*' + $root + '*'))) { $staleKeys += ($cls.PSChildName + ' -> ' + $cmd) }
               }
-              Check 'uninstall:scheme-has-no-handler' (-not $stillOpens) 'no Plotina-Desktop process appeared for element:// after the uninstall'
+              Set-Content -Path (Join-Path $EV 'registry-scan-classes.txt') -Value ('classes with shell\open\command: ' + $scanned + "`n" + (($staleKeys -join "`n") -replace '^$', '(none point into the removed install dir)')) -Encoding utf8
+              Check 'uninstall:no-stale-command-in-classes' ($staleKeys.Count -eq 0) ('scanned ' + $scanned + ' class handlers; stale: ' + (($staleKeys -join ' ; ') -replace '^$', '(none)'))
+              # The shell's display-name cache for the exe path is not a protocol handler.
+              $mui = (& reg.exe query 'HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache' /s /f $root 2>&1 | Out-String)
+              Set-Content -Path (Join-Path $EV 'registry-muicache.txt') -Value $mui -Encoding utf8
+              Log ('MUICACHE leftovers naming the removed exe (harmless shell cache, not a handler): ' + ((@($mui -split "`r?`n" | Where-Object { $_ -match [regex]::Escape($root) }) -join ' ; ') -replace '^$', '(none)'))
+
+              # A scheme with no handler must not start anything any more. ShellExecute can
+              # sit on a shell dialog forever (observed: 19 min), so the launch runs in a
+              # job we abandon after 30s.
+              $stillOpens = $false
+              $uriAfter = 'element://plotina.test/qa-after-uninstall'
+              $job = Start-Job -ScriptBlock { param($u) try { Start-Process $u | Out-Null; 'returned' } catch { 'threw: ' + $_.Exception.Message } } -ArgumentList $uriAfter
+              if (Wait-Job $job -Timeout 30) {
+                  Log ('PROTOCOL post-uninstall launch: ' + ((Receive-Job $job) -join ' '))
+              } else {
+                  Log 'PROTOCOL post-uninstall launch did not return within 30s (no handler; abandoned)'
+                  Stop-Job $job -ErrorAction SilentlyContinue
+              }
+              Remove-Job $job -Force -ErrorAction SilentlyContinue
+              Start-Sleep -Seconds 5
+              $w2 = @(Get-Process -Name 'Plotina-Desktop' -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 })
+              if ($w2.Count -gt 0) { $stillOpens = $true }
+              Check 'uninstall:scheme-has-no-handler' (-not $stillOpens) 'no Plotina-Desktop window appeared for element:// after the uninstall'
               Shot '03-after-uninstall'
 
               # ---------- 10. nothing extra was deleted ----------
