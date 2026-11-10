@@ -37,8 +37,75 @@ REPO_ICONS = REPO / "branding" / "icons"
 
 BUNDLE = "7fef2be0ae8530458db3"
 TIMELINE_BARE = "var(--timeline-text-color)"
-TIMELINE_FIXED = "var(--timeline-text-color,var(--cpd-color-text-primary))"
-TIMELINE_USES = 133
+TOKEN_START = "/* plotina-theme-tokens: legacy custom-theme tokens. */"
+TOKEN_END = "/* end plotina-theme-tokens */"
+
+# The legacy custom properties the pinned sheets use, with their real use
+# shapes (see element-web/tests/branding_test.py for the annotated version and
+# THEME-TOKENS.md for the decision table).
+LEGACY_USES: dict[str, str | None] = {
+    "--timeline-text-color": None,
+    "--timeline-text-secondary-color": None,
+    "--primary-color": None,
+    "--roomlist-separator-color": None,
+    "--roomlist-background-color": None,
+    "--roomlist-highlights-color": None,
+    "--sidebar-color": None,
+    "--timeline-highlights-color": None,
+    "--borderColor-muted": None,
+    "--accent-color-300": None,
+    "--borderColor-accent-emphasis": None,
+    "--sidebar-color-50pct": None,
+    "--timeline-text-color-50pct": None,
+    "--accent-color-1000": None,
+    "--accent-color-400": None,
+    "--bgColor-danger-muted": None,
+    "--fgColor-danger": None,
+    "--secondary-hairline-color": None,
+    "--timeline-background-color-50pct": None,
+    "--secondary-content": "#2e2f32",
+    "--accent-color": "#0dbd8b",
+    "--quinary-content": "#6f7882",
+    "--tertiary-content": "#2e2f32",
+    "--alert": "#ff5b55",
+    "--system": "#f4f6fa",
+    "--quaternary-content": "#6f7882",
+    "--links": "#0086e6",
+    "--eventbubble-bg-hover": "#fafbfd",
+    "--menu-selected-color": "#f5f8fa",
+    "--strong-input-border-color": "#c7c7c7",
+    "--eventbubble-others-bg": "#f4f6fa",
+    "--eventbubble-self-bg": "#f0fbf8",
+    "--focus-bg-color": "#ddd",
+    "--timeline-background-color": "var(--cpd-color-bg-canvas-default)",
+    "--icon-button-color": "var(--cpd-color-icon-tertiary)",
+    "--other-user-pill-bg-color": "var(--cpd-color-bg-action-primary-rest)",
+    "--font-family": "\"Nunito\",sans-serif",
+    "--font-family-monospace": "\"Fira Code\",monospace",
+    "--mx-image-reserved-height": "0",
+    "--mx-line-clamp": "1",
+}
+LEGACY_DROPPED = ("--timeline-background-color", "--icon-button-color",
+                  "--other-user-pill-bg-color")
+
+# Compound tokens the definition block may reference; the fixture bundle.css
+# declares exactly these so a value pointing at an absent token fails the audit.
+CPD_TOKENS = (
+    "--cpd-color-text-primary", "--cpd-color-text-secondary",
+    "--cpd-color-text-critical-primary", "--cpd-color-text-action-accent",
+    "--cpd-color-text-link-external", "--cpd-color-icon-tertiary",
+    "--cpd-color-gray-300", "--cpd-color-gray-400", "--cpd-color-gray-500",
+    "--cpd-color-gray-600", "--cpd-color-gray-700", "--cpd-color-gray-800",
+    "--cpd-color-gray-900", "--cpd-color-gray-1200",
+    "--cpd-color-green-300", "--cpd-color-green-400", "--cpd-color-green-1000",
+    "--cpd-color-alpha-gray-300",
+    "--cpd-color-bg-canvas-default", "--cpd-color-bg-subtle-primary",
+    "--cpd-color-bg-subtle-secondary", "--cpd-color-bg-critical-subtle",
+    "--cpd-color-border-interactive-primary",
+    "--cpd-color-border-interactive-secondary",
+    "--cpd-color-border-focused",
+    "--cpd-color-bg-action-primary-rest",
+)
 
 NOISE_REL = ('<script src="noise/logic.js"></script>'
              '<script src="noise/boot.js" defer></script>')
@@ -101,12 +168,19 @@ RU_NAME = "ru.deadbeef.json"
 EN_NAME = "en_EN.cafe123.json"
 
 
-def custom_theme_css(uses: int = TIMELINE_USES) -> str:
+def custom_theme_css() -> str:
+    """One rule per legacy token, in the shape the pinned sheets use it."""
     css = ("body{background-color:var(--timeline-background-color,"
            "var(--cpd-color-bg-canvas-default));border:0;color:"
            + TIMELINE_BARE + "}\n")
-    css += (".mx_EventTile{color:" + TIMELINE_BARE + "}\n") * (uses - 1)
-    assert css.count(TIMELINE_BARE) == uses
+    # Upstream declares the emoji hook in :root of each custom sheet; the
+    # legacy font stacks fall back to it.
+    css += ':root{--emoji-font-family:""}\n'
+    for name, fallback in LEGACY_USES.items():
+        if name == "--timeline-text-color":
+            continue
+        value = f"var({name})" if fallback is None else f"var({name},{fallback})"
+        css += f".mx_Legacy{name[2:].title().replace('-', '')}{{color:{value}}}\n"
     return css
 
 
@@ -137,6 +211,9 @@ class WebappFixture(unittest.TestCase):
         (bundle / "error-view.js").write_text(ERROR_VIEW_JS, encoding="utf-8")
         for name in ("theme-light-custom.css", "theme-dark-custom.css"):
             (bundle / name).write_text(custom_theme_css(), encoding="utf-8")
+        (bundle / "bundle.css").write_text(
+            ":root{" + "".join(f"{token}:#123456;" for token in CPD_TOKENS)
+            + "}\n", encoding="utf-8")
         self.builtin_sheet = bundle / "theme-light.css"
         self.builtin_sheet.write_text(
             "body{color:var(--cpd-color-text-primary)}\n", encoding="utf-8")
@@ -216,20 +293,41 @@ class DesktopFixesTest(WebappFixture):
     def sheet(self, name: str) -> str:
         return (self.webapp / "bundles" / BUNDLE / name).read_text(encoding="utf-8")
 
-    # -- fix 1: --timeline-text-color contrast fallback ----------------------
-    def test_both_sheets_get_the_fallback(self) -> None:
+    # -- fix 1: legacy custom-theme tokens (THEME-TOKENS.md) -------------------
+    def test_both_sheets_get_the_token_block(self) -> None:
         for name in ("theme-light-custom.css", "theme-dark-custom.css"):
             with self.subTest(sheet=name):
                 css = self.sheet(name)
-                self.assertNotIn(TIMELINE_BARE, css)
-                self.assertEqual(css.count(TIMELINE_FIXED), TIMELINE_USES)
+                self.assertEqual(css.count(TOKEN_START), 1)
+                self.assertEqual(css.count(TOKEN_END), 1)
+                self.assertIn("--timeline-text-color:"
+                              "var(--cpd-color-text-primary);", css)
+                self.assertIn("--roomlist-separator-color:transparent;", css)
+
+    def test_no_bare_use_of_an_undefined_legacy_token(self) -> None:
+        for name in ("theme-light-custom.css", "theme-dark-custom.css"):
+            with self.subTest(sheet=name):
+                css = self.sheet(name)
+                declared = set(re.findall(r"(--[A-Za-z0-9_-]+)\s*:", css))
+                for token in LEGACY_USES:
+                    if f"var({token})" in css:
+                        self.assertIn(token, declared, msg=f"{token} bare")
+
+    def test_dropped_indirections_keep_their_fallback(self) -> None:
+        css = self.sheet("theme-light-custom.css")
+        for token in LEGACY_DROPPED:
+            self.assertNotIn(f"var({token},", css)
+        self.assertIn("body{background-color:var(--cpd-color-bg-canvas-default)",
+                      css)
+
+    def test_dark_overrides_differ(self) -> None:
+        self.assertIn("--menu-selected-color:#f5f8fa;",
+                      self.sheet("theme-light-custom.css"))
+        self.assertIn("--menu-selected-color:#343a46;",
+                      self.sheet("theme-dark-custom.css"))
 
     def test_other_uses_survive(self) -> None:
-        # The sibling background fallback was already there and must not move,
-        # and branding.py does not own the non-custom sheets.
-        self.assertIn("var(--timeline-background-color,"
-                      "var(--cpd-color-bg-canvas-default))",
-                      self.sheet("theme-light-custom.css"))
+        # branding.py does not own the non-custom sheets.
         self.assertEqual(
             self.builtin_sheet.read_bytes(),
             b"body{color:var(--cpd-color-text-primary)}\n")
@@ -295,13 +393,13 @@ class DesktopFixesTest(WebappFixture):
         self.assertIn("theme-*-custom.css", proc.stderr)
 
     def test_truncated_custom_sheet_fails_loudly(self) -> None:
-        # Same sheet, fewer uses: the 133-count floor must abort, not ship
-        # half-fixed CSS.
+        # A sheet that lost the legacy shape (or a new undefined variable) must
+        # abort the build, not ship half-fixed CSS.
         (self.webapp / "bundles" / BUNDLE / "theme-light-custom.css").write_text(
-            custom_theme_css(uses=132), encoding="utf-8")
+            ".mx_A{color:var(--brand-new-dead-token)}\n", encoding="utf-8")
         proc = self.run_desktop_branding(self.webapp)
         self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("fallback additions", proc.stderr)
+        self.assertIn("legacy custom-theme tokens", proc.stderr)
 
     def test_missing_locale_file_fails_loudly(self) -> None:
         (self.webapp / "i18n" / RU_NAME).unlink()
@@ -373,7 +471,9 @@ class ParityTest(WebappFixture):
                 a = (self.web_tree / rel).read_bytes()
                 b = (self.desktop_tree / rel).read_bytes()
                 self.assertEqual(a, b)
-                self.assertEqual(a.count(TIMELINE_FIXED.encode()), TIMELINE_USES)
+                self.assertIn(TOKEN_START.encode(), a)
+                self.assertIn(b"--timeline-text-color:"
+                              b"var(--cpd-color-text-primary);", a)
 
     def test_identical_locale_output(self) -> None:
         a = (self.web_tree / "i18n" / RU_NAME).read_bytes()
@@ -431,8 +531,12 @@ class ParityTest(WebappFixture):
                       desk.webapp_fixes.patch_theme_css)
         self.assertIs(web.rebrand_locales, desk.webapp_fixes.apply_locales)
         self.assertEqual(web.MODAL_BLOCK, desk.webapp_fixes.MODAL_BLOCK)
-        self.assertEqual(web.TIMELINE_TEXT_MIN_USES,
-                         desk.webapp_fixes.TIMELINE_TEXT_MIN_USES)
+        self.assertEqual(web.webapp_fixes.LEGACY_TOKEN_VALUES,
+                         desk.webapp_fixes.LEGACY_TOKEN_VALUES)
+        self.assertEqual(web.webapp_fixes.LEGACY_TOKEN_VALUES_DARK,
+                         desk.webapp_fixes.LEGACY_TOKEN_VALUES_DARK)
+        self.assertEqual(web.webapp_fixes.LEGACY_TOKEN_DROPPED,
+                         desk.webapp_fixes.LEGACY_TOKEN_DROPPED)
 
     def test_shared_helpers_are_the_single_source(self) -> None:
         # Neither branding script may re-implement the fix text or the
