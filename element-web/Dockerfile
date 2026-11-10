@@ -16,7 +16,7 @@ USER root
 COPY LICENSE-AGPL-3.0 /app/LICENSE-AGPL-3.0
 COPY NOTICE /app/NOTICE
 
-ARG DFN_BASE=https://cdn.mezon.ai/AI/models/datas/noise_suppression/deepfilternet3/v3
+ARG DFN_BASE=https://lite.plotina.cc/noise/dfn/v3
 ARG DFN_WASM_SHA256=440b5d12b6ea7d95008736f844221d7874ee15de5cb10d3015002470fdba0432
 ARG DFN_MODEL_SHA256=c94d91f70911001c946e0fabb4aa9adc37045f45a03b56008cb0c8244cb63616
 
@@ -26,6 +26,9 @@ ARG DFN_MODEL_SHA256=c94d91f70911001c946e0fabb4aa9adc37045f45a03b56008cb0c8244cb
 # tree; the COPY below carries whatever is there (.keep files keep the
 # directories present in the build context), the fetch is skipped only when the
 # real file exists, and the checksum check always runs.
+# The default is our own mirror, because cdn.mezon.ai answers 403 to GitHub
+# runners; the bytes are identical, and the pinned SHA-256 below still decides
+# what is accepted. Override DFN_BASE to build from the upstream CDN directly.
 # The base image is Alpine: no curl, BusyBox wget handles HTTPS fine.
 COPY noise/dfn/ /app/noise/dfn/
 RUN set -eux; \
