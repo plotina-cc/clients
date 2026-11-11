@@ -9,12 +9,19 @@
 #
 # The tests run against the sources the build compiles, produced from scratch
 # every time: the tag's tree is exported into a temporary directory and every
-# patch in patches/ is applied there, so a stale working copy can neither hide
-# a patch that no longer applies nor make a second run fail. node_modules is
+# every patch in patches/ is applied there, so a stale working copy can neither
+# hide a patch that no longer applies nor make a second run fail. node_modules is
 # symlinked from UPSTREAM_SRC because the bundles are built with the esbuild that
 # ships in Cinny's own dependency tree (upstream has no test runner and this
 # patch does not add one); the tests themselves run on node --test, node 18 or
 # newer.
+#
+# Two suites, because they cover two halves of the same model:
+#   tests/contact_names.test.mjs  -- the name of a DIALOGUE (chat list, header);
+#   tests/member_names.test.mjs   -- the name of a PERSON (author line, member
+#                                    list, mention pill, A-Z order), which must
+#                                    read the same in a group as in a direct
+#                                    chat because the key is the mxid.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -84,8 +91,26 @@ echo "==> bundles"
   --banner:js="import { createRequire as __plotinaCreateRequire } from 'node:module'; const require = __plotinaCreateRequire(import.meta.url);" \
   --outfile="$WORK/src/glue.mjs"
 
+# The member-name half: the real display point (utils/room.ts), the real sort
+# comparator (hooks/useMemberSort.ts) and the pure rules they share, in one
+# bundle. The entry file is generated here rather than shipped as a source file:
+# it is test glue, not part of the client. Bundling the real modules is the
+# point -- a test that passed against a copy of the logic while the build
+# shipped another would prove nothing.
+cat > "$WORK/src/memberNamesEntry.ts" <<'ENTRY'
+export { getMemberDisplayName, getMemberSearchStr } from './src/app/utils/room';
+export * as sort from './src/app/hooks/useMemberSort';
+export * as memberNames from './src/plotina/memberNames';
+ENTRY
+"$SRC/node_modules/.bin/esbuild" "$WORK/src/memberNamesEntry.ts" \
+  --bundle --format=esm --platform=node --log-level=warning \
+  --external:matrix-js-sdk --external:react \
+  --banner:js="import { createRequire as __plotinaCreateRequire } from 'node:module'; const require = __plotinaCreateRequire(import.meta.url);" \
+  --outfile="$WORK/src/memberNames.mjs"
+
 echo "==> node --test"
 PLOTINA_ALIASES_CORE="$WORK/core.mjs" \
   PLOTINA_ALIASES_GLUE="$WORK/src/glue.mjs" \
   PLOTINA_ALIASES_SDK="$WORK/src/node_modules/matrix-js-sdk/lib/index.js" \
-  node --test "$ROOT/tests/contact_names.test.mjs"
+  PLOTINA_MEMBER_NAMES="$WORK/src/memberNames.mjs" \
+  node --test "$ROOT/tests/contact_names.test.mjs" "$ROOT/tests/member_names.test.mjs"
