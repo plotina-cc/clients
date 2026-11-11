@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unit tests for the personal-name overlay in Cinny (cc.plotina.room_aliases).
+# Unit tests for the personal-name overlay in Cinny (cc.plotina.contact_names).
 #
 #   scripts/test-dm-aliases.sh [UPSTREAM_SRC]
 #
@@ -57,18 +57,18 @@ for PATCH in "$ROOT"/patches/*.patch; do
   echo "applied: $(basename "$PATCH")"
 done
 
-echo "==> no example placeholder in the alias dialog"
+echo "==> no example placeholder in the name dialog"
 # The field carries no placeholder in any locale: an example someone types into
 # the patch is neither a hint nor an instruction, so its return is a failure.
-PROMPT="$WORK/src/src/app/features/room-nav/PlotinaRoomAliasPrompt.tsx"
+PROMPT="$WORK/src/src/app/features/room-nav/PlotinaContactNamePrompt.tsx"
 if grep -n 'placeholder' "$PROMPT"; then
-  echo "test-dm-aliases: PlotinaRoomAliasPrompt.tsx must name no placeholder" >&2
+  echo "test-dm-aliases: PlotinaContactNamePrompt.tsx must name no placeholder" >&2
   exit 1
 fi
 
 echo "==> bundles"
 # Pure storage rules: the file has no imports, so this bundle is the file.
-"$SRC/node_modules/.bin/esbuild" "$WORK/src/src/plotina/roomAliases.ts" \
+"$SRC/node_modules/.bin/esbuild" "$WORK/src/src/plotina/contactNames.ts" \
   --bundle --format=esm --platform=node --log-level=warning \
   --outfile="$WORK/core.mjs"
 
@@ -78,7 +78,7 @@ echo "==> bundles"
 # node_modules symlink next to this file. The banner gives esbuild's CommonJS
 # interop a real require(): matrix-widget-api (another SDK dependency) does
 # require("events") at load time.
-"$SRC/node_modules/.bin/esbuild" "$WORK/src/src/app/state/plotinaAliases.ts" \
+"$SRC/node_modules/.bin/esbuild" "$WORK/src/src/app/state/plotinaContactNames.ts" \
   --bundle --format=esm --platform=node --log-level=warning \
   --external:matrix-js-sdk \
   --banner:js="import { createRequire as __plotinaCreateRequire } from 'node:module'; const require = __plotinaCreateRequire(import.meta.url);" \
@@ -88,4 +88,4 @@ echo "==> node --test"
 PLOTINA_ALIASES_CORE="$WORK/core.mjs" \
   PLOTINA_ALIASES_GLUE="$WORK/src/glue.mjs" \
   PLOTINA_ALIASES_SDK="$WORK/src/node_modules/matrix-js-sdk/lib/index.js" \
-  node --test "$ROOT/tests/dm_aliases.test.mjs"
+  node --test "$ROOT/tests/contact_names.test.mjs"

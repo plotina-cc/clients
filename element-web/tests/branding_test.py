@@ -669,12 +669,13 @@ class DmAliasesTest(AppFixture):
         # of room-state writes: the whole point is that it never mutates the
         # room. Guard the source, not the built bundle.
         src = (WEBAPP / "plotina-dm-aliases.js").read_text(encoding="utf-8")
-        self.assertIn("cc.plotina.room_aliases", src)
+        self.assertIn("cc.plotina.contact_names", src)
         self.assertIn("setAccountData", src)
         self.assertIn("mxMatrixClientPeg", src)
         self.assertNotIn("import ", src.split("/*")[-1])
-        for forbidden in ("sendStateEvent", "m.room.name", "setRoomName"):
-            self.assertNotIn(forbidden, src.split("How it attaches")[1])
+        code = src[src.index("(function (root)"):]
+        for forbidden in ("sendStateEvent", "m.room.name", "m.room.member", "setRoomName"):
+            self.assertNotIn(forbidden, code)
 
 
 class NodeThemeLogicTest(unittest.TestCase):
@@ -694,15 +695,17 @@ class NodeThemeLogicTest(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which("node"), "node not installed")
-class NodeDmAliasesLogicTest(unittest.TestCase):
+class NodeContactNamesLogicTest(unittest.TestCase):
     """plotina-dm-aliases.js pure map handling: account data content is
-    sanitised on read (strings only, trimmed, room ids only) and updates are
+    sanitised on read (strings only, trimmed, mxids only) and updates are
     immutable, so a malformed payload from another device cannot break the
-    overlay or corrupt the stored map."""
+    overlay or corrupt the stored map. Also pins the contact addressing: a
+    personal name belongs to an mxid, so one person in two DMs carries one
+    name in both, and a group never takes a contact's name."""
 
-    def test_alias_map_logic(self) -> None:
+    def test_contact_name_logic(self) -> None:
         proc = subprocess.run(
-            ["node", str(HERE / "dm_aliases.test.js"),
+            ["node", str(HERE / "contact_names.test.js"),
              str(WEBAPP / "plotina-dm-aliases.js")],
             capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0, msg=proc.stdout + proc.stderr)

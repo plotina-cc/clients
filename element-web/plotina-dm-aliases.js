@@ -3,15 +3,22 @@ Copyright 2026 Plotina <thebob3r@gmail.com>
 
 SPDX-License-Identifier: AGPL-3.0-only
 
-Plotina Web/Desktop overlay: personal room names ("алиасы") for one account.
+Plotina Web/Desktop overlay: personal names for CONTACTS.
 
 Renaming a DM in Element writes m.room.name into the room state, so the other
-participant sees the new name too. What we want is a name that lives in the
-account and nowhere else: a map room_id -> label in account data under
-cc.plotina.room_aliases, applied by the client when it renders the room.
+participant sees the new name too. What we want is the thing every messenger
+has: the nickname a person chose, their display name by default, and a name you
+gave them that only you see. So the name is bound to the person (their MXID),
+not to the dialogue:
 
-How it attaches without a rebuild (see SPIKE-dm-aliases.md, "Как мы правим
-element-web"):
+    cc.plotina.contact_names = { "@bob:plotina.cc": "Денчик" }
+
+One person with two DMs carries one name in both of them, immediately. A group
+room never takes a contact's name: the name belongs to a person, and a room's
+own m.room.name is what everyone in a group sees. Nothing here writes
+m.room.name or m.room.member, so the other side never learns the name.
+
+How it attaches without a rebuild:
 
   * matrix-js-sdk v44 keeps the computed name in Room.name, an OWN property
     recomputed by Room.recalculate() -> Room.calculateRoomName(). So there is
@@ -19,64 +26,76 @@ element-web"):
     `window.mxMatrixClientPeg` (set by matrix-react-sdk's init, verified in the
     v1.12.32 bundle) is the way to reach a Room instance from outside. We take
     the prototype from the first room the client has, wrap calculateRoomName
-    once, and answer with the alias when the room has one. The room list tile,
-    the room header, notifications and toasts all read Room.name, so they
-    follow without any DOM rewriting and without racing React.
+    once, and answer with the contact's name when the room is a DM with that
+    person. The room list tile, the room header, notifications and toasts all
+    read Room.name, so they follow without any DOM rewriting and without racing
+    React.
   * The browser tab title is the one surface that does NOT follow at once:
-    matrix-react-sdk recomputes it on room switches, so it picks the alias up
-    the next time the user changes room (measured; see SPIKE-dm-aliases.md §5).
+    matrix-react-sdk recomputes it on room switches, so it picks the name up
+    the next time the user changes room.
   * Room.calculateRoomName also serves getDefaultRoomName() with
     ignoreRoomNameEvent=true; that call is left untouched, so "the default
     name of this room" keeps meaning the real one.
   * Recalculating is enough to repaint: Room.recalculate() emits Room.name,
     which is what matrix-react-sdk subscribes to. We call it for every room
-    after the alias map changes and after the first sync.
+    after the name map changes and after the first sync.
 
-Storage: account data is per-user and server-side, so the alias follows the
+Which person a room is a dialogue with comes from room DATA, never from the
+room id's shape: "!localpart:server" (room versions up to 11) and the opaque
+"!<base64url>" of room version 12 have nothing in common but the leading "!",
+and Synapse creates v12 rooms by default since 1.162, so production DMs are
+opaque. The partner is what m.direct says, or else the other member of a room
+with exactly two joined members (how Element itself presents a one-to-one
+chat). Any other member count means no contact, so no name.
+
+Storage: account data is per-user and server-side, so the name follows the
 account to any device running this overlay and is invisible to other members.
-Nothing here touches room state or sync.
+Plotina Lite, X and Mobile read and write the same event, so a name set in one
+client shows up in the others.
 
-UI: a pencil button in the open room's header, on the same line and right
-after the room name (it sits next to the name span inside the header's flex
-row, not under it), opens a small dialog ("Переименовать для себя" /
-"Сбросить"). The DOM anchors follow the same pattern as noise/boot.js and
+Reset writes the map without the key, and every write is sanitised, so the
+stored object never carries empty values: removing the last name leaves {}.
+The account data event itself stays behind as {}: matrix-js-sdk 44 implements
+deleteAccountData(type) as setAccountData(type, {}), and Matrix has no
+client-side removal for account data. The old room-keyed model
+(cc.plotina.room_aliases) is neither read nor migrated: it is gone.
+
+UI: a pencil button in the open DM's header, on the same line and right after
+the room name (it sits next to the name span inside the header's flex row, not
+under it), opens a small dialog ("Переименовать для себя" / "Сбросить"). The
+DOM anchors follow the same pattern as noise/boot.js and
 plotina-update-channel.js: locate by class, insert once, re-insert after
 re-renders.
 
-Room ids: "!localpart:server" (room versions up to 11) and the opaque
-"!<base64url>" of room version 12 have nothing in common but the leading "!".
-Synapse creates v12 rooms by default since 1.162, so production DMs are
-opaque and any format rule stricter than "starts with !, no whitespace or
-slash" silently hides the feature (the QA defect). Which room a request
-belongs to is therefore checked against the room data — the room object of
-this client and its m.direct/member list — not against an id shape.
-
-Only personal dialogues: the alias UI and setter apply to rooms this account
-has as a DM (listed in m.direct, or exactly two joined members). A group
-room's name is the room's own name; it is never masked locally (QA finding).
-
-Reset writes the map without the key, and every write is sanitised, so the
-stored object never carries empty values: removing the last alias leaves
-{}. The account data event itself stays behind as {}: matrix-js-sdk 44
-implements deleteAccountData(type) as setAccountData(type, {}), and Matrix
-has no client-side removal for account data.
-
-Test handle: window.plotinaDmAliases exposes the alias map plus set/clear/
+Test handle: window.plotinaContactNames exposes the name map plus set/clear/
 refresh so QA can drive the same code path the dialog uses. Invalid ids and
 non-DM rooms reject with a coded Error and a visible banner, never silence.
 */
 (function (root) {
   "use strict";
 
-  var ACCOUNT_DATA_TYPE = "cc.plotina.room_aliases";
+  var ACCOUNT_DATA_TYPE = "cc.plotina.contact_names";
   var DIRECT_EVENT_TYPE = "m.direct";
   var CLIENT_POLL_MS = 250;
+
+  /**
+   * Matrix user ids: "@localpart:server". The localpart is not empty (the
+   * colon is at index > 1) and so is not the server part; whitespace and "/"
+   * never appear. This is only used to keep junk out of the map -- it is never
+   * used to decide who a person is.
+   */
+  function isUserId(id) {
+    if (typeof id !== "string" || id.charAt(0) !== "@") return false;
+    if (/[\s\/]/.test(id)) return false;
+    var colon = id.indexOf(":");
+    return colon > 1 && colon < id.length - 1;
+  }
 
   /**
    * Room versions <= 11: "!localpart:server". Room version 12: opaque
    * "!<base64url>" with no server part. The only shape both share is the
    * leading "!" and the absence of whitespace and "/" — anything stricter
-   * (the old /^!.*:./) drops every v12 room, which is the QA defect.
+   * (the old /^!.*:./) drops every v12 room, which was the QA defect.
    */
   function isRoomId(id) {
     return typeof id === "string" && id.length > 1 && id.charAt(0) === "!" &&
@@ -86,7 +105,7 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
   var STRINGS = {
     ru: {
       title: "Личное имя",
-      hint: "Видно только вам. Имя комнаты у собеседника не меняется.",
+      hint: "Видно только вам. Имя собеседника у него самого не меняется.",
       save: "Сохранить",
       reset: "Сбросить",
       cancel: "Отмена",
@@ -99,7 +118,7 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     },
     en: {
       title: "Personal name",
-      hint: "Only you see this. The room's name for everyone else is unchanged.",
+      hint: "Only you see this. The contact's own name for everyone else is unchanged.",
       save: "Save",
       reset: "Reset",
       cancel: "Cancel",
@@ -118,10 +137,11 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
   }
 
   var state = {
-    aliases: {},
+    // mxid -> personal name
+    names: {},
     // room_id -> user_id for this account's m.direct rooms; refreshed on
-    // every apply() and on m.direct changes. Used to answer "is this a DM?"
-    // without asking the id's shape.
+    // every apply() and on m.direct changes. Used to answer "who is this DM
+    // with?" without asking the room id's shape.
     direct: {},
     client: null,
     patched: false,
@@ -141,75 +161,103 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     }
   }
 
-  /** Account data content -> {room_id: label}, strings only, trimmed. */
-  function parseAliases(content) {
+  function myUserId() {
+    var c = state.client || client();
+    var id = c && typeof c.getUserId === "function" ? c.getUserId() : null;
+    return isUserId(id) ? id : null;
+  }
+
+  /** Account data content -> {mxid: name}, strings only, trimmed. */
+  function parseContactNames(content) {
     var out = {};
-    if (!content || typeof content !== "object") return out;
-    Object.keys(content).forEach(function (roomId) {
-      var value = content[roomId];
+    if (!content || typeof content !== "object" || Array.isArray(content)) return out;
+    Object.keys(content).forEach(function (userId) {
+      var value = content[userId];
       if (typeof value !== "string" || !value.trim()) return;
-      if (!isRoomId(roomId)) {
-        warnOnce(roomId);
+      if (!isUserId(userId)) {
+        warnOnce(userId);
         return;
       }
-      out[roomId] = value.trim();
+      out[userId] = value.trim();
     });
     return out;
   }
 
   // A payload from a buggy version or another client must not spam the
   // console on every sync; report each dropped key once, loudly enough to be
-  // visible in the client log as the "why is my alias gone" trace.
+  // visible in the client log as the "why is my name gone" trace.
   var warnedKeys = {};
-  function warnOnce(roomId) {
-    if (warnedKeys[roomId] || typeof console === "undefined" || !console.warn) return;
-    warnedKeys[roomId] = true;
-    console.warn("[plotina-dm-aliases] ignoring alias for a key that is not a " +
-      "room id: " + JSON.stringify(roomId));
+  function warnOnce(key) {
+    if (warnedKeys[key] || typeof console === "undefined" || !console.warn) return;
+    warnedKeys[key] = true;
+    console.warn("[plotina-contact-names] ignoring a name for a key that is not " +
+      "an mxid: " + JSON.stringify(key));
   }
 
-  function readAliases(c) {
+  function readNames(c) {
     if (!c || typeof c.getAccountData !== "function") return {};
     var event = c.getAccountData(ACCOUNT_DATA_TYPE);
     if (!event || typeof event.getContent !== "function") return {};
     try {
-      return parseAliases(event.getContent());
+      return parseContactNames(event.getContent());
     } catch (e) {
       return {};
     }
   }
 
-  /** Immutable update: returns a copy of *map* with one room set or removed. */
-  function withAlias(map, roomId, name) {
+  /** Immutable update: returns a copy of *map* with one contact set or removed. */
+  function withContactName(map, userId, name) {
     var next = {};
     Object.keys(map || {}).forEach(function (key) {
       next[key] = map[key];
     });
-    if (name && String(name).trim()) next[roomId] = String(name).trim();
-    else delete next[roomId];
+    if (name && String(name).trim()) next[userId] = String(name).trim();
+    else delete next[userId];
     return next;
   }
 
-  /**
-   * The name the overlay shows for a room, or null for "keep the room's own".
-   * Pure: a room only takes its alias when it is a personal dialogue, so a
-   * stale alias for a group room can never mask that room's real name.
-   */
-  function aliasFor(map, roomId, direct) {
-    if (!direct) return null;
-    var value = map && map[roomId];
+  /** The name this account gave a contact, or null when nobody set one. */
+  function contactNameFor(map, userId) {
+    if (!isUserId(userId)) return null;
+    var value = map && map[userId];
     if (typeof value !== "string") return null;
     value = value.trim();
     return value || null;
   }
 
   /**
+   * Who is this room a dialogue with, or null when it is not a one-to-one
+   * chat? Pure: m.direct first, then exactly two joined members. The room id
+   * is only a map key here -- both id shapes (v<=11 and the opaque v12) work
+   * because nothing about the id is inspected.
+   */
+  function dmPartnerId(roomId, meId, direct, joinedIds) {
+    var listed = direct && roomId ? direct[roomId] : null;
+    if (isUserId(listed)) return listed === meId ? null : listed;
+    if (!Array.isArray(joinedIds) || joinedIds.length !== 2) return null;
+    var other = joinedIds[0] === meId ? joinedIds[1] : joinedIds[0];
+    return isUserId(other) && other !== meId ? other : null;
+  }
+
+  /**
+   * The name the overlay shows for a room, or null for "keep the room's own".
+   * Pure: a room only takes a contact's name when it is a one-to-one dialogue,
+   * so a name you gave a person can never mask a group's real name. The name
+   * is looked up by the PARTNER's mxid, which is what makes one person with
+   * two DMs show the same name in both.
+   */
+  function contactNameForRoom(map, roomId, meId, direct, joinedIds) {
+    var partner = dmPartnerId(roomId, meId, direct, joinedIds);
+    if (!partner) return null;
+    return contactNameFor(map, partner);
+  }
+
+  /**
    * Why a change request must be refused, or null when it may go ahead.
    * Pure, so the node tests pin both id shapes (v12 opaque included) and the
-   * DM-only rule without a browser. Clearing (blank name) is only checked for
-   * the id: a stale alias must stay removable even when the room is gone.
+   * DM-only rule without a browser.
    */
-  function aliasRejection(roomId, name, room) {
+  function nameRejection(roomId, name, room) {
     if (!isRoomId(roomId)) return "invalid_room_id";
     var wanted = String(name === undefined || name === null ? "" : name).trim();
     if (!wanted) return null;
@@ -221,31 +269,30 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
   /* --------------------------------------------------------------- SDK hook */
 
   /**
-   * Wrap Room.prototype.calculateRoomName once. The alias answer is supplied
-   * per room by *resolve*, so the hook itself is testable with a fake proto.
-   * ignoreRoomNameEvent=true is getDefaultRoomName()'s call and stays stock.
+   * Wrap Room.prototype.calculateRoomName once. The name answer is supplied
+   * per room by *resolve*, so the hook always sees the room it is naming and
+   * is testable with a fake proto. ignoreRoomNameEvent=true is
+   * getDefaultRoomName()'s call and stays stock.
    */
   function installNameHook(proto, resolve) {
     if (!proto || typeof proto.calculateRoomName !== "function") return false;
-    if (proto.__plotinaRoomAliases) return true;
+    if (proto.__plotinaContactNames) return true;
     var original = proto.calculateRoomName;
     proto.calculateRoomName = function (userId, ignoreRoomNameEvent) {
       if (!ignoreRoomNameEvent) {
-        var alias = resolve(this.roomId);
-        if (alias) return alias;
+        var name = resolve(this);
+        if (name) return name;
       }
       return original.apply(this, arguments);
     };
-    proto.__plotinaRoomAliases = true;
+    proto.__plotinaContactNames = true;
     return true;
   }
 
   function patchRooms(c) {
     var rooms = c.getRooms ? c.getRooms() : [];
     if (!rooms || !rooms.length) return false;
-    var patched = installNameHook(Object.getPrototypeOf(rooms[0]), function (roomId) {
-      return aliasFor(state.aliases, roomId, isDirectRoom(roomId));
-    });
+    var patched = installNameHook(Object.getPrototypeOf(rooms[0]), nameForRoom);
     if (patched) state.patched = true;
     return patched;
   }
@@ -266,7 +313,7 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
 
   /* --------------------------------------------------------- DM detection */
 
-  /** m.direct content -> {room_id: user_id}; only room ids are kept. */
+  /** m.direct content -> {room_id: user_id}; only sane keys and ids are kept. */
   function readDirectRooms(c) {
     var out = {};
     if (!c || typeof c.getAccountData !== "function") return out;
@@ -275,7 +322,7 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     if (!content || typeof content !== "object") return out;
     Object.keys(content).forEach(function (userId) {
       var list = content[userId];
-      if (!Array.isArray(list)) return;
+      if (!Array.isArray(list) || !isUserId(userId)) return;
       list.forEach(function (roomId) {
         if (isRoomId(roomId)) out[roomId] = userId;
       });
@@ -283,17 +330,27 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     return out;
   }
 
-  /** Joined member count of a room, or null when the client cannot say. */
-  function joinedCount(room) {
+  /** Joined member ids of a room, or null when the client cannot say. */
+  function joinedIds(room) {
     if (!room) return null;
     try {
-      if (typeof room.getJoinedMemberCount === "function") {
-        var count = room.getJoinedMemberCount();
-        if (typeof count === "number") return count;
-      }
       if (typeof room.getJoinedMembers === "function") {
         var members = room.getJoinedMembers();
-        if (members) return members.length;
+        if (!Array.isArray(members)) return null;
+        var ids = [];
+        for (var i = 0; i < members.length; i++) {
+          var member = members[i];
+          var id = member && (member.userId || member.user_id);
+          if (typeof id === "string") ids.push(id);
+        }
+        return ids;
+      }
+      if (typeof room.getJoinedMemberCount === "function") {
+        // No ids available: an empty list of the right length keeps the
+        // two-member rule intact, but names nobody, so the room keeps its
+        // own name instead of guessing a contact.
+        var count = room.getJoinedMemberCount();
+        return count === 2 ? [] : null;
       }
     } catch (e) {
       return null;
@@ -301,65 +358,77 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     return null;
   }
 
-  /**
-   * Is this room a personal dialogue for the signed-in account? Room data,
-   * not the id: v12 opaque ids carry no server part and no shape to test.
-   * A DM is a room m.direct lists, or a room with exactly two joined members
-   * (which is how Element itself presents one-to-one chats). Member data can
-   * arrive after the first name calculation; the SDK recalculates on member
-   * changes, and apply() recalculates on every sync.
-   */
-  function isDirectRoom(roomId) {
-    if (state.direct[roomId]) return true;
+  /** The mxid this room is a dialogue with, or null. */
+  function partnerOf(roomId) {
     var c = state.client || client();
     var room = c && typeof c.getRoom === "function" ? c.getRoom(roomId) : null;
-    return joinedCount(room) === 2;
+    return dmPartnerId(roomId, myUserId(), state.direct, joinedIds(room));
   }
 
-  /** What the client knows about a room, for aliasRejection(). */
+  /**
+   * The name to show for one room instance, or null for the room's own name.
+   * The partner is resolved from the room's members, so a room that has not
+   * loaded them yet keeps its real name until it does -- and apply()
+   * recalculates on every sync, so it catches up without a reload.
+   */
+  function nameForRoom(room) {
+    if (!room || !isRoomId(room.roomId)) return null;
+    return contactNameForRoom(state.names, room.roomId, myUserId(), state.direct,
+      joinedIds(room));
+  }
+
+  /** Is this room a personal dialogue for the signed-in account? */
+  function isDirectRoom(roomId) {
+    if (!isRoomId(roomId)) return false;
+    return !!partnerOf(roomId);
+  }
+
+  /** What the client knows about a room, for nameRejection(). */
   function roomState(roomId) {
     var c = state.client || client();
     var room = c && typeof c.getRoom === "function" ? c.getRoom(roomId) : null;
     return { known: !!(room || state.direct[roomId]), direct: isDirectRoom(roomId) };
   }
 
-  /** Swap the alias map in and repaint every room that might be affected. */
-  function apply(aliases) {
-    state.aliases = aliases;
+  /** Swap the name map in and repaint every room that might be affected. */
+  function apply(names) {
+    state.names = names;
     var c = state.client || client();
     if (!c) return;
+    // m.direct is part of the answer, so re-read it together with the names:
+    // a room can become (or stop being) a DM between two syncs.
     state.direct = readDirectRooms(c);
     if (patchRooms(c)) recalculateRooms(c);
-    var event = document.getElementById("plotina-dm-alias-dialog");
+    var event = document.getElementById("plotina-contact-name-dialog");
     if (event) syncDialog();
   }
 
   function refresh() {
     var c = state.client || client();
     if (!c) return {};
-    apply(readAliases(c));
-    return state.aliases;
+    apply(readNames(c));
+    return state.names;
   }
 
   /* ------------------------------------------------------------ account data */
 
-  function writeAliases(next) {
+  function writeNames(next) {
     var c = state.client || client();
     if (!c) return Promise.reject(new Error("no Matrix client yet"));
-    // Write the sanitised map, never the caller's object: blank labels and
-    // keys that are not room ids must not reach the server (QA finding on
-    // reset), and removing the last alias writes {} with no empty values.
-    var clean = parseAliases(next);
+    // Write the sanitised map, never the caller's object: blank names and keys
+    // that are not mxids must not reach the server, and removing the last name
+    // writes {} with no empty values.
+    var clean = parseContactNames(next);
     return c.setAccountData(ACCOUNT_DATA_TYPE, clean).then(function () {
       // Apply locally at once; the accountData sync event re-reads the same
       // map, so this is idempotent rather than racy.
       apply(clean);
-      return state.aliases;
+      return state.names;
     });
   }
 
   /** Coded error the UI can translate; the message is already human-facing. */
-  function aliasError(code, roomId) {
+  function nameError(code, roomId) {
     var s = t();
     var messages = {
       invalid_room_id: s.invalid + JSON.stringify(String(roomId)),
@@ -371,17 +440,30 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     return err;
   }
 
+  /**
+   * Set ("Денчик") or reset (blank) the personal name of the CONTACT this DM
+   * is with. The room only identifies the person; the name is stored under
+   * their mxid, so every other dialogue with them follows at once.
+   */
   function setAlias(roomId, name) {
-    var rejection = aliasRejection(roomId, name, roomState(roomId));
+    var rejection = nameRejection(roomId, name, roomState(roomId));
     if (rejection) {
-      // The QA defect was a silent no-op: the write went through, nothing
-      // changed on screen. A refused write now says why, in the dialog and in
-      // a banner, and still rejects so callers (the test handle) see it.
-      var err = aliasError(rejection, roomId);
+      // A refused write must never be a silent no-op: say why, in the dialog
+      // and in a banner, and still reject so callers (the test handle) see it.
+      var err = nameError(rejection, roomId);
       showError(err.message);
       return Promise.reject(err);
     }
-    return writeAliases(withAlias(state.aliases, roomId, name));
+    var wanted = String(name === undefined || name === null ? "" : name).trim();
+    var partner = partnerOf(roomId);
+    if (!partner) {
+      // No contact means no key to write and none to drop: refuse out loud
+      // instead of storing a name nobody can be shown under.
+      var noPartner = nameError("not_direct", roomId);
+      showError(noPartner.message);
+      return Promise.reject(noPartner);
+    }
+    return writeNames(withContactName(state.names, partner, wanted));
   }
 
   function clearAlias(roomId) {
@@ -391,15 +473,15 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
   /* ---------------------------------------------------------------- wiring */
 
   function attach(c) {
-    if (!c || c.__plotinaDmAliasesAttached) return;
-    c.__plotinaDmAliasesAttached = true;
+    if (!c || c.__plotinaContactNamesAttached) return;
+    c.__plotinaContactNamesAttached = true;
     state.client = c;
 
-    apply(readAliases(c));
+    apply(readNames(c));
 
     // A room created after startup inherits the patched prototype, but its
     // first name was computed before the patch could see it in some orders;
-    // recalculate on arrival so the alias wins either way.
+    // recalculate on arrival so the name wins either way.
     if (typeof c.on === "function") {
       c.on("Room", function (room) {
         if (patchRooms(c) && room && typeof room.recalculate === "function") {
@@ -414,18 +496,18 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
         if (!event || typeof event.getType !== "function") return;
         var type = event.getType();
         if (type === ACCOUNT_DATA_TYPE) {
-          apply(parseAliases(event.getContent ? event.getContent() : null));
+          apply(parseContactNames(event.getContent ? event.getContent() : null));
         } else if (type === DIRECT_EVENT_TYPE) {
-          // A room that just became (or stopped being) a DM changes whether
-          // its alias applies at all; re-read m.direct and repaint.
-          apply(state.aliases);
+          // A room that just became (or stopped being) a DM changes whose
+          // name applies at all; re-read m.direct and repaint.
+          apply(state.names);
         }
       });
       c.on("sync", function (syncState) {
         if (syncState === "PREPARED" || syncState === "SYNCING") {
           // The first sync is where both the rooms and the account data
           // arrive; reading again costs nothing on later ones.
-          apply(readAliases(c));
+          apply(readNames(c));
         }
       });
     }
@@ -443,7 +525,7 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     startUi();
 
     // Element can replace the MatrixClient in place (account switch, logout
-    // then login without a reload). The alias map and the prototype patch
+    // then login without a reload). The name map and the prototype patch
     // belong to whatever client object is current, so follow it.
     root.setInterval(function () {
       var current = client();
@@ -456,30 +538,30 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
 
   /* -------------------------------------------------------------------- UI */
 
-  var STYLE_ID = "plotina-dm-alias-style";
+  var STYLE_ID = "plotina-contact-name-style";
   var CSS = [
     ".plotina-alias-btn{display:inline-flex;align-items:center;justify-content:center;",
     "flex:0 0 auto;width:28px;height:28px;margin-inline-start:0;padding:0;border:0;border-radius:6px;",
     "background:transparent;color:inherit;cursor:pointer;opacity:.65}",
     ".plotina-alias-btn:hover{opacity:1;background:var(--cpd-color-bg-subtle-secondary,#0001)}",
     ".plotina-alias-btn svg{width:16px;height:16px}",
-    "#plotina-dm-alias-dialog{position:fixed;inset:0;z-index:10000;display:flex;",
+    "#plotina-contact-name-dialog{position:fixed;inset:0;z-index:10000;display:flex;",
     "align-items:center;justify-content:center;background:#0006}",
-    "#plotina-dm-alias-dialog .plotina-alias-card{width:min(380px,90vw);padding:20px;",
+    "#plotina-contact-name-dialog .plotina-alias-card{width:min(380px,90vw);padding:20px;",
     "border-radius:12px;background:var(--cpd-color-bg-canvas-default,#fff);color:inherit;",
     "box-shadow:0 12px 40px #0006;font-family:inherit}",
-    "#plotina-dm-alias-dialog h3{margin:0 0 6px;font-size:16px}",
-    "#plotina-dm-alias-dialog p{margin:0 0 12px;font-size:13px;opacity:.75;line-height:1.4}",
-    "#plotina-dm-alias-dialog input{width:100%;box-sizing:border-box;padding:8px 10px;",
+    "#plotina-contact-name-dialog h3{margin:0 0 6px;font-size:16px}",
+    "#plotina-contact-name-dialog p{margin:0 0 12px;font-size:13px;opacity:.75;line-height:1.4}",
+    "#plotina-contact-name-dialog input{width:100%;box-sizing:border-box;padding:8px 10px;",
     "border:1px solid var(--cpd-color-border-interactive-primary,#8888);border-radius:6px;",
     "font:inherit;background:var(--cpd-color-bg-canvas-default,#fff);color:inherit}",
-    "#plotina-dm-alias-dialog .plotina-alias-actions{display:flex;gap:8px;margin-top:14px}",
-    "#plotina-dm-alias-dialog button{padding:7px 12px;border-radius:6px;border:1px solid #8886;",
+    "#plotina-contact-name-dialog .plotina-alias-actions{display:flex;gap:8px;margin-top:14px}",
+    "#plotina-contact-name-dialog button{padding:7px 12px;border-radius:6px;border:1px solid #8886;",
     "background:transparent;color:inherit;font:inherit;cursor:pointer}",
-    "#plotina-dm-alias-dialog button.plotina-alias-primary{background:#17795a;border-color:#17795a;",
+    "#plotina-contact-name-dialog button.plotina-alias-primary{background:#17795a;border-color:#17795a;",
     "color:#fff}",
-    "#plotina-dm-alias-dialog .plotina-alias-status{margin-top:10px;font-size:12px;min-height:16px}",
-    "#plotina-dm-alias-error{position:fixed;top:16px;left:50%;transform:translateX(-50%);",
+    "#plotina-contact-name-dialog .plotina-alias-status{margin-top:10px;font-size:12px;min-height:16px}",
+    "#plotina-contact-name-error{position:fixed;top:16px;left:50%;transform:translateX(-50%);",
     "z-index:10001;max-width:min(520px,92vw);padding:10px 14px;border-radius:8px;",
     "background:#8a1f1f;color:#fff;font-size:13px;line-height:1.4;font-family:inherit;",
     "box-shadow:0 8px 24px #0006}",
@@ -508,7 +590,7 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
       return null;
     }
     // v12 opaque ids are legitimate: a leading "!" is the whole contract.
-    // Whether the room is usable is checked against the room data below.
+    // Whether the room is a DM is checked against the room data below.
     return isRoomId(id) ? id : null;
   }
 
@@ -516,10 +598,10 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
   function showError(message) {
     if (!message || !document.body) return;
     injectStyle();
-    var el = document.getElementById("plotina-dm-alias-error");
+    var el = document.getElementById("plotina-contact-name-error");
     if (!el) {
       el = document.createElement("div");
-      el.id = "plotina-dm-alias-error";
+      el.id = "plotina-contact-name-error";
       el.setAttribute("role", "alert");
       document.body.appendChild(el);
     }
@@ -567,8 +649,8 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
 
   function ensureHeaderButton() {
     var roomId = currentRoomId();
-    // The alias is a personal-dialogue feature (QA finding): no pencil on a
-    // group room, where the name belongs to the room and to everyone in it.
+    // The name is a personal-dialogue feature: no pencil on a group room,
+    // where the name belongs to the room and to everyone in it.
     if (!roomId || !isDirectRoom(roomId)) {
       removeHeaderButton();
       return;
@@ -608,7 +690,7 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     injectStyle();
     var s = t();
     var wrap = document.createElement("div");
-    wrap.id = "plotina-dm-alias-dialog";
+    wrap.id = "plotina-contact-name-dialog";
     wrap.innerHTML =
       '<div class="plotina-alias-card" role="dialog" aria-modal="true">' +
       "<h3></h3><p></p>" +
@@ -647,19 +729,19 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     wrap.querySelector("input").focus();
   }
 
+  /** The dialog shows the name of the CONTACT this room is a DM with. */
   function syncDialog() {
-    var wrap = document.getElementById("plotina-dm-alias-dialog");
+    var wrap = document.getElementById("plotina-contact-name-dialog");
     if (!wrap || !state.dialogRoomId) return;
     var input = wrap.querySelector("input");
-    if (input && document.activeElement !== input) {
-      input.value = state.aliases[state.dialogRoomId] || "";
-    }
+    if (!input || document.activeElement === input) return;
+    input.value = contactNameFor(state.names, partnerOf(state.dialogRoomId)) || "";
   }
 
   function saveFromDialog(value) {
     var roomId = state.dialogRoomId;
     if (!roomId) return;
-    var status = document.querySelector("#plotina-dm-alias-dialog .plotina-alias-status");
+    var status = document.querySelector("#plotina-contact-name-dialog .plotina-alias-status");
     setAlias(roomId, value).then(function () {
       closeDialog();
     }, function (err) {
@@ -668,7 +750,7 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
   }
 
   function closeDialog() {
-    var wrap = document.getElementById("plotina-dm-alias-dialog");
+    var wrap = document.getElementById("plotina-contact-name-dialog");
     if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap);
     state.dialogRoomId = null;
   }
@@ -696,16 +778,18 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
 
   /* ------------------------------------------------------------ test handle */
 
-  root.plotinaDmAliases = {
+  root.plotinaContactNames = {
     ACCOUNT_DATA_TYPE: ACCOUNT_DATA_TYPE,
     ready: function () {
       return !!(state.client && state.patched);
     },
-    aliases: function () {
-      return state.aliases;
+    names: function () {
+      return state.names;
     },
     /** Is the given room a DM for this account (m.direct or 2 members)? */
     isDirect: isDirectRoom,
+    /** The mxid this room is a dialogue with, or null. */
+    partnerOf: partnerOf,
     refresh: refresh,
     setAlias: setAlias,
     clearAlias: clearAlias,
@@ -713,18 +797,22 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
 
   /* ------------------------------------------------------------ node tests */
 
-  // CommonJS export for element-web/tests/dm_aliases.test.js: the pure pieces
-  // only. node has no DOM and no Matrix client, so the browser entry point
-  // below is skipped there (branding_test.py wires the test into the suite).
+  // CommonJS export for element-web/tests/contact_names.test.js: the pure
+  // pieces only. node has no DOM and no Matrix client, so the browser entry
+  // point below is skipped there (branding_test.py wires the test into the
+  // suite).
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
       ACCOUNT_DATA_TYPE: ACCOUNT_DATA_TYPE,
       DIRECT_EVENT_TYPE: DIRECT_EVENT_TYPE,
+      isUserId: isUserId,
       isRoomId: isRoomId,
-      parseAliases: parseAliases,
-      withAlias: withAlias,
-      aliasFor: aliasFor,
-      aliasRejection: aliasRejection,
+      parseContactNames: parseContactNames,
+      withContactName: withContactName,
+      contactNameFor: contactNameFor,
+      dmPartnerId: dmPartnerId,
+      contactNameForRoom: contactNameForRoom,
+      nameRejection: nameRejection,
       installNameHook: installNameHook,
     };
     return;
