@@ -285,14 +285,18 @@ def main() -> None:
     tarball = None
     if args.lock:
         tool = _desktop_tool()
-        lock = tool.read_lock(Path(args.lock))
+        lock_path = Path(args.lock).resolve()
+        lock = tool.read_lock(lock_path)
         sha = lock["sha256"]
         if args.archive:
             tarball = Path(args.archive).resolve()
         else:
-            work = Path(args.work).resolve() if args.work else Path(args.lock).resolve().parent / ".build" / "element-call"
+            work = Path(args.work).resolve() if args.work else lock_path.parent / ".build" / "element-call"
             work.mkdir(parents=True, exist_ok=True)
-            tarball = tool.fetch_archive(lock, work)
+            # fetch_archive() takes the lock PATH and re-reads it: it owns the
+            # digest check and the cache policy, so passing the parsed dict
+            # here only looks equivalent (CI: 'dict' object has no read_text).
+            tarball = tool.fetch_archive(lock_path, work)
     elif args.archive:
         tarball = Path(args.archive).resolve()
     else:
