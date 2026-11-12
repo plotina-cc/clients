@@ -1,3 +1,53 @@
+diff --git a/src/app/components/editor/autocomplete/UserMentionAutocomplete.tsx b/src/app/components/editor/autocomplete/UserMentionAutocomplete.tsx
+index 7a8012e..4ad4bdd 100644
+--- a/src/app/components/editor/autocomplete/UserMentionAutocomplete.tsx
++++ b/src/app/components/editor/autocomplete/UserMentionAutocomplete.tsx
+@@ -129,10 +129,14 @@ export function UserMentionAutocomplete({
+         return;
+       }
+       const roomMember = autoCompleteMembers[0];
+-      handleAutocomplete(roomMember.userId, roomMember.name);
++      handleAutocomplete(roomMember.userId, getName(roomMember));
+     });
+   });
+ 
++  // Plotina: the pill carries the name this account calls the person, the same
++  // string the message list and the member list show. roomMember.name is the
++  // member-state displayname -- using it here would put "Даниил" in the pill
++  // while the author line right above says "Денчик".
+   const getName = (member: RoomMember) =>
+     getMemberDisplayName(room, member.userId) ?? getMxIdLocalPart(member.userId) ?? member.userId;
+ 
+diff --git a/src/app/features/common-settings/members/Members.tsx b/src/app/features/common-settings/members/Members.tsx
+index 15cd1d0..1f18862 100644
+--- a/src/app/features/common-settings/members/Members.tsx
++++ b/src/app/features/common-settings/members/Members.tsx
+@@ -39,7 +39,7 @@ import {
+   useAsyncSearch,
+   UseAsyncSearchOptions,
+ } from '../../../hooks/useAsyncSearch';
+-import { getMemberSearchStr } from '../../../utils/room';
++import { getMemberDisplayName, getMemberSearchStr } from '../../../utils/room';
+ import { useMembershipFilter, useMembershipFilterMenu } from '../../../hooks/useMemberFilter';
+ import { useMemberPowerSort, useMemberSort, useMemberSortMenu } from '../../../hooks/useMemberSort';
+ import { settingsAtom } from '../../../state/settings';
+@@ -92,7 +92,15 @@ export function Members({ requestClose }: MembersProps) {
+   const [membershipFilterIndex, setMembershipFilterIndex] = useState(0);
+   const [sortFilterIndex, setSortFilterIndex] = useSetting(settingsAtom, 'memberSortFilterIndex');
+   const membershipFilter = useMembershipFilter(membershipFilterIndex, useMembershipFilterMenu());
+-  const memberSort = useMemberSort(sortFilterIndex, useMemberSortMenu());
++  // Plotina: the A-Z order sorts by the name the tiles show, so a contact this
++  // account renamed does not sit under their own name. Same resolver as the
++  // tile above (getMemberDisplayName), so the order cannot disagree with it.
++  const resolveMemberName = useCallback(
++    (member: RoomMember) =>
++      getMemberDisplayName(room, member.userId) ?? getMxIdLocalPart(member.userId) ?? member.userId,
++    [room]
++  );
++  const memberSort = useMemberSort(sortFilterIndex, useMemberSortMenu(resolveMemberName));
+   const memberPowerSort = useMemberPowerSort(creators, getPowerLevel);
+ 
+   const scrollRef = useRef<HTMLDivElement>(null);
 diff --git a/src/app/features/room-nav/PlotinaContactNamePrompt.tsx b/src/app/features/room-nav/PlotinaContactNamePrompt.tsx
 new file mode 100644
 index 0000000..2a9a449
@@ -254,12 +304,114 @@ index 0834111..149892d 100644
            <MenuItem
              onClick={handleRoomSettings}
              size="300"
+diff --git a/src/app/features/room/Room.tsx b/src/app/features/room/Room.tsx
+index ae42da8..4be7a43 100644
+--- a/src/app/features/room/Room.tsx
++++ b/src/app/features/room/Room.tsx
+@@ -20,12 +20,21 @@ import { callChatAtom } from '../../state/callEmbed';
+ import { CallChatView } from './CallChatView';
+ import { useCallEmbed } from '../../hooks/useCallEmbed';
+ import { useCallMembers, useCallSession } from '../../hooks/useCall';
++import { usePlotinaContactNamesRepaint } from '../../state/plotinaContactNames';
+ 
+ export function Room() {
+   const { eventId } = useParams();
+   const room = useRoom();
+   const mx = useMatrixClient();
+ 
++  // Plotina: every name inside this room is read synchronously from
++  // getMemberDisplayName(), so nothing React tracks changes when this account
++  // renames a contact. The open room is the one place that is already on
++  // screen while that happens, so it re-renders its subtree on the account
++  // data event -- otherwise the author lines and the member drawer keep the
++  // old name until the room is reopened.
++  usePlotinaContactNamesRepaint(mx);
++
+   const callSession = useCallSession(room);
+   const callMembers = useCallMembers(callSession);
+   const callEmbed = useCallEmbed();
+diff --git a/src/app/hooks/useMemberSort.ts b/src/app/hooks/useMemberSort.ts
+index 48d2f60..0ce9448 100644
+--- a/src/app/hooks/useMemberSort.ts
++++ b/src/app/hooks/useMemberSort.ts
+@@ -1,11 +1,30 @@
+ import { RoomMember } from 'matrix-js-sdk';
+ import { useCallback, useMemo } from 'react';
+ 
++/**
++ * The member list's A-Z comparators, made to sort by the name the list SHOWS.
++ *
++ * Upstream compared RoomMember.name -- the raw member-state displayname -- so a
++ * contact this account renamed appeared under "Д" (their own name) while the
++ * tile next to it read "Яков", which put the list in an order the user cannot
++ * follow. The comparators therefore take the displayed name from a resolver
++ * (`getMemberDisplayName`, the same single display point the tiles read) and
++ * keep the comparison itself unchanged: only the string that goes in differs.
++ * Equal names compare equal, which upstream got wrong (it answered 1), so the
++ * order is now stable for people sharing a name.
++ */
++export const memberNameCompare =
++  (resolve: (member: RoomMember) => string, direction: 1 | -1 = 1): MemberSortFn =>
++  (a, b) => {
++    const left = resolve(a).toLowerCase();
++    const right = resolve(b).toLowerCase();
++    if (left === right) return 0;
++    return (left < right ? -1 : 1) * direction;
++  };
++
+ export const MemberSort = {
+-  Ascending: (a: RoomMember, b: RoomMember) =>
+-    a.name.toLowerCase() < b.name.toLowerCase() ? -1 : 1,
+-  Descending: (a: RoomMember, b: RoomMember) =>
+-    a.name.toLowerCase() > b.name.toLowerCase() ? -1 : 1,
++  Ascending: memberNameCompare((member) => member.name, 1),
++  Descending: memberNameCompare((member) => member.name, -1),
+   NewestFirst: (a: RoomMember, b: RoomMember) =>
+     (b.events.member?.getTs() ?? 0) - (a.events.member?.getTs() ?? 0),
+   Oldest: (a: RoomMember, b: RoomMember) =>
+@@ -19,16 +38,24 @@ export type MemberSortItem = {
+   sortFn: MemberSortFn;
+ };
+ 
+-export const useMemberSortMenu = (): MemberSortItem[] =>
++/**
++ * Plotina: the A-Z entries resolved against the displayed name.
++ *
++ * Takes the resolver rather than importing getMemberDisplayName here, because
++ * utils/room.ts is a much heavier module (the SDK's timeline types, the account
++ * data helpers) and this file is imported by the sort menu alone. The two
++ * callers pass `(member) => getMemberDisplayName(room, member.userId) ?? member.name`.
++ */
++export const useMemberSortMenu = (resolveName?: (member: RoomMember) => string): MemberSortItem[] =>
+   useMemo(
+     () => [
+       {
+         name: 'A to Z',
+-        sortFn: MemberSort.Ascending,
++        sortFn: resolveName ? memberNameCompare(resolveName, 1) : MemberSort.Ascending,
+       },
+       {
+         name: 'Z to A',
+-        sortFn: MemberSort.Descending,
++        sortFn: resolveName ? memberNameCompare(resolveName, -1) : MemberSort.Descending,
+       },
+       {
+         name: 'Newest',
+@@ -39,7 +66,7 @@ export const useMemberSortMenu = (): MemberSortItem[] =>
+         sortFn: MemberSort.Oldest,
+       },
+     ],
+-    []
++    [resolveName]
+   );
+ 
+ export const useMemberSort = (index: number, memberSort: MemberSortItem[]): MemberSortItem => {
 diff --git a/src/app/state/plotinaContactNames.ts b/src/app/state/plotinaContactNames.ts
 new file mode 100644
-index 0000000..de0d46f
+index 0000000..5149a83
 --- /dev/null
 +++ b/src/app/state/plotinaContactNames.ts
-@@ -0,0 +1,292 @@
+@@ -0,0 +1,347 @@
 +/*
 +Copyright 2026 Plotina <thebob3r@gmail.com>
 +
@@ -314,6 +466,7 @@ index 0000000..de0d46f
 +client -- see the comment at the end of installPlotinaContactNames().
 +*/
 +import { ClientEvent, MatrixClient, MatrixEvent, Room, SyncState } from 'matrix-js-sdk';
++import { useEffect, useState } from 'react';
 +import { useAccountData } from '../hooks/useAccountData';
 +import { AccountDataEvent } from '../../types/matrix/accountData';
 +import {
@@ -481,6 +634,60 @@ index 0000000..de0d46f
 +  return contactNameOfRoom(mx, room, parseContactNames(event?.getContent()));
 +};
 +
++/**
++ * Tell [listener] whenever the personal-name map changes.
++ *
++ * This exists for surfaces that are already on screen and do not recompute
++ * through Room.name: an open room's message list, its member drawer, the
++ * reaction/reply attributions. Account data is not room state, so the SDK
++ * emits nothing those components subscribe to -- without this, renaming a
++ * contact leaves the open chat showing the old name until the room is
++ * reopened or a new event arrives in it.
++ *
++ * The listener fires on changes only, never at subscribe time: every name is
++ * resolved synchronously when it is rendered, so a first render already shows
++ * the current map and an extra callback would only cause a second one.
++ */
++export const subscribeContactNames = (
++  mx: MatrixClient,
++  listener: () => void
++): (() => void) => {
++  const handler = (event: MatrixEvent) => {
++    try {
++      if (event.getType() === CONTACT_NAMES_EVENT_TYPE) listener();
++    } catch {
++      /* a listener that throws must not break the client's event loop */
++    }
++  };
++  mx.on(ClientEvent.AccountData, handler);
++  return () => mx.removeListener(ClientEvent.AccountData, handler);
++};
++
++/**
++ * Force a re-render of the calling component whenever the name map changes.
++ *
++ * Every member name in the client is read synchronously by
++ * getMemberDisplayName(), so no component holds the name in its own state: a
++ * rename from this device or another one changes what the function returns but
++ * nothing React would notice. An open room's message list, its member drawer
++ * and its reaction/reply attributions are already mounted at that moment, so
++ * they need this one subscription -- one call at the top of the open room
++ * re-renders the subtree that names people.
++ *
++ * A hook that only forces a repaint is the right shape here: the value itself
++ * is never stale, only the render that read it.
++ */
++export const usePlotinaContactNamesRepaint = (mx: MatrixClient) => {
++  const [, setVersion] = useState<number>(0);
++  useEffect(
++    () =>
++      subscribeContactNames(mx, () => {
++        setVersion((version: number) => version + 1);
++      }),
++    [mx]
++  );
++};
++
 +type PlotinaContactNamesClient = MatrixClient & { plotinaContactNames?: boolean };
 +
 +/** Recompute one room's cached name; Room.name listeners repaint the list. */
@@ -552,6 +759,42 @@ index 0000000..de0d46f
 +    if (state === SyncState.Prepared) recalculatePlotinaRoomNames(mx);
 +  });
 +};
+diff --git a/src/app/utils/room.ts b/src/app/utils/room.ts
+index 05dfeb2..0eefc52 100644
+--- a/src/app/utils/room.ts
++++ b/src/app/utils/room.ts
+@@ -18,6 +18,7 @@ import {
+   RoomMember,
+ } from 'matrix-js-sdk';
+ import { CryptoBackend } from 'matrix-js-sdk/lib/common-crypto/CryptoBackend';
++import { memberOwnName, personalNameForMember } from '../../plotina/memberNames';
+ import { AccountDataEvent } from '../../types/matrix/accountData';
+ import {
+   IRoomCreateContent,
+@@ -359,12 +360,17 @@ export const parseReplyFormattedBody = (
+   return `<mx-reply><blockquote>${replyToLink}${userLink}<br />${formattedBody}</blockquote></mx-reply>`;
+ };
+ 
+-export const getMemberDisplayName = (room: Room, userId: string): string | undefined => {
+-  const member = room.getMember(userId);
+-  const name = member?.rawDisplayName;
+-  if (name === userId) return undefined;
+-  return name;
+-};
++// Plotina: the single display point for a member's name. Every surface that
++// names a person -- the author line, the member tile, the member list, the
++// mention pill, reply and reaction attributions -- reads it, so the personal
++// name a contact was given (cc.plotina.contact_names, keyed by mxid) applies
++// here and in every other chat with that person, group rooms included. A group
++// is never renamed; the PEOPLE in it are called what this account calls them
++// everywhere. The member's own displayname stays the fallback and is never
++// written, and `undefined` keeps the caller's localpart fallback exactly as
++// before.
++export const getMemberDisplayName = (room: Room, userId: string): string | undefined =>
++  personalNameForMember(room, userId) ?? memberOwnName(room, userId);
+ 
+ export const getMemberSearchStr = (
+   member: RoomMember,
 diff --git a/src/client/initMatrix.ts b/src/client/initMatrix.ts
 index 498d4f7..89281d5 100644
 --- a/src/client/initMatrix.ts
@@ -794,3 +1037,126 @@ index 0000000..8ee8bd5
 +
 +/** True when the map holds no names (used to skip work on the common case). */
 +export const hasContactNames = (names: ContactNames): boolean => Object.keys(names).length > 0;
+diff --git a/src/plotina/memberNames.ts b/src/plotina/memberNames.ts
+new file mode 100644
+index 0000000..bf4ba46
+--- /dev/null
++++ b/src/plotina/memberNames.ts
+@@ -0,0 +1,117 @@
++/*
++Copyright 2026 Plotina <thebob3r@gmail.com>
++
++SPDX-License-Identifier: AGPL-3.0-only
++
++Plotina: personal names for the PEOPLE in a room, not just for a dialogue.
++
++A contact name is stored per mxid (src/plotina/contactNames.ts), so the same
++person has to read the same in every direct chat AND in every group they share
++with this account: "в группе иначе, чем в ЛС" would mean the name is a property
++of the room again. This module is the one place that answers "what do I call
++this user in this room?":
++
++    personal name from cc.plotina.contact_names
++      -> member's own displayname (m.room.member)
++      -> nothing (the caller falls back to the mxid localpart)
++
++That is the same order the owner's model and the Mobile reference use
++(User.displayName = resolveLocalName(id) ?? "name from member state"); the
++rawDisplayName stays untouched, which is what every upstream surface already
++reads today.
++
++Why a module and not a hook: the display point (getMemberDisplayName in
++src/app/utils/room.ts) is called from render code, from sort comparators and
++from the editor's mention insertion, none of which are React components. It
++only needs the account data map, which the SDK has already stored, so the
++answer is synchronous and needs no state of its own. React gets told about a
++change separately (see the hook below and the repaint in features/room/Room).
++
++Nothing here writes anything: no m.room.member, no m.room.name. A name given to
++a person is this account's own view of that person.
++*/
++import { MatrixClient } from 'matrix-js-sdk';
++import {
++  CONTACT_NAMES_EVENT_TYPE,
++  ContactNames,
++  contactNameFor,
++  parseContactNames,
++} from './contactNames';
++
++const EMPTY_NAMES: ContactNames = {};
++
++/** Account data events are immutable, so one parse per event is enough. */
++const parsedByEvent = new WeakMap<object, ContactNames>();
++
++/**
++ * The name map of the signed-in account, straight from account data.
++ *
++ * Missing event (never set on this account), half-written or hostile content
++ * all read as "no names": the client must work exactly as it did before the
++ * feature existed.
++ */
++export const readContactNames = (mx: MatrixClient): ContactNames => {
++  if (!mx || typeof mx.getAccountData !== 'function') return EMPTY_NAMES;
++  const event = mx.getAccountData(CONTACT_NAMES_EVENT_TYPE as any);
++  if (!event || typeof event.getContent !== 'function') return EMPTY_NAMES;
++
++  const cached = parsedByEvent.get(event);
++  if (cached) return cached;
++
++  let parsed = EMPTY_NAMES;
++  try {
++    parsed = parseContactNames(event.getContent());
++  } catch {
++    /* a resolver that throws must leave upstream behaviour alone */
++  }
++  parsedByEvent.set(event, parsed);
++  return parsed;
++};
++
++/** The personal name this account gave [userId], or undefined. */
++export const personalNameOf = (
++  mx: MatrixClient,
++  userId: string | undefined
++): string | undefined => contactNameFor(readContactNames(mx), userId);
++
++/** What this module needs from a Room; typed structurally so it stays pure. */
++type RoomLike = {
++  client?: MatrixClient | null;
++  getMember?: (userId: string) => { rawDisplayName?: string } | null | undefined;
++};
++
++/**
++ * The personal name of a room's member, or undefined when this account never
++ * named them.
++ *
++ * Independent of the room's kind: a group is not renamed, but the PEOPLE in it
++ * are called what this account calls them everywhere else. Only the account's
++ * own map is consulted -- the room supplies nothing but the client that holds
++ * the account data.
++ */
++export const personalNameForMember = (
++  room: RoomLike | null | undefined,
++  userId: string | undefined
++): string | undefined => {
++  if (!room || typeof userId !== 'string') return undefined;
++  return personalNameOf(room.client as MatrixClient, userId);
++};
++
++/**
++ * The member's own displayname, as upstream computes it, or undefined when the
++ * room does not know the member.
++ *
++ * Two upstream fallbacks are preserved: no member -> undefined, and
++ * rawDisplayName equal to the mxid (the SDK's "this person has no name" marker)
++ * -> undefined, so callers keep falling back to the localpart exactly as
++ * before.
++ */
++export const memberOwnName = (
++  room: RoomLike | null | undefined,
++  userId: string | undefined
++): string | undefined => {
++  if (!room || typeof userId !== 'string' || typeof room.getMember !== 'function') return undefined;
++  const name = room.getMember(userId)?.rawDisplayName;
++  if (name === userId) return undefined;
++  return name;
++};
