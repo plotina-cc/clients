@@ -664,6 +664,16 @@ class DmAliasesTest(AppFixture):
                       dockerfile)
         self.assertIn("plotina-dm-aliases.js", dockerfile.split("branding.py --app /app")[-1])
 
+    # Tokens that would mean "this overlay mutates room state". Every write of
+    # m.room.name / m.room.member in matrix-js-sdk goes through one of these,
+    # so forbidding them is the guarantee the overlay must not mask a room's
+    # real name for anyone but this account. Reading m.room.name (the overlay
+    # does: an explicitly named room keeps its title, plan §1.4) is the
+    # opposite of a write and stays allowed.
+    ROOM_STATE_WRITERS = ("sendStateEvent", "sendEvent(", "setRoomName",
+                          "updateRoomName", "setRoomTopic",
+                          "state.setValue", "setStateEvents")
+
     def test_payload_is_a_self_contained_overlay(self) -> None:
         # The overlay must stay dependency-free (no import/require) and free
         # of room-state writes: the whole point is that it never mutates the
@@ -674,8 +684,18 @@ class DmAliasesTest(AppFixture):
         self.assertIn("mxMatrixClientPeg", src)
         self.assertNotIn("import ", src.split("/*")[-1])
         code = src[src.index("(function (root)"):]
-        for forbidden in ("sendStateEvent", "m.room.name", "m.room.member", "setRoomName"):
+        for forbidden in self.ROOM_STATE_WRITERS:
             self.assertNotIn(forbidden, code)
+        # No room-state event may be constructed for sending either.
+        self.assertNotIn("m.room.member", code)
+
+    def test_room_state_writer_gate_rejects_a_writer(self) -> None:
+        # Negative control: the check above is only worth something if it can
+        # fail. Feed it the shape it exists to catch.
+        for sample in ('client.sendStateEvent(roomId, "m.room.name", {name: "x"})',
+                       'room.setRoomName("x")', 'room.currentState.setStateEvents([])'):
+            self.assertTrue(any(t in sample for t in self.ROOM_STATE_WRITERS),
+                            f"the gate would let {sample!r} through")
 
 
 class NodeThemeLogicTest(unittest.TestCase):

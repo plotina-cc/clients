@@ -12,8 +12,10 @@ What changed in this task, and what this script therefore has to show:
     the contact's MXID (not by room id);
   * two different DMs with the same person get the name from ONE entry, and a
     rename in either room is visible in both;
-  * a group room that contains that person is untouched — the name does not
-    leak, and its members keep their own display names;
+  * a group room that contains that person is NOT renamed, but the person is:
+    the name shows on their author line and in the member list, while the
+    group's own title and every other member keep theirs (owner decision,
+    plan §6 "name in groups");
   * the rename is live: room list, header, author line under the message and
     the message preview in the room list, without a reload;
   * reset removes the key (the event body becomes {}) and the real display
@@ -177,8 +179,8 @@ async function authorLines(page) {
 /**
  * The message-preview line of every room-list tile, paired with the tile's
  * room name. Tiles carry no room id in the DOM, but the pair is enough: the
- * assertion is "the DM's preview shows the personal name, the group's does
- * not", and the name distinguishes the rows.
+ * assertion is "the DM's preview shows the personal name", and the name
+ * distinguishes the rows.
  */
 async function roomListRows(page) {
   return page.evaluate(() => Array.from(document.querySelectorAll(".mx_RoomListItemView")).map((tile) => {
@@ -238,7 +240,12 @@ function watchNetwork(page, sink) {
 }
 
 async function main() {
-  const browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+  // PLAYWRIGHT_CHROMIUM lets a machine without Playwright's downloaded bundle
+  // use the system Chromium; CI keeps the default.
+  const browser = await chromium.launch({
+    args: ["--no-sandbox", "--disable-dev-shm-usage"],
+    ...(process.env.PLAYWRIGHT_CHROMIUM ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM } : {}),
+  });
 
   // ---------------------------------------------------------------- owner
   const ownerCtx = await browser.newContext();
@@ -324,12 +331,21 @@ async function main() {
     `authors=${JSON.stringify(authorsAfter.slice(0, 4))}`);
 
   // The preview: in a 1:1 chat Element prefixes the preview with the sender's
-  // name, so the room-list line has to follow the rename too.
+  // name, so the room-list line has to follow the rename too. Post a fresh
+  // message from the contact through the API (the last local message is
+  // alice's own, and Element prefixes only the OTHER person's) and assert the
+  // preview carries the personal name — no hardcoded stand text.
+  const previewText = "проверка превью";
+  for (const rid of [DM1, DM2]) {
+    await api(`/_matrix/client/v3/rooms/${encodeURIComponent(rid)}/send/m.room.message/${Date.now()}`,
+      OTHER.token, "PUT", { msgtype: "m.text", body: previewText });
+  }
+  await owner.waitForTimeout(4000);
   const rows = await roomListRows(owner);
   const dmRows = rows.filter((r) => r.name === NAME);
   info(`room-list rows: ${JSON.stringify(rows)}`);
   record("the room-list preview follows the rename",
-    dmRows.length >= 1 && dmRows.every((r) => r.preview === NAME + ": привет, это Даниил"),
+    dmRows.length >= 1 && dmRows.every((r) => r.preview && r.preview.startsWith(NAME + ":")),
     JSON.stringify(dmRows));
 
   record("the name is stored under the contact's mxid",
@@ -382,16 +398,52 @@ async function main() {
     dm1After === NAME + "-2", `dm1 header=${JSON.stringify(dm1After)}`);
   await shot(owner, "05-both-dms.png");
 
-  // ---------------------------------------------------------- the group guard
+  // ------------------------------------------------- name in a group room
+  // The room is not renamed, but the person is. The group's own title stays
+  // "QA Группа" (no m.room.name write, no local override), the pencil is absent
+  // (a group cannot be named), and yet the contact's author line carries the
+  // personal name — the same name as in the DM.
   const groupHeader = await openRoom(owner, GROUP);
   const pencil = await owner.$(".plotina-alias-btn");
   const groupAuthors = await authorLines(owner);
-  await shot(owner, "06-group-untouched.png");
-  record("no pencil on a group room with that contact in it",
+  await shot(owner, "06-group-name-of-person.png");
+  record("no pencil on a group room (a group is not renamed)",
     !pencil && groupHeader === "QA Группа", `header=${JSON.stringify(groupHeader)} pencil=${!!pencil}`);
-  record("the contact name does not leak into the group's author lines",
-    !groupAuthors.some((t) => t.includes(NAME)),
-    `authors=${JSON.stringify(groupAuthors.slice(0, 4))}`);
+  record("the group's own title is not masked by the contact name",
+    !groupHeader.includes(NAME), `header=${JSON.stringify(groupHeader)}`);
+  record("the contact's author line in the group carries the personal name",
+    groupAuthors.some((t) => t.includes(NAME)),
+    `authors=${JSON.stringify(groupAuthors.slice(0, 6))} expected to contain ${JSON.stringify(NAME)}`);
+  record("the group room's nameForRoom is still null (room not renamed)",
+    (await owner.evaluate((id) => window.plotinaDmAliases.nameForRoom(id), GROUP)) === null,
+    `nameForRoom(group)=${JSON.stringify(await owner.evaluate((id) => window.plotinaDmAliases.nameForRoom(id), GROUP))}`);
+  // The member list is the surface the owner named explicitly ("в списке
+  // участников"). Open the roster and read what it renders, not just the model.
+  const roster = await owner.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll("button,[role='button']"));
+    for (const b of btns) {
+      const label = (b.getAttribute("aria-label") || "") + " " + (b.className || "");
+      if (/member|people|частник/i.test(label)) { b.click(); return label; }
+    }
+    return null;
+  });
+  await owner.waitForTimeout(3500);
+  const rosterNames = await owner.evaluate(() => {
+    const panel = document.querySelector(".mx_RightPanel, .mx_MemberList, [class*='MemberList']");
+    if (!panel) return null;
+    return Array.from(panel.querySelectorAll("*"))
+      .filter((e) => e.children.length === 0 && e.textContent.trim())
+      .map((e) => e.textContent.trim());
+  });
+  await shot(owner, "06b-member-list-group.png");
+  record("the group's member list shows the personal name for that person",
+    Array.isArray(rosterNames) && rosterNames.includes(NAME + "-2"),
+    `roster=${JSON.stringify(rosterNames && rosterNames.slice(0, 12))} clicked=${JSON.stringify(roster)}`);
+  record("...and keeps every other member's own name",
+    Array.isArray(rosterNames) && rosterNames.includes("QA") && rosterNames.includes("Алиса"),
+    `roster=${JSON.stringify(rosterNames && rosterNames.slice(0, 12))}`);
+  await owner.keyboard.press("Escape");
+  await owner.waitForTimeout(500);
   const groupRefused = await owner.evaluate(async (id) => {
     try {
       await window.plotinaDmAliases.setName(id, "Группа-для-меня");

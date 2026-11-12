@@ -44,6 +44,7 @@ const {
   installNameHook,
   applyMemberName,
   createEngine,
+  createRepaint,
 } = overlay;
 
 let passed = 0;
@@ -127,8 +128,16 @@ function fakeClient(options) {
 }
 
 function fakeRoom(roomId, userIds, members, extra) {
+  const events = [{ getType: () => "m.room.message", event: true }];
   const room = {
     roomId,
+    // The real Room exposes its membership state here; applyToMembers walks
+    // exactly this map, so the fake has to have it or the member path is
+    // untested.
+    currentState: { members: members || {} },
+    // ...and this is where repaintRoom() finds the events to re-render.
+    getLiveTimeline: () => ({ getEvents: () => events }),
+    recalculate: () => {},
     getJoinedMemberCount: () => (userIds ? userIds.length : 0),
     getJoinedMembers: () => (userIds || []).map((userId) => members && members[userId] ?
       members[userId] : { userId }),
@@ -244,15 +253,14 @@ test("withName refuses a key that is not an mxid", () => {
   assert.deepEqual(withName({ [BOB]: "one" }, V12, "x"), { [BOB]: "one" });
 });
 
-test("contactNameFor answers only for direct chats", () => {
+test("contactNameFor answers by person, wherever they appear", () => {
   const map = { [BOB]: "Денчик", [CAROL]: "Мама" };
-  assert.equal(contactNameFor(map, BOB, true), "Денчик");
-  assert.equal(contactNameFor(map, BOB, false), null, "a group chat must keep its own names");
-  assert.equal(contactNameFor(map, CAROL, true), "Мама");
-  assert.equal(contactNameFor(map, "@nobody:example.org", true), null);
-  assert.equal(contactNameFor({ [BOB]: "  " }, BOB, true), null);
-  assert.equal(contactNameFor(null, BOB, true), null);
-  assert.equal(contactNameFor(map, null, true), null);
+  assert.equal(contactNameFor(map, BOB), "Денчик");
+  assert.equal(contactNameFor(map, CAROL), "Мама");
+  assert.equal(contactNameFor(map, "@nobody:example.org"), null);
+  assert.equal(contactNameFor({ [BOB]: "  " }, BOB), null);
+  assert.equal(contactNameFor(null, BOB), null);
+  assert.equal(contactNameFor(map, null), null);
 });
 
 /* ------------------------------------------------------------- account data */
@@ -325,6 +333,102 @@ test("a rename in the second DM replaces the same contact name", async () => {
 
 /* ------------------------------------------------------------ group guard */
 
+// Group rooms: the personal name is a property of the PERSON, so it must show
+// up wherever that person appears — the member list and the author line of a
+// group room included (owner decision, level 2). What must NOT change is the
+// group's own name: that belongs to the room and to everyone in it.
+const GROUP = "!x1bjMrsUU-PgPMGjzJh-f6IWkIdY-M6L7c7g4SI6Q2Q";
+
+function groupRooms() {
+  const rooms = DM_ROOMS();
+  const bob = fakeMember(BOB, "Даниил");
+  const carol = fakeMember(CAROL, "Каролина");
+  const me = fakeMember(ME, "Алиса");
+  rooms[GROUP] = fakeRoom(GROUP, [ME, BOB, CAROL], { [ME]: me, [BOB]: bob, [CAROL]: carol });
+  return { rooms, bob, carol, me };
+}
+
+test("a contact name shows for that person inside a GROUP room", async () => {
+  const { rooms, bob, carol, me } = groupRooms();
+  const client = fakeClient({ rooms });
+  const engine = createEngine({ client });
+  engine.refresh();
+  await engine.setName(V12, "Денчик");
+
+  // The member list reads `name`, the author line reads `rawDisplayName`.
+  assert.equal(bob.name, "Денчик", "member list in a group shows the personal name");
+  assert.equal(bob.rawDisplayName, "Денчик", "the author line in a group shows it too");
+  assert.equal(carol.name, "Каролина", "another member keeps their own name");
+  assert.equal(carol.rawDisplayName, "Каролина");
+  assert.equal(me.name, "Алиса", "my own name is never rewritten");
+});
+
+test("a group room keeps its own name; only people are renamed", async () => {
+  const { rooms } = groupRooms();
+  const client = fakeClient({ rooms });
+  const engine = createEngine({ client });
+  engine.refresh();
+  await engine.setName(V12, "Денчик");
+  assert.equal(engine.nameForRoom(GROUP), null, "the room's own name is untouched");
+});
+
+test("a reset also restores the name inside the group room", async () => {
+  const { rooms, bob } = groupRooms();
+  const client = fakeClient({ rooms });
+  const engine = createEngine({ client });
+  engine.refresh();
+  await engine.setName(V12, "Денчик");
+  await engine.clearName(V12);
+  assert.equal(bob.name, "Даниил", "the real name comes back in the group too");
+  assert.equal(bob.rawDisplayName, "Даниил");
+});
+
+test("the member hook renames a group member, and only that person", () => {
+  const { bob, carol } = groupRooms();
+  bob.roomId = GROUP;
+  carol.roomId = GROUP;
+  const resolve = (member) => (member.userId === BOB ? "Денчик" : null);
+  applyMemberName(bob, resolve(bob));
+  applyMemberName(carol, resolve(carol));
+  assert.equal(bob.name, "Денчик");
+  assert.equal(carol.name, "Каролина");
+});
+
+test("a group title is never overridden, even with a named person in it", async () => {
+  // Regression guard for the exact mistake this rule exists to stop: taking
+  // "the name of the person I DM'd" and using it as a room title in a group.
+  const { rooms } = groupRooms();
+  const client = fakeClient({ rooms });
+  const engine = createEngine({ client });
+  engine.refresh();
+  await engine.setName(V12, "Денчик");
+  // A DM whose partner has a name is renamed; the group with that same person
+  // is not, because a room is only renamed when it IS a personal dialogue.
+  assert.equal(engine.nameForRoom(V12), "Денчик");
+  assert.equal(engine.nameForRoom(GROUP), null);
+});
+
+test("an explicit m.room.name outranks the contact name in that room's title", async () => {
+  // Plan §1.4: the personal name replaces the name of a PERSON; m.room.name is
+  // the name of the ROOM and wins in the room title (same rule as Mobile 0023).
+  const rooms = DM_ROOMS();
+  const named = fakeRoom(V12, [ME, BOB], {
+    [ME]: fakeMember(ME, "Алиса"),
+    [BOB]: fakeMember(BOB, "Даниил"),
+  }, { name: "Наш проект" });
+  rooms[V12] = named;
+  const client = fakeClient({ rooms });
+  const engine = createEngine({ client });
+  engine.refresh();
+  await engine.setName(V12, "Денчик");
+
+  assert.equal(engine.nameForRoom(V12), null,
+    "a room with an explicit name keeps that name in its title");
+  // The person is still renamed everywhere they appear — a room title is not a
+  // person's name.
+  assert.equal(named.currentState.members[BOB].name, "Денчик");
+});
+
 test("a contact name does not leak into a group room", async () => {
   const rooms = DM_ROOMS();
   const GROUP = "!x1bjMrsUU-PgPMGjzJh-f6IWkIdY-M6L7c7g4SI6Q2Q";
@@ -372,6 +476,23 @@ test("nameRejection is the documented matrix of refusals", () => {
 });
 
 /* ------------------------------------------------------------- junk input */
+
+test("junk in account data is dropped without noise and without a crash", async () => {
+  // Plan §1.2: junk is ignored silently. A dropped key must not be reported on
+  // every sync — the console stays clean, the render stays up.
+  const warned = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => warned.push(args.join(" "));
+  try {
+    const junk = { "@nocolon": "x", "@:empty": "y", "@ok:example.org": "fine" };
+    const client = fakeClient({ rooms: DM_ROOMS(), accountData: { [ACCOUNT_DATA_TYPE]: junk } });
+    const engine = createEngine({ client });
+    assert.deepEqual(engine.refresh(), { "@ok:example.org": "fine" });
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.deepEqual(warned, [], "a junk key is dropped in silence");
+});
 
 test("junk in account data never breaks the render", async () => {
   const junk = {
@@ -481,6 +602,81 @@ test("applyMemberName tolerates a member without a stock value", () => {
   assert.equal(member.name, "Денчик");
   applyMemberName(member, null);
   assert.equal(member.name, undefined);
+});
+
+test("the message's own sender object is renamed too (sentinels, not just members)", async () => {
+  // A MatrixEvent carries a SENTINEL RoomMember in event.sender, not the one
+  // in currentState.members (matrix-js-sdk room-state.ts getSentinelMember):
+  // it is a separate object frozen at the event's position, and it is what
+  // renders the author line and the room-list preview. Renaming only
+  // currentState.members leaves event.sender with the real display name, which
+  // is exactly the "author line shows the old name" defect.
+  const { rooms, bob } = groupRooms();
+  const sentinel = fakeMember(BOB, "Даниил");
+  const room = rooms[V12];
+  room.currentState.sentinels = { [BOB]: sentinel };
+  const event = { getType: () => "m.room.message", sender: sentinel, event: true };
+  room.getLiveTimeline = () => ({ getEvents: () => [event] });
+
+  const client = fakeClient({ rooms });
+  const engine = createEngine({ client });
+  engine.refresh();
+  await engine.setName(V12, "Денчик");
+
+  assert.equal(sentinel.name, "Денчик", "the event's sender sentinel is renamed");
+  assert.equal(sentinel.rawDisplayName, "Денчик");
+  assert.equal(bob.name, "Денчик", "and the currentState member as before");
+});
+
+test("a sentinel survives a later state change and still carries the name", async () => {
+  // Sentinels are created lazily during sync, so a member that appears after
+  // the rename must get the same treatment.
+  const { rooms } = groupRooms();
+  const room = rooms[V12];
+  room.currentState.sentinels = {};
+  const client = fakeClient({ rooms });
+  const engine = createEngine({ client });
+  engine.refresh();
+  await engine.setName(V12, "Денчик");
+
+  const late = fakeMember(BOB, "Даниил");
+  room.currentState.sentinels[BOB] = late;
+  engine.apply(engine.names);
+  assert.equal(late.name, "Денчик", "a sentinel created after the rename is renamed on the next apply");
+});
+
+/* ------------------------------------------------------- live repaint */
+
+test("a rename refreshes the room-list preview of EVERY room with that person", () => {
+  // repaintRoom() used to refresh only the room on screen, so the other DM
+  // with the same person kept the old sender name in its preview until the
+  // next message arrived. The preview store regenerates a row when a live
+  // timeline event is dispatched for it, so every room must get that dispatch.
+  const { rooms } = groupRooms();
+  const dispatched = [];
+  const repaint = createRepaint({
+    dispatcher: { dispatch: (payload) => dispatched.push(payload) },
+    openRoomId: () => V12,
+  });
+  repaint(fakeClient({ rooms }));
+
+  const refreshed = dispatched.map((p) => p.room.roomId);
+  assert.ok(refreshed.includes(V12), "the open room's preview is refreshed");
+  assert.ok(refreshed.includes(V11), "the OTHER DM with the same person is refreshed too");
+  assert.ok(refreshed.includes(GROUP), "a group's preview is refreshed too (its people are renamed)");
+});
+
+test("the repaint survives a room without a timeline", () => {
+  const rooms = { [V12]: fakeRoom(V12, [ME, BOB], { [ME]: fakeMember(ME, "Алиса"), [BOB]: fakeMember(BOB, "Даниил") }) };
+  const dispatched = [];
+  const repaint = createRepaint({
+    dispatcher: { dispatch: (p) => dispatched.push(p) },
+    openRoomId: () => V12,
+  });
+  // A room with neither getLiveTimeline nor recalculate must not throw.
+  rooms[V12].getLiveTimeline = () => { throw new Error("no timeline"); };
+  repaint(fakeClient({ rooms }));
+  assert.deepEqual(dispatched, [], "nothing to refresh, and no crash");
 });
 
 /* ---------------------------------------------------------------- UI contract */

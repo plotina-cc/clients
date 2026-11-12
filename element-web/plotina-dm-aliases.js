@@ -37,10 +37,11 @@ element-web"):
     `rawDisplayName` (the profile under a message) and its `name` (previews,
     exports, member lists). Both are own properties written by
     RoomMember.setMembershipEvent(), so the overlay wraps that method once and
-    rewrites the two fields on the DM partner; the SDK's own values are kept
-    aside and put back the moment the personal name goes away, so a reset
-    returns the person's real display name — including a change they made
-    themselves while the personal name was set.
+    rewrites the two fields on a person who has a personal name — in every room
+    they appear in; the SDK's own values are kept aside and put back the moment
+    the personal name goes away, so a reset returns the person's real display
+    name — including a change they made themselves while the personal name was
+    set.
   * Live repaint. Room.recalculate() emits Room.name for the title surfaces.
     Message tiles are React class components whose shouldComponentUpdate
     compares props and a display name is not a prop, so the overlay emits the
@@ -50,11 +51,14 @@ element-web"):
     re-renders against the member objects rewritten above, and stays correct
     through every later render.
 
-Only personal dialogues get a personal name: a room is a DM when m.direct lists
-it, or when it has exactly two joined members (how Element itself presents a
-one-to-one chat). In a group room the partner is null, so no name is resolved
-and no member is rewritten — a personal name can never mask a group's own name
-or its members' display names.
+Only people are renamed. The personal name belongs to the PERSON, so the same
+name shows up in a direct chat and in every group room that person shares with
+you: the member list and the author line of their messages (owner decision,
+plan §6, "name in groups"). What is never replaced is a room's own name: a group
+keeps its name, and so does a DM the user named explicitly with m.room.name —
+that title is the room's, not the person's (plan §1.4, the same rule as the
+Mobile reference). In a group room no contact is resolved and no room name is
+touched, so a personal name can never mask a group's name.
 
 Room ids: "!localpart:server" (room versions up to 11) and the opaque
 "!<base64url>" of room version 12 have nothing in common but the leading "!".
@@ -193,24 +197,10 @@ Error and a visible banner, never silence.
     Object.keys(raw).forEach(function (userId) {
       var value = raw[userId];
       if (typeof value !== "string" || !value.trim()) return;
-      if (!isUserId(userId)) {
-        warnOnce(userId);
-        return;
-      }
+      if (!isUserId(userId)) return; // a room id or a half-written key is not a contact
       out[userId] = value.trim();
     });
     return out;
-  }
-
-  // A payload from a buggy version or another client must not spam the console
-  // on every sync; report each dropped key once, loudly enough to be visible in
-  // the client log as the "why is my name gone" trace.
-  var warnedKeys = {};
-  function warnOnce(userId) {
-    if (warnedKeys[userId] || typeof console === "undefined" || !console.warn) return;
-    warnedKeys[userId] = true;
-    console.warn("[plotina-dm-aliases] ignoring a personal name whose key is not " +
-      "an mxid: " + JSON.stringify(userId));
   }
 
   /** Immutable update: a copy of *map* with one contact named or unnamed. */
@@ -227,12 +217,15 @@ Error and a visible banner, never silence.
   }
 
   /**
-   * The name the overlay shows for a contact, or null for "keep the real one".
-   * Pure: a personal name only applies inside a personal dialogue, so a contact
-   * who is also in a group can never mask anything there.
+   * The name the overlay shows for a person, or null for "keep the real one".
+   *
+   * A personal name belongs to the PERSON, not to a room: it is the same name
+   * in a direct chat with them and in any group room they share with you
+   * (owner decision, plan §6). The room's own name is a different thing and is
+   * handled by nameForRoom(), which stays DM-only.
    */
-  function contactNameFor(map, userId, direct) {
-    if (!direct || !userId) return null;
+  function contactNameFor(map, userId) {
+    if (!userId) return null;
     var value = map && map[userId];
     if (typeof value !== "string") return null;
     value = value.trim();
@@ -363,6 +356,30 @@ Error and a visible banner, never silence.
     return out;
   }
 
+  /**
+   * Does this room carry its own m.room.name? Then that is the room's name and
+   * a personal name of a person inside it must not replace it (plan §1.4).
+   */
+  function hasExplicitRoomName(room) {
+    if (!room) return false;
+    try {
+      var state = room.currentState;
+      if (state && typeof state.getStateEvents === "function") {
+        var event = state.getStateEvents("m.room.name", "");
+        if (event) {
+          var content = typeof event.getContent === "function" ? event.getContent() : event;
+          if (content && typeof content.name === "string" && content.name.trim()) return true;
+        }
+      }
+      // The SDK keeps the raw m.room.name on the room itself as well; an empty
+      // string means "no name", not an explicit one.
+      if (typeof room.name === "string" && room.name.trim()) return true;
+    } catch (e) {
+      return false; // unknown means "let the personal name apply", as before
+    }
+    return false;
+  }
+
   /** Joined member ids of a room, or null when the client cannot say. */
   function joinedMemberIds(room) {
     if (!room) return null;
@@ -418,10 +435,20 @@ Error and a visible banner, never silence.
       return others.length === 1 ? others[0] : null;
     };
 
-    /** The name shown for a room, or null for the room's own. */
+    /**
+     * The name shown for a room title, or null for the room's own. DM-only.
+     *
+     * An explicit m.room.name is the name of the ROOM and outranks the name of
+     * the person in it (plan §1.4, same rule as Mobile 0023): a DM the user
+     * named "Наш проект" keeps that title, while the person inside it still
+     * carries their personal name in the member list and on their messages.
+     */
     engine.nameForRoom = function (roomId) {
+      var c = engine.client_();
+      var room = c && typeof c.getRoom === "function" ? c.getRoom(roomId) : null;
+      if (hasExplicitRoomName(room)) return null;
       var partner = engine.partnerOf(roomId);
-      return contactNameFor(engine.names, partner, !!partner);
+      return contactNameFor(engine.names, partner);
     };
 
     /** What the client knows about a room, for nameRejection(). */
@@ -466,19 +493,20 @@ Error and a visible banner, never silence.
     };
 
     /**
-     * Rewrite every member the names apply to, and nobody else.
+     * Rewrite every member that has a personal name, in every room.
      *
-     * A member of a group room — or of a DM whose partner has no personal name —
-     * gets null, which restores the stock value. So leaving a DM, or removing a
-     * name, can never leave a masked member behind.
+     * The name belongs to the person, so the same MXID is renamed in a group
+     * room exactly as in a direct chat (owner decision, plan §6): the room's
+     * member list and the author line of that person's messages follow. Only
+     * named people are touched — every other member gets null, which restores
+     * the stock value, so removing a name can never leave a masked member
+     * behind.
      */
     engine.applyToMembers = function (c) {
       var rooms = typeof c.getRooms === "function" ? c.getRooms() : [];
       for (var i = 0; i < rooms.length; i++) {
         var room = rooms[i];
         if (!room || !isRoomId(room.roomId)) continue;
-        var partner = engine.partnerOf(room.roomId);
-        var name = contactNameFor(engine.names, partner, !!partner);
         var members = null;
         try {
           members = room.currentState && room.currentState.members;
@@ -488,9 +516,29 @@ Error and a visible banner, never silence.
         if (members) {
           Object.keys(members).forEach(function (userId) {
             try {
-              applyMemberName(members[userId], partner && userId === partner ? name : null);
+              applyMemberName(members[userId], contactNameFor(engine.names, userId));
             } catch (e) {
               /* one broken member must not stop the rest */
+            }
+          });
+        }
+        // Events do NOT point at these members: each MatrixEvent carries a
+        // SENTINEL RoomMember (room-state.ts getSentinelMember), created on
+        // demand and frozen at the event's position. The author line and the
+        // room-list preview read that object, so renaming only the live
+        // members leaves the message showing the real display name.
+        var sentinels = null;
+        try {
+          sentinels = room.currentState && room.currentState.sentinels;
+        } catch (e) {
+          sentinels = null;
+        }
+        if (sentinels) {
+          Object.keys(sentinels).forEach(function (userId) {
+            try {
+              applyMemberName(sentinels[userId], contactNameFor(engine.names, userId));
+            } catch (e) {
+              /* one broken sentinel must not stop the rest */
             }
           });
         }
@@ -518,9 +566,9 @@ Error and a visible banner, never silence.
         if (first) memberProto = Object.getPrototypeOf(members[first]);
       }
       var memberHook = memberProto && installMemberHook(memberProto, function (member) {
-        var partner = member && engine.partnerOf(member.roomId);
-        if (!partner || partner !== member.userId) return null;
-        return contactNameFor(engine.names, partner, true);
+        // By person, not by room: a member of a group room carries the same
+        // personal name as in their direct chat.
+        return contactNameFor(engine.names, member && member.userId);
       });
       if (nameHook || memberHook) state.patched = true;
       return !!(nameHook && memberHook);
@@ -572,51 +620,67 @@ Error and a visible banner, never silence.
   /* ------------------------------------------------------------ page wiring */
 
   /**
-   * Repaint the open room: the title surfaces listen to the room, the message
-   * tiles and the room-list preview listen to their events.
+   * Repaint the rooms after a name change: the title surfaces, the message
+   * tiles and the room-list preview.
    *
-   * A display name is not a React prop, so the tiles need the "this tile's body
-   * is stale" signal they already handle — the same one element-web emits after
-   * an edit. They then re-render against the member objects already rewritten
-   * above. The room-list preview is a store value generated from the last
-   * events, so it is refreshed by the action element-web dispatches for a live
-   * timeline event; that makes the store recompute the text (and read the new
-   * name) instead of showing the old one until the next message arrives.
+   * Every room is repainted, not just the one on screen. The personal name
+   * belongs to a person who may appear in several rooms (two DMs with them, a
+   * group), and a render-on-demand surface that is not currently open — the
+   * room-list preview above all — would otherwise keep the old sender name
+   * until the next message arrived in that room.
+   *
+   * A display name is not a React prop, so message tiles need the "this tile's
+   * body is stale" signal they already handle — the same one element-web emits
+   * after an edit. They then re-render against the member objects already
+   * rewritten by the caller. The preview is a store value generated from the
+   * last events, so it is refreshed by the action element-web dispatches for a
+   * live timeline event; that makes the store recompute the text (and read the
+   * new name) instead of showing the old one until the next message.
+   *
+   * *deps* carries the dispatcher and the open-room lookup so the whole
+   * decision is exercisable without a DOM.
    */
-  function repaintRoom(c) {
-    var hash = typeof location !== "undefined" ? location.hash || "" : "";
-    var open = hash.indexOf("#/room/") === 0 ?
-      decodeURIComponent(hash.slice("#/room/".length).split("/")[0].split("?")[0]) : null;
-    var rooms = typeof c.getRooms === "function" ? c.getRooms() : [];
-    for (var i = 0; i < rooms.length; i++) {
-      var room = rooms[i];
-      if (!room) continue;
-      if (typeof room.recalculate === "function") {
-        try {
-          room.recalculate();
-        } catch (e) {
-          /* ignore */
-        }
-      }
-      if (!open || room.roomId !== open) continue;
-      var events = [];
+  function createRepaint(deps) {
+    var dispatcher = deps && deps.dispatcher;
+    var openRoomId = deps && typeof deps.openRoomId === "function" ? deps.openRoomId : function () { return null; };
+    return function repaint(c) {
+      var open = null;
       try {
-        events = room.getLiveTimeline().getEvents();
+        open = openRoomId();
       } catch (e) {
-        events = [];
+        open = null;
       }
-      for (var j = 0; j < events.length; j++) {
-        var event = events[j];
-        if (!event || typeof event.emit !== "function") continue;
-        try {
-          // MatrixEventEvent.Replaced: "the body of this tile is stale".
-          event.emit("Event.replaced", event);
-        } catch (e) {
-          /* one stubborn tile is not a reason to stop */
+      var rooms = typeof c.getRooms === "function" ? c.getRooms() : [];
+      for (var i = 0; i < rooms.length; i++) {
+        var room = rooms[i];
+        if (!room) continue;
+        if (typeof room.recalculate === "function") {
+          try {
+            room.recalculate();
+          } catch (e) {
+            /* one broken room must not stop the others */
+          }
         }
+        var events = [];
+        try {
+          events = room.getLiveTimeline().getEvents();
+        } catch (e) {
+          events = []; // no timeline (an invite, a room being built): nothing to refresh
+        }
+        for (var j = 0; j < events.length; j++) {
+          var event = events[j];
+          if (!event || typeof event.emit !== "function") continue;
+          try {
+            // MatrixEventEvent.Replaced: "the body of this tile is stale".
+            event.emit("Event.replaced", event);
+          } catch (e) {
+            /* one stubborn tile is not a reason to stop */
+          }
+        }
+        refreshRoomListPreview(room, events, dispatcher);
       }
-      refreshRoomListPreview(room, events);
-    }
+      return open;
+    };
   }
 
   /**
@@ -629,8 +693,7 @@ Error and a visible banner, never silence.
    * action is not there (a future renderer), the preview simply refreshes on
    * the next message, as it did before.
    */
-  function refreshRoomListPreview(room, events) {
-    var dispatcher = root.mxDispatcher;
+  function refreshRoomListPreview(room, events, dispatcher) {
     if (!dispatcher || typeof dispatcher.dispatch !== "function") return;
     var last = events && events.length ? events[events.length - 1] : null;
     if (!last) return;
@@ -646,6 +709,22 @@ Error and a visible banner, never silence.
       /* the preview is cosmetic here; never let it break a rename */
     }
   }
+
+  /** The room id currently on screen, from the hash route, or null. */
+  function openRoomIdFromHash() {
+    var hash = typeof location !== "undefined" ? location.hash || "" : "";
+    if (hash.indexOf("#/room/") !== 0) return null;
+    try {
+      return decodeURIComponent(hash.slice("#/room/".length).split("/")[0].split("?")[0]);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  var repaintRoom = createRepaint({
+    dispatcher: root.mxDispatcher,
+    openRoomId: openRoomIdFromHash,
+  });
 
   var engine = createEngine({ repaint: repaintRoom });
 
@@ -1048,6 +1127,7 @@ Error and a visible banner, never silence.
       installMemberHook: installMemberHook,
       applyMemberName: applyMemberName,
       createEngine: createEngine,
+      createRepaint: createRepaint,
     };
     return;
   }
