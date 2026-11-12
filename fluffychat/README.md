@@ -19,7 +19,7 @@ listened to a call on a device yet.
 | Tag | `v2.11.3` (`UPSTREAM_TAG`), commit `6fc4920` |
 | Flutter | `3.47.8` (upstream `.fvmrc`) |
 | Call stack | `livekit_client` 2.13.1, `flutter_webrtc` 1.6.2+hotfix.4 (both from `pubspec.lock`) |
-| Patch | twenty-one: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.mobile`, `0008`-`0011` Plotina name/label/links/visible strings, `0012` intro buttons, `0013` OIDC scheme, `0014` no upstream support, `0015` About dialog, `0016` in-app updater, `0017` personal names for direct chats, `0018` no donation/support prompts, `0019` one "Обновления" settings tab, `0020` build number in the update status, `0021` UTF-8 update manifests (`patches/`); numbers are per directory, so nothing may reuse one |
+| Patch | twenty-one: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.mobile`, `0008`-`0011` Plotina name/label/links/visible strings, `0012` intro buttons, `0013` OIDC scheme, `0014` no upstream support, `0015` About dialog, `0016` in-app updater, `0018` no donation/support prompts, `0019` one "Обновления" settings tab, `0020` build number in the update status, `0021` UTF-8 update manifests, `0023` personal names for contacts (`patches/`); numbers are per directory, so nothing may reuse one. `0017` is retired: it was the room-keyed personal-name model, removed in favour of `0023`, and its number stays unused |
 
 ## What is in this directory
 
@@ -43,7 +43,6 @@ scripts/fetch-model.sh             downloads the model, SHA-256 pinned
 patches/0012-plotina-intro-buttons.patch  intro "Sign in" always on-screen (see below)
 patches/0013-plotina-oidc-scheme.patch    SSO scheme cc.plotina.fluffychat (MAS)
 patches/0016-plotina-self-updater.patch   in-app updater (see "In-app updater")
-patches/0017-plotina-personal-dm-names.patch  personal DM names (see below)
 patches/0018-plotina-remove-donations.patch  no donation/support prompts
 patches/0019-plotina-updates-tab.patch      one "Обновления" settings tab
 patches/0020-plotina-version-details.patch  build number in the update status
@@ -52,10 +51,10 @@ patches/0023-plotina-contact-names.patch    personal names for contacts (see bel
 scripts/version-code.py          the versionCode formula, used by CI and by
                                  scripts/build-android.sh
 tests/intro_plotina_test.dart    Flutter widget regression test for 0012
-tests/plotina_room_names_test.dart  Dart test for 0017 (copied into the
-                                 upstream checkout to run)
 tests/plotina_contact_names_test.dart  Dart test for 0023 (copied into the
                                  upstream checkout to run)
+tests/plotina_contact_name_entry_test.dart  Dart test for the two 0023 entry
+                                 points, chat list and invite banner
 ```
 
 The patch adds only this to `pubspec.yaml`:
@@ -181,73 +180,13 @@ CI step fails the build if any of that is missing.
 - DFN3 adds its algorithmic lookahead (~10 ms). Irrelevant next to network
   jitter, but it is not zero.
 
-## Personal names for direct chats (patch `0017`)
-
-A private name for a direct chat that only this account sees — the same wish as
-in Plotina Element Web/Desktop, and the same data contract, unchanged:
-
-- account data event `cc.plotina.room_aliases`, content
-  `{"<room_id>": "<personal name>"}`;
-- the name is visible to the account owner only, `m.room.name` is never written;
-- an empty value resets the name (the room's key is removed).
-
-`Room.getLocalizedDisplayname()` lives in the `matrix` SDK (pub package
-`matrix 14.1.0`), not in this tree, and there is no fork of it. So the patch adds
-the single point in our sources: `lib/utils/plotina_room_names.dart` with
-`Room.plotinaDisplayname()`, which returns the personal name when one is set for
-a direct chat and `getLocalizedDisplayname()` otherwise. All 20 display calls
-use it plus the invite banner that builds its title by hand: the chat list and
-its filter, the chat app bar title and avatar, chat search (both tabs), the
-invite banner, the room details header, room pills and reply previews, push and
-local notifications, incoming-call dialogs, call kit params, the call page, the
-share dialog and the archive log.
-
-Groups are never renamed: `room.isDirectChat` (that is, the user's `m.direct`
-account data) decides, so a stale alias cannot rename a group, and the write
-path returns early for a non-DM.
-
-The UI is one entry in the chat list context menu (long press / right click) of a
-joined direct chat: "Личное имя" / "Personal name". The dialog is prefilled with
-the current personal name; the hint shows the room's real name; leaving the field
-empty resets it. The write goes through `client.setAccountData` only and is
-applied to the in-memory account data immediately, so the screen behind the
-dialog re-renders without a restart.
-
-A name set elsewhere (Element Web/Desktop) arrives as account data in `/sync`,
-and FluffyChat already rebuilds the chat list on an account-data-only sync
-(`SyncUpdate.hasRoomUpdate`), so no polling or extra listener is needed.
-
-Robustness: the parser accepts the decoded map or a JSON string, trims values,
-skips blank values, non-strings and keys that are not room ids (a `!` sigil —
-which room v12 opaque ids keep), and returns an empty map for missing or corrupt
-data instead of throwing.
-
-Tests: `tests/plotina_room_names_test.dart`, 19 cases — parsing (empty,
-malformed JSON, junk values, opaque room v12 ids), the DM/group decision, set and
-reset semantics, and a real `Client` where the write is proven to hit
-`/user/.../account_data/cc.plotina.room_aliases` only: no `/state/` request and
-no `m.room.name` in any request body. The patch carries the same file at
-`test/plotina_room_names_test.dart`, so a patched checkout can run it right away:
-
-```
-flutter pub get && flutter gen-l10n
-flutter test test/plotina_room_names_test.dart
-```
-
-Not covered: the dialog itself has no widget test (it is plain
-`showTextInputDialog` plus a menu entry), and the end-to-end check with two
-accounts on a real homeserver belongs to QA. A name changed in *another* client
-while the chat itself is open reaches the chat list on the next sync, but the app
-bar title of the already-open chat re-renders on its next room update (or on
-re-entering the chat), not instantly. The hidden-notification-preview setting was
-not re-checked for names in notifications.
-
 ## Personal names for contacts (patch `0023`)
 
-A second, *contact*-level feature, separate from the DM names above: rename a
-person, not a chat keyed by room id. This one also covers the author line under a
-message, the participant list and mentions, so it lives in the matrix SDK rather
-than at the ~70 call sites in this tree.
+Rename a *person*, not a chat: the name is keyed by the contact's mxid, so it
+applies to the author line under a message, the participant list, mentions, the
+DM title, the chat list row and the invite banner, and it is the same name in
+every direct chat with that person. This replaced an earlier room-keyed model;
+only one model exists now.
 
 **Storage.** `cc.plotina.contact_names`, global account data, one map:
 
@@ -258,6 +197,8 @@ than at the ~70 call sites in this tree.
 Private to the account and never written to `m.room.member`, so nobody else's
 profile changes and no room state moves. A reset (blank field) removes the key;
 when the last name goes the event body is `{}` with no empty values left in it.
+Nothing is ever written under `/state/`, and `m.room.name` is never touched —
+a group keeps its own name.
 
 **How it is applied.** `fluffychat/patches/0023` overrides the `matrix` package
 with our fork `plotina-cc/matrix-dart-sdk` (tag `v14.1.0-plotina.1`, branch
@@ -276,20 +217,37 @@ Coverage therefore is:
 | --- | --- |
 | Author under a message (`message.dart`) | yes |
 | Participant list, member search filter | yes |
-| DM / chat title bar | yes, unless a room-level alias from patch `0017` is set for that chat: `plotinaDisplayname()` checks `cc.plotina.room_aliases` first, so a per-chat name wins over the contact name |
+| DM / chat title bar, chat list row | yes |
+| Invite banner (`chat_event_list.dart`) | yes — for a direct chat the contact name wins over the room name the inviter set; a group keeps its own name |
 | Mentions and mention fragments | yes |
 | Muted/pinned/room list names for DMs | yes |
 | Push notification texts | no — they are built server-side / in the background isolate from the raw member state |
 | Anything on the other side of the chat | no — by design, this is a private name |
 
+**Two places outside the resolver.** Everything above is free, because the name
+is substituted inside the SDK. Two call sites name a person *without* going
+through it, and `lib/utils/plotina_contact_name_entry.dart` holds their decision:
+
+- *the chat list entry* (`lib/pages/chat_list/chat_list.dart`) writes a name, so
+  it has to know whose: `plotinaPersonalNameContactOf(room)` is
+  `room.directChatMatrixID` (the `m.direct` partner, or the inviter of an
+  `is_direct` invite), and `setPlotinaPersonalNameOfChat` writes that mxid. The
+  dialog is prefilled with the contact's personal name and hints at the name
+  everyone else sees (`rawDisplayName`);
+- *the invite banner* (`lib/pages/chat/chat_event_list.dart`) used to build its
+  label inline from `room.name` and the canonical alias, which bypassed every
+  resolver. `plotinaInviteBannerName` gives the contact's personal name for a
+  direct chat (falling back to the inviter's mxid when `m.direct` does not list
+  the room yet), and keeps `m.room.name`, then the canonical alias, for a group
+  — a group is never renamed by a contact name. The inviter is already named by
+  the sentence around the label, and that name goes through the resolver.
+
 **UI.** "Личное имя" is an entry in the member context menu
 (`member_actions_popup_menu_button.dart`, offered for other people, not
-yourself). It reuses `showTextInputDialog` and the `plotinaPersonalName*` strings
-that patch `0017` already ships, so `intl_en.arb`/`intl_ru.arb` carry one set of
-strings for both features and the two patches do not conflict: `0017` appends
-them at the end of the ARB files, `0023` only reads them. `0023` does not touch
-`cc.plotina.room_aliases` or `0017`'s code at all; the old room-bound model stays
-in place until it is removed by its own card.
+yourself) and in the chat list context menu of a joined direct chat
+(`chat_list.dart`). Both use `showTextInputDialog` and the `plotinaPersonalName*`
+strings. The chat list entry is not offered for a group or an invite: there is
+no contact to rename.
 
 **Robustness.** The parser accepts the decoded map or a JSON string, trims
 values, and skips blank values, non-strings and keys that are not mxids, returning
@@ -302,16 +260,34 @@ tolerance, set/reset semantics (a reset writes `{}`), the resolver in a real
 `Client` (name set, name absent, empty map, junk, `rawDisplayName` intact, DM
 title from heroes, mentions) and a real write proven to hit
 `/user/.../account_data/cc.plotina.contact_names` only — no `/state/` request and
-no `m.room.member` in any body. The patch carries the same file at
-`test/plotina_contact_names_test.dart`:
+no `m.room.member` in any body.
+
+`tests/plotina_contact_name_entry_test.dart`, 25 cases — the two entry points
+above: the chat list entry writes the contact's mxid and nothing else (no room
+key, no `/state/`, no `m.room.member`, no room-keyed account data), a reset
+writes `{}`, a group is never written to, two direct chats with one person share
+the name; the invite banner prefers the contact name over a room name the
+inviter set, keeps a group's own name and alias, falls back to the "invited by"
+sentence when there is neither, and never throws on junk. Three of them assert
+the call sites are wired to these helpers and that nothing in `lib/` still
+reaches for the removed room-keyed model.
+
+Both files ship in the patch (`test/…`), so a patched checkout can run them right
+away:
 
 ```
 flutter pub get && flutter gen-l10n
 flutter test test/plotina_contact_names_test.dart
+flutter test test/plotina_contact_name_entry_test.dart
 ```
 
-Not covered: the dialog has no widget test, and the end-to-end check with two
-accounts on a real homeserver belongs to QA.
+Not covered: the dialogs have no widget test (they are plain
+`showTextInputDialog` plus a menu entry), and the end-to-end check with two
+accounts on a real homeserver belongs to QA. Push and local notification titles
+are not covered (see the table). A name changed in *another* client while the
+chat itself is open reaches the chat list on the next sync, but the app bar
+title of the already-open chat re-renders on its next room update (or on
+re-entering the chat), not instantly.
 
 ## Building
 
