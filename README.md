@@ -65,7 +65,8 @@ Cinny Desktop (Linux):
 ```
 cd cinny
 npm ci && npm run build           # inside the upstream checkout
-python3 apply-noise.py --dist <upstream>/cinny/dist --noise noise
+python3 scripts/mount-element-call.py --dist <upstream>/cinny/dist --lock element-call.lock.json
+python3 apply-noise.py --dist <upstream>/cinny/dist
 python3 branding.py --dist <upstream>/cinny/dist
 ```
 

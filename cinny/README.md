@@ -30,13 +30,15 @@ and aborts the build if the settings default is missing from the bundle.
 ```
 config.json          default homeserver (plotina.cc), no featured communities
 UPSTREAM_TAG         the cinny-desktop tag we build against
-apply-noise.py       copies noise/ into dist and inserts the tags into the call document
+element-call.lock.json  tag + URL + sha256 of OUR Element Call archive (same pin as Desktop)
+apply-noise.py       finishes the dist: removes any stale noise/ copy, adds licences, gates the call frame
 branding.py          applies Plotina icons, HTML metadata and manifest to the dist
 tests/               unit tests for branding.py (python3 -m unittest discover -s cinny/tests)
                      and for the DM-name patch (scripts/test-dm-aliases.sh)
 tauri.plotina.json   build override: no beforeBuildCommand, updater disabled
 noise.lock.json      URL and sha256 of the two model binaries (wasm and .tar.gz)
 scripts/build.sh     local Linux build (AppImage + deb)
+scripts/mount-element-call.py  installs our Element Call into dist/public/element-call/
 scripts/fetch-noise.py  downloads the model into noise/, verifying sha256
 windows/             our NSIS installer: installer.nsi + build-installer.sh
 ```
@@ -46,9 +48,10 @@ windows/             our NSIS installer: installer.nsi + build-installer.sh
 Static files on the edge (`/srv/cinny`), built by
 `.github/workflows/build-cinny-web.yml` and unpacked there unchanged: the
 workflow takes the tag from `UPSTREAM_TAG`, applies the patches in `patches/`
-(Sentry, branding, SSO handoff, the Updates page and the noise settings block),
-embeds `noise/` (models fetched and verified
-against `noise.lock.json`) and uploads `plotina-lite-web.tar.gz` with
+(Sentry, branding, SSO handoff, the Updates page, the noise settings block and
+the call-widget patch), mounts our Element Call archive into
+`public/element-call/` (pin and digest in `element-call.lock.json`; the denoiser
+travels inside the mount) and uploads `plotina-lite-web.tar.gz` with
 `build-info.json` next to it (release, upstream tag, the repository commit and
 the Cinny commit, run).
 
@@ -65,16 +68,21 @@ Cache headers are the part Caddy does own: `/noise/dfn/*` for 30 days,
 `/noise/*.js` as `no-cache`, and `index.html` as `no-cache` so a new shell with
 new asset hashes is picked up.
 
-**Why the call frame is patched and the shell is not.** Cinny renders calls in
-an iframe pointing at `public/element-call/index.html`; that iframe has its own
-`window`, so wrapping `getUserMedia` in the parent page would never see the
-call. The call frame gets `logic.js` + `boot.js` through `apply-noise.py`.
-The parent needs no noise script at all: the Settings → General block is React
-(`patches/0009`) and shares the `plotina.noise.*` localStorage keys with the
-frame — a write there fires a `storage` event in the call, where boot.js
-retunes the running processors.
+**Why the call frame carries the denoiser and the shell does not.** Cinny renders
+calls in an iframe pointing at `public/element-call/index.html`, and that frame is
+now OUR Element Call (`scripts/mount-element-call.py`, the same archive Desktop
+ships) rather than upstream's embedded 0.20.1. The frame has its own `window`, so
+wrapping `getUserMedia` in the parent page would never see the call; the denoiser
+therefore travels INSIDE the mount (`public/element-call/noise/`), where the
+archive's own `index.html` loads `logic.js` + `boot.js`. The parent needs no noise
+script at all: the Settings → General block is React (`patches/0009`) and shares
+the `plotina.noise.*` localStorage keys with the frame — same origin, so a write
+there fires a `storage` event in the call, where boot.js retunes the running
+processors. The dist root used to get a 50 MB copy of `noise/` that no frame ever
+fetched; `apply-noise.py` now removes that copy if it finds one.
 
-Verifying: `https://cinny.plotina.cc/noise/logic.js` returns 200; Settings →
+Verifying: `https://cinny.plotina.cc/public/element-call/noise/logic.js` returns 200
+(the denoiser lives inside the mount now, not at the site root); Settings →
 General shows the noise slider above Appearance with the default level 60
 (`localStorage: plotina.noise.level`); inside a call, in the iframe,
 `window.__plotinaNoise.isSupported()` is `true` and `window.__plotinaNoiseStats`
@@ -195,8 +203,8 @@ a branch name.
 `dist/assets` plus the root service worker — and the scripts they describe to
 `$WORK/sourcemaps`, then removes the maps from `dist`, so neither the
 installers nor `/srv/cinny` ship the TypeScript source. `dist/public` is left
-alone: it holds packages we do not build (the embedded Element Call app, the
-pdf.js worker) and their symbols belong to whoever builds them. CI injects
+alone: it holds packages we do not build (our mounted Element Call, the pdf.js
+worker) and their symbols belong to whoever builds them. CI injects
 debug ids with sentry-cli and uploads that copy:
 
 ```bash
@@ -229,7 +237,10 @@ cp ../noise/logic.js ../noise/boot.js noise/
 cp -a ../noise/vendor/. noise/vendor/
 python3 scripts/fetch-noise.py
 cp config.json upstream/config.json
-python3 apply-noise.py --dist upstream/cinny/dist --noise noise
+# Our Element Call replaces upstream's embedded 0.20.1 in dist/public/element-call/
+python3 scripts/mount-element-call.py --dist upstream/cinny/dist \
+  --lock element-call.lock.json --work "$PWD/.build/element-call"
+python3 apply-noise.py --dist upstream/cinny/dist
 python3 branding.py --dist upstream/cinny/dist --brand "Plotina Lite Desktop"
 npm run tauri -- build --config "$PWD/tauri.plotina.json"
 ```
