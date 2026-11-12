@@ -1,0 +1,51 @@
+diff --git a/src/widget.ts b/src/widget.ts
+index b35e335..9d2fb12 100644
+--- a/src/widget.ts
++++ b/src/widget.ts
+@@ -9,6 +9,7 @@ import { logger } from "matrix-js-sdk/lib/logger";
+ import {
+   EventType,
+   createRoomWidgetClient,
++  type IContent,
+   type MatrixClient,
+ } from "matrix-js-sdk";
+ import {
+@@ -44,6 +45,18 @@ export enum ElementWidgetActions {
+   //   video_enabled?: boolean
+   // }
+   DeviceMute = "io.element.device_mute",
++  /**
++   * Plotina: an account-data write, from the widget to the host.
++   *
++   * matrix-widget-api 1.20 has no action for writing account data (its only
++   * account-data verb is com.beeper.read_room_account_data, a read) and the
++   * room widget client is created from baseUrl/userId/deviceId only, so it has
++   * no access token and a direct setAccountData can only answer 401. A custom
++   * action is the protocol's normal extension point -- io.element.join and
++   * im.vector.hangup above work the same way -- so the host performs the write
++   * with its own authenticated client.
++   */
++  SetAccountData = "cc.plotina.set_account_data",
+ }
+ 
+ export interface JoinCallData {
+@@ -193,6 +206,19 @@ export const initializeWidget = (
+         false,
+       );
+ 
++      // Plotina: every account-data write in this app (the per-participant
++      // volume map, patch 0004's PersistentVolume) goes to the host through the
++      // action above. Wrapping the client here rather than editing each call
++      // site means a write added later cannot bypass the channel.
++      client.setAccountData = (
++        type: string,
++        content: IContent,
++      ): Promise<{}> =>
++        api.transport.send(ElementWidgetActions.SetAccountData, {
++          type,
++          content,
++        });
++
+       const clientPromise = async (): Promise<MatrixClient> => {
+         // Wait for the config file to be ready (we load very early on so it might not
+         // be otherwise)
