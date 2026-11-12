@@ -49,6 +49,11 @@ RUN set -eux; \
 
 COPY noise/logic.js /app/noise/logic.js
 COPY noise/boot.js /app/noise/boot.js
+# The two files the in-call widget loads from ../../noise/ (see the widget layer
+# below). logic.js and boot.js above serve the app document; these two own the
+# microphone path inside the call.
+COPY noise/plotina-dfn.js /app/noise/plotina-dfn.js
+COPY noise/plotina-panel.js /app/noise/plotina-panel.js
 COPY noise/vendor/ /app/noise/vendor/
 # DPDFNet experimental backend: the two big binaries (ort wasm + model) are
 # gitignored and pinned by SHA-256 in noise/dpdfnet.lock.json — same policy as
@@ -200,4 +205,59 @@ RUN set -eux; \
     grep -q '"name": "Plotina Web"' /app/manifest.json; \
     grep -q 'noise/boot.js' /app/index.html; \
     grep -q 'noise/logic.js' /app/index.html
+# Our Element Call, not the upstream widget. The base image ships a stock
+# Element Call at /app/widgets/element-call/ (the same tarball build the desktop
+# app used to carry): no per-person volume memory (element-call patch 0004) and
+# no hide-this-stream control (0005). The widget is replaced wholesale by the
+# archive .github/workflows/build-element-call.yml publishes, pinned by tag +
+# sha256 in element-desktop/element-call.lock.json — one pin for both clients,
+# staged into this context by scripts/build-image.sh (nothing is copied into
+# git: two pins would drift).
+#
+# scripts/element-call-widget.py is an adapter over the desktop checker (the
+# core file next to it, byte-identical to element-desktop/scripts/
+# element-call-widget.py), so the two clients cannot fork what "our widget"
+# means. The only difference is where the widget is served from: Element Web
+# serves /app from the site root and its bundle opens ./widgets/element-call/
+# (bundles/<hash>/6312.js), so every root-absolute asset URL in the archive is
+# rebased onto /widgets/element-call instead of the desktop's /webapp/... mount.
+#
+# The archive's own noise/ tree is dropped: /app/noise/ above already serves the
+# layer, and the widget's index loads it through ../../noise/ (= /noise/ under
+# the root), exactly like the app document does. A second copy would initialize
+# the denoiser twice and add 24 MB to the image.
+#
+# --check in the same layer is the gate: a build that ends up with anything but
+# our bundle fails here instead of shipping a widget without both features. The
+# greps after it are direct evidence in the final bytes, independent of the
+# helper, and print their counts so a build log shows what landed.
+COPY scripts/element-call-widget.py /tmp/element-call-widget.py
+COPY scripts/element-call-widget-core.py /tmp/element-call-widget-core.py
+COPY element-call.lock.json /tmp/element-call.lock.json
+RUN set -eux; \
+    apk add --no-cache --virtual .widget python3; \
+    python3 /tmp/element-call-widget.py \
+      --lock /tmp/element-call.lock.json --work /tmp/ec-work \
+      --webapp /app --url-prefix /widgets/element-call; \
+    python3 /tmp/element-call-widget.py \
+      --check --webapp /app --url-prefix /widgets/element-call; \
+    rm -rf /tmp/ec-work /tmp/element-call-widget.py /tmp/element-call-widget-core.py \
+      /tmp/element-call.lock.json; \
+    apk del .widget; \
+    bundle="$(ls /app/widgets/element-call/assets/index-*.js)"; \
+    echo "voice_volumes: $(grep -o cc.plotina.voice_volumes "$bundle" | wc -l)"; \
+    echo "setSubscribed: $(grep -o setSubscribed "$bundle" | wc -l)"; \
+    echo "hide_stream: $(grep -o video_tile.hide_stream "$bundle" | wc -l)"; \
+    echo "hide_stream_ru: $(grep -o 'Не показывать этот стрим' /app/widgets/element-call/assets/ru-app-*.json | wc -l)"; \
+    test "$(grep -o cc.plotina.voice_volumes "$bundle" | wc -l)" -gt 0; \
+    test "$(grep -o setSubscribed "$bundle" | wc -l)" -gt 0; \
+    test "$(grep -o video_tile.hide_stream "$bundle" | wc -l)" -gt 0; \
+    grep -q 'Не показывать этот стрим' /app/widgets/element-call/assets/ru-app-*.json; \
+    grep -q 'src="/widgets/element-call/assets/' /app/widgets/element-call/index.html; \
+    ! grep -rqs 'src="/assets/' /app/widgets/element-call/index.html; \
+    ! test -e /app/widgets/element-call/noise; \
+    test -s /app/noise/plotina-dfn.js; \
+    test -s /app/noise/plotina-panel.js; \
+    ! test -e /tmp/element-call-widget.py
+
 USER nginx

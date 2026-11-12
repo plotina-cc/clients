@@ -23,12 +23,22 @@ upstream".
 
 ```
 config/element/
-  Dockerfile              overlay image (pinned FROM; branding + noise)
+  Dockerfile              overlay image (pinned FROM; branding + noise + our
+                          Element Call)
+  element-call.lock.json  our Element Call (tag + URL + sha256); byte copy of
+                          ../element-desktop/element-call.lock.json
   branding.py             brand pass over /app (index.html, error-view,
                           theme-*-custom.css, config, logos)
   config.json             Element Web runtime config, including local Plotina logo
                           and branding.welcome_background_url (/plotina-bg.png)
   manifest.json           Plotina PWA manifest
+  scripts/
+    element-call-widget.py      adapter: installs/verifies our Element Call at
+                                /app/widgets/element-call (Web URL prefix)
+    element-call-widget-core.py the swap + checks; byte copy of
+                                ../element-desktop/scripts/element-call-widget.py
+    build-image.sh              assembles the docker context (noise/ included)
+    smoke-image.sh              serves the built image, checks brand, noise, EC
   plotina-theme.js        theme bootstrap: seeds mx_local_settings.theme from
                           prefers-color-scheme before the bundle loads, and
                           migrates theme ids saved before the Mint rename
@@ -238,6 +248,60 @@ Pin the deploy to the digest, never to `latest`. CI does not deploy: the image i
 served from golova, which pulls the digest by hand. If the package stays private,
 the host needs a `read:packages` login; making it public (org → Packages →
 element-web → visibility) removes that step.
+
+## Element Call: our widget, not the upstream one
+
+The pinned upstream image ships a stock Element Call at
+`/app/widgets/element-call/`: none of our patches (`element-call/patches/`), so
+a web user gets no per-person volume memory (0004) and no hide-this-stream
+control (0005). The image replaces that widget wholesale, the same way Element
+Desktop does.
+
+- **What replaces it.** The archive `.github/workflows/build-element-call.yml`
+  publishes (`plotina-element-call.tar.gz`), pinned by tag + sha256 in
+  `element-web/element-call.lock.json` — a byte copy of
+  `../element-desktop/element-call.lock.json`, so both clients ship the same
+  Element Call and neither can re-pin alone. The Dockerfile downloads it at
+  build time, verifies the digest and installs it at `widgets/element-call`.
+- **Where it is served.** Element Web serves `/app` from the site root and its
+  bundle opens `./widgets/element-call/` (`bundles/<hash>/6312.js`), so the
+  widget lives at `/widgets/element-call/` and every root-absolute `/assets/…`
+  URL in the archive is rebased onto that path. Desktop serves the webapp from
+  `vector://vector/webapp/` and rebases onto `/webapp/widgets/element-call`
+  instead; that prefix is the only difference, so the swap itself is one
+  implementation — `scripts/element-call-widget.py` is an adapter over
+  `scripts/element-call-widget-core.py`, a byte copy of
+  `../element-desktop/scripts/element-call-widget.py` guarded by a drift test.
+- **Noise layer is not duplicated.** `/app/noise/` already carries
+  `plotina-dfn.js` and `plotina-panel.js`, and the widget's index loads them
+  through `../../noise/` — which *is* `/noise/` under the site root. The
+  archive's own 24 MB `noise/` tree is dropped at install; a second copy would
+  initialize the denoiser twice.
+- **The build fails if ours did not land.** The widget layer runs the same
+  `--check` the desktop build runs (bundle markers, the Russian label for the
+  hide-stream control, the Plotina markers, no root-absolute asset URL, no
+  widget-local `noise/`), then greps the final bytes for
+  `cc.plotina.voice_volumes`, `setSubscribed` and `video_tile.hide_stream` and
+  prints the counts. `scripts/smoke-image.sh` re-checks the same three markers
+  over HTTP on the running container, so a publish cannot ship a widget without
+  them.
+
+```bash
+# the swap against an unpacked /app, exactly as the Dockerfile runs it
+python3 scripts/element-call-widget.py --lock ../element-desktop/element-call.lock.json \
+  --work /tmp/ec --webapp /app --url-prefix /widgets/element-call
+python3 scripts/element-call-widget.py --check --webapp /app --url-prefix /widgets/element-call
+
+# what the image carries, straight from the bundle
+docker cp "$(docker create IMAGE)":/app/widgets/element-call/assets/index-*.js /tmp/ec.js
+grep -o cc.plotina.voice_volumes /tmp/ec.js | wc -l   # > 0
+grep -o setSubscribed /tmp/ec.js | wc -l              # > 0
+```
+
+`tests/test_element_call_widget.py` pins the whole contract. Its negative
+control is the upstream layout itself (the stock widget at `./assets/index-…js`
+with none of our markers): the check must reject it, exit non-zero, and pass
+only after the swap.
 
 ## Deploy and rollback
 
