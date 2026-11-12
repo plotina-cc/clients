@@ -282,15 +282,19 @@ def main() -> None:
         return
 
     sha = ""
-    if args.archive:
-        tarball = Path(args.archive).resolve()
-    elif args.lock:
+    tarball = None
+    if args.lock:
         tool = _desktop_tool()
         lock = tool.read_lock(Path(args.lock))
-        work = Path(args.work).resolve() if args.work else Path(args.lock).resolve().parent / ".build" / "element-call"
-        work.mkdir(parents=True, exist_ok=True)
-        tarball = tool.fetch_archive(lock, work)
         sha = lock["sha256"]
+        if args.archive:
+            tarball = Path(args.archive).resolve()
+        else:
+            work = Path(args.work).resolve() if args.work else Path(args.lock).resolve().parent / ".build" / "element-call"
+            work.mkdir(parents=True, exist_ok=True)
+            tarball = tool.fetch_archive(lock, work)
+    elif args.archive:
+        tarball = Path(args.archive).resolve()
     else:
         ap.error("one of --archive or --lock is required")
 

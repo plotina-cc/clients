@@ -80,15 +80,20 @@ the bundle already sends the action itself (archives built with EC patch 0006).
     if (!entry) return false;
     pending.delete(message.requestId);
     if (entry.timer) window.clearTimeout(entry.timer);
-    var error = message.data && message.data.error;
+    // matrix-widget-api answers an action by echoing the request with a
+    // `response` field (PostmessageTransport.reply); a toWidget envelope is
+    // only used for host-initiated actions.
+    var payload = message.response !== undefined ? message.response : message.data;
+    var error = payload && payload.error;
     if (error) entry.reject(new Error(error.message || "widget refused the write"));
-    else entry.resolve(message.data || {});
+    else entry.resolve(payload || {});
     return true;
   }
 
   function onMessage(event) {
     var message = event && event.data;
-    if (!message || message.api !== "toWidget") return;
+    if (!message || !message.requestId) return;
+    if (!pending.has(message.requestId)) return;
     if (message.widgetId && message.widgetId !== widgetId) return;
     settle(message);
   }

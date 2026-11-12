@@ -30,12 +30,6 @@ git submodule update --init --recursive --depth 1
 # local name that is easy to filter out in the dashboard.
 SENTRY_RELEASE="${VITE_SENTRY_RELEASE:-cinny@$(git -C "$ROOT" describe --tags --exact-match 2>/dev/null || printf '%s-local' "$TAG")}"
 
-echo "==> noise assets"
-python3 "$ROOT/scripts/fetch-noise.py"
-# DPDFNet backend binaries (ort wasm + model): pinned by dpdfnet.lock.json,
-# same policy as the DFN3 assets above. Without them apply-noise.py fails.
-python3 "$(dirname "$ROOT")/noise/scripts/fetch-dpdfnet.py" --dest "$ROOT/noise"
-
 echo "==> plotina patches ($SENTRY_RELEASE)"
 cd cinny
 for PATCH in "$ROOT"/patches/*.patch; do
@@ -83,7 +77,10 @@ for PATCH in "$ROOT"/desktop-patches/*.patch; do
   fi
 done
 cp "$ROOT/config.json" config.json
-python3 "$ROOT/apply-noise.py" --dist cinny/dist --noise "$ROOT/noise"
+echo "==> element call (our archive, pinned next to the desktop one)"
+python3 "$ROOT/scripts/mount-element-call.py" --dist cinny/dist \
+  --lock "$ROOT/element-call.lock.json" --work "$WORK/element-call"
+python3 "$ROOT/apply-noise.py" --dist cinny/dist
 python3 "$ROOT/branding.py" --dist cinny/dist --brand "Plotina Lite Desktop"
 
 # Tauri gets the provisional Plotina mark for the window, the launcher and the

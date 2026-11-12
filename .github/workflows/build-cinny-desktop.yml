@@ -98,18 +98,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
-      - name: Assemble the noise bundle
-        working-directory: cinny
-        shell: bash
-        run: |
-          mkdir -p noise/vendor
-          cp ../noise/logic.js ../noise/boot.js noise/
-          cp -a ../noise/vendor/. noise/vendor/
-          python scripts/fetch-noise.py
-          # DPDFNet backend binaries (ort wasm + model): gitignored and pinned
-          # by noise/dpdfnet.lock.json, same policy as the DFN3 assets above.
-          python ../noise/scripts/fetch-dpdfnet.py --dest noise
-
       # The noise layer is baked into the bundle; its tests must not regress.
       # The pinned binaries are fetched first: the python suite verifies their
       # SHA-256 digests, the node suite runs a real inference pass, and the
@@ -236,7 +224,12 @@ jobs:
           cp config.json upstream/config.json
           cp config.json upstream/cinny/config.json
           cp config.json upstream/cinny/dist/config.json
-          python apply-noise.py --dist upstream/cinny/dist --noise noise
+          # Upstream's embedded 0.20.1 is gone: the frame is our Element Call
+          # archive (cinny/element-call.lock.json, same pin as Desktop), which
+          # carries its own noise/ inside the mount.
+          python scripts/mount-element-call.py --dist upstream/cinny/dist \
+            --lock element-call.lock.json --work "$RUNNER_TEMP/element-call"
+          python apply-noise.py --dist upstream/cinny/dist
           python branding.py --dist upstream/cinny/dist --brand "Plotina Lite Desktop"
 
       - name: Verify the patch landed
@@ -246,13 +239,16 @@ jobs:
           # Patch 0009 compiles the noise settings into the bundle; the old
           # shell injection must be gone for the check to stay meaningful.
           grep -Raqs 'plotina-noise-settings' upstream/cinny/dist/assets
-          grep -q 'noise/boot.js' upstream/cinny/dist/public/element-call/index.html
-          test -f upstream/cinny/dist/noise/dfn/v3/pkg/df_bg.wasm
-          test -f upstream/cinny/dist/noise/vendor/dfn.esm.js
-          test -f upstream/cinny/dist/noise/vendor/dpdfnet.esm.js
-          test -f upstream/cinny/dist/noise/vendor/ort/ort.wasm.bundle.min.mjs
-          test -f upstream/cinny/dist/noise/vendor/ort/ort-wasm-simd-threaded.wasm
-          test -f upstream/cinny/dist/noise/vendor/dpdfnet/dpdfnet2_48khz_hr/model_stateful.onnx
+          # The dist carries OUR frame: no upstream widget, no dist-level
+          # noise copy, and the denoiser models live inside the mount.
+          python scripts/mount-element-call.py --dist upstream/cinny/dist --check
+          if grep -Raqs 'element-call-embedded' upstream/cinny/dist; then
+            echo "upstream embedded widget survived in the dist" >&2
+            exit 1
+          fi
+          test ! -e upstream/cinny/dist/noise
+          grep -Raqs 'hide_stream' upstream/cinny/dist/public/element-call/assets
+          test -f upstream/cinny/dist/public/element-call/noise/dfn/v3/pkg/df_bg.wasm
           test -s upstream/cinny/dist/LICENSE-AGPL-3.0
           test -s upstream/cinny/dist/NOTICE
           grep -q 'plotina-icon.svg' upstream/cinny/dist/index.html

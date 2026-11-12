@@ -97,17 +97,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Assemble the noise bundle
-        working-directory: cinny
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p noise/vendor
-          cp ../noise/logic.js ../noise/boot.js noise/
-          cp -a ../noise/vendor/. noise/vendor/
-          python scripts/fetch-noise.py
-          python ../noise/scripts/fetch-dpdfnet.py --dest noise
-
       - name: Apply the Plotina patches (incl. SSO 0007)
         working-directory: cinny
         shell: bash
@@ -135,7 +124,12 @@ jobs:
           cp config.json upstream/config.json
           cp config.json upstream/cinny/config.json
           cp config.json upstream/cinny/dist/config.json
-          python apply-noise.py --dist upstream/cinny/dist --noise noise
+          # Upstream's embedded 0.20.1 is gone: the frame is our Element Call
+          # archive (cinny/element-call.lock.json, same pin as Desktop), which
+          # carries its own noise/ inside the mount.
+          python scripts/mount-element-call.py --dist upstream/cinny/dist \
+            --lock element-call.lock.json --work "$RUNNER_TEMP/element-call"
+          python apply-noise.py --dist upstream/cinny/dist
           python branding.py --dist upstream/cinny/dist --brand "Plotina Lite Desktop"
 
       - name: Verify the SSO handoff marker survived
@@ -150,6 +144,9 @@ jobs:
           # adds the Settings -> General noise block the same way.
           grep -Raqs 'plotina-updates-page' upstream/cinny/dist/assets
           grep -Raqs 'plotina-noise-settings' upstream/cinny/dist/assets
+          # The served frame is ours, not upstream's embedded 0.20.1.
+          python scripts/mount-element-call.py --dist upstream/cinny/dist --check
+          test ! -e upstream/cinny/dist/noise
           test -f upstream/cinny/dist/sw.js
 
       - name: Package the web dist

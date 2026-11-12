@@ -96,24 +96,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The noise layer is part of the served build: the two script tags are
-      # injected into the shell, and the model comes from the pinned lock.
-      - name: Assemble the noise bundle
-        working-directory: cinny
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p noise/vendor
-          cp ../noise/logic.js ../noise/boot.js noise/
-          cp -a ../noise/vendor/. noise/vendor/
-          python scripts/fetch-noise.py
-          # DPDFNet backend binaries (ort wasm + model): gitignored and pinned
-          # by noise/dpdfnet.lock.json, same policy as the DFN3 assets above.
-          python ../noise/scripts/fetch-dpdfnet.py --dest noise
-
-      # The noise layer is baked into the served dist; its tests must not
-      # regress. The fetch above filled cinny/noise, this one the repo-level
-      # noise/ the suites read from (digest assertions + headless smoke).
+      # The denoiser ships inside the mounted Element Call frame (its own
+      # noise/ tree), so the dist needs no copy of it at the root.
+      # The noise layer still ships inside the call frame, so its suites must
+      # not regress; they read the repo-level noise/ fetched here (digest
+      # assertions + headless smoke).
       - name: Fetch DPDFNet assets for the tests
         run: python3 noise/scripts/fetch-dpdfnet.py
 
@@ -207,7 +194,12 @@ jobs:
           cp config.json upstream/config.json
           cp config.json upstream/cinny/config.json
           cp config.json upstream/cinny/dist/config.json
-          python apply-noise.py --dist upstream/cinny/dist --noise noise
+          # Upstream's embedded 0.20.1 is gone: the frame is our Element Call
+          # archive (cinny/element-call.lock.json, same pin as Desktop), which
+          # carries its own noise/ inside the mount.
+          python scripts/mount-element-call.py --dist upstream/cinny/dist \
+            --lock element-call.lock.json --work "$RUNNER_TEMP/element-call"
+          python apply-noise.py --dist upstream/cinny/dist
           python branding.py --dist upstream/cinny/dist --brand "Plotina Lite Web"
 
       - name: Verify the artifact
@@ -225,13 +217,16 @@ jobs:
             echo "stale noise injection survived in the shell" >&2
             exit 1
           fi
-          grep -q 'noise/boot.js' "$dist/public/element-call/index.html"
-          test -f "$dist/noise/dfn/v3/pkg/df_bg.wasm"
-          test -f "$dist/noise/vendor/dfn.esm.js"
-          test -f "$dist/noise/vendor/dpdfnet.esm.js"
-          test -f "$dist/noise/vendor/ort/ort.wasm.bundle.min.mjs"
-          test -f "$dist/noise/vendor/ort/ort-wasm-simd-threaded.wasm"
-          test -f "$dist/noise/vendor/dpdfnet/dpdfnet2_48khz_hr/model_stateful.onnx"
+          # The dist carries OUR frame: no upstream widget, no dist-level
+          # noise copy, and the denoiser models live inside the mount.
+          python scripts/mount-element-call.py --dist upstream/cinny/dist --check
+          if grep -Raqs 'element-call-embedded' upstream/cinny/dist; then
+            echo "upstream embedded widget survived in the dist" >&2
+            exit 1
+          fi
+          test ! -e upstream/cinny/dist/noise
+          grep -Raqs 'hide_stream' upstream/cinny/dist/public/element-call/assets
+          test -f upstream/cinny/dist/public/element-call/noise/dfn/v3/pkg/df_bg.wasm
           test -f "$dist/config.json"
           test -s "$dist/LICENSE-AGPL-3.0"
           test -s "$dist/NOTICE"

@@ -107,7 +107,7 @@ test('frame: setAccountData becomes a widget action for cc.plotina types', async
   assert.equal(sent.message.data.type, TYPE);
   assert.deepEqual(sent.message.data.content, { '@a:b': { volume: 0.4, ts: 1 } });
 
-  win.reply({ api: 'toWidget', widgetId: 'call-embed', requestId: sent.message.requestId, action: sent.message.action, data: {} });
+  win.reply({ api: 'fromWidget', widgetId: 'call-embed', requestId: sent.message.requestId, action: sent.message.action, data: sent.message.data, response: {} });
   await pending;
 });
 
@@ -119,11 +119,11 @@ test('frame: a rejected write rejects the caller', async () => {
   const pending = win.matrixclient.setAccountData(TYPE, { a: 1 });
   const [sent] = win.sent;
   win.reply({
-    api: 'toWidget',
+    api: 'fromWidget',
     widgetId: 'call-embed',
     requestId: sent.message.requestId,
     action: sent.message.action,
-    data: { error: { message: 'refused' } },
+    response: { error: { message: 'refused' } },
   });
   await assert.rejects(pending);
 });
