@@ -19,7 +19,7 @@ listened to a call on a device yet.
 | Tag | `v2.11.3` (`UPSTREAM_TAG`), commit `6fc4920` |
 | Flutter | `3.47.8` (upstream `.fvmrc`) |
 | Call stack | `livekit_client` 2.13.1, `flutter_webrtc` 1.6.2+hotfix.4 (both from `pubspec.lock`) |
-| Patch | twenty-one: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.mobile`, `0008`-`0011` Plotina name/label/links/visible strings, `0012` intro buttons, `0013` OIDC scheme, `0014` no upstream support, `0015` About dialog, `0016` in-app updater, `0018` no donation/support prompts, `0019` one "Обновления" settings tab, `0020` build number in the update status, `0021` UTF-8 update manifests, `0023` personal names for contacts (`patches/`); numbers are per directory, so nothing may reuse one. `0017` is retired: it was the room-keyed personal-name model, removed in favour of `0023`, and its number stays unused |
+| Patch | twenty-two: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.mobile`, `0008`-`0011` Plotina name/label/links/visible strings, `0012` intro buttons, `0013` OIDC scheme, `0014` no upstream support, `0015` About dialog, `0016` in-app updater, `0018` no donation/support prompts, `0019` one "Обновления" settings tab, `0020` build number in the update status, `0021` UTF-8 update manifests, `0023` personal names for contacts, `0024` live refresh of the preview author line (`patches/`); numbers are per directory, so nothing may reuse one. `0017` is retired: it was the room-keyed personal-name model, removed in favour of `0023`, and its number stays unused |
 
 ## What is in this directory
 
@@ -48,6 +48,8 @@ patches/0019-plotina-updates-tab.patch      one "Обновления" settings 
 patches/0020-plotina-version-details.patch  build number in the update status
 patches/0021-plotina-update-utf8.patch      UTF-8 update manifests
 patches/0023-plotina-contact-names.patch    personal names for contacts (see below)
+patches/0024-plotina-preview-live-refresh.patch  live refresh of the preview
+                                 author line (see below)
 scripts/version-code.py          the versionCode formula, used by CI and by
                                  scripts/build-android.sh
 tests/intro_plotina_test.dart    Flutter widget regression test for 0012
@@ -55,6 +57,8 @@ tests/plotina_contact_names_test.dart  Dart test for 0023 (copied into the
                                  upstream checkout to run)
 tests/plotina_contact_name_entry_test.dart  Dart test for the two 0023 entry
                                  points, chat list and invite banner
+tests/plotina_contact_name_refresh_test.dart  Dart test for 0024: the preview
+                                 author line follows a live rename/reset
 ```
 
 The patch adds only this to `pubspec.yaml`:
@@ -280,6 +284,35 @@ flutter pub get && flutter gen-l10n
 flutter test test/plotina_contact_names_test.dart
 flutter test test/plotina_contact_name_entry_test.dart
 ```
+
+### The preview updates live (patch `0024`)
+
+The name above reaches every widget that reads it per build — the DM title, the
+DM row, the participant list. The author line that prefixes the last message in
+a **group** preview did not: it came from a `FutureBuilder`'s `initialData`,
+which the framework turns into the builder's snapshot once, in
+`_FutureBuilderState.initState`, and replaces only when the `future` changes.
+With the sender in member state the future is `null`, so the snapshot kept the
+first string forever and a rename or reset left `QA-DOOR-B: привет из группы`
+on screen until a cold start (QA `t_f2f5b871`, item 3).
+
+`0024` derives the preview body in `build` and only uses the awaited future when
+the sender has to be fetched first:
+
+```dart
+final previewBody = lastEvent?.calcLocalizedBodyFallback(...);
+// …
+: (snapshot.data ?? previewBody)?.trim().replaceAll('\n', ' ') ??
+  L10n.of(context).noMessagesYet,
+```
+
+`tests/plotina_contact_name_refresh_test.dart`, 5 cases — renders a real
+`ChatListItem` for a group whose last message is the contact's and asserts the
+author line: set before the first build; rewritten after a live rename; falling
+back to the real displayname after a live reset; the real displayname when no
+personal name exists; unbroken by junk in the account data. A sixth case pins
+the direct-chat rule — no sender prefix, before and after a rename. The two live
+cases fail on the tree without `0024` (`initialData` restored) and pass with it.
 
 Not covered: the dialogs have no widget test (they are plain
 `showTextInputDialog` plus a menu entry), and the end-to-end check with two
