@@ -1,26 +1,32 @@
-# Personal names for personal dialogues (patch 0015)
+# Personal names for contacts (patch 0015)
 
-Wish: a user can give a private dialogue (a DM) their own name, in every Plotina client. In
-Element Web/Desktop this lives in `element-web/plotina-dm-aliases.js`; this is the Element X
-(Android) half of the same wish.
+Wish: a user can give a contact their own name, and every conversation with that person shows it —
+in every Plotina client. The name belongs to the person, not to the room, so two dialogues with the
+same person show one name and a new one shows it at once. In Element Web/Desktop the same contract
+lives in `element-web/plotina-dm-aliases.js`, and in Mobile (FluffyChat) in patch `0023` + the
+`matrix-dart-sdk` fork; this is the Element X (Android) half.
 
-## The contract (shared, unchanged)
+## The contract (shared with the other clients)
 
-Account data of the account, type `cc.plotina.room_aliases`, content
-`{"<room_id>": "<personal name>"}`.
+Account data of the account, type `cc.plotina.contact_names`, content
+`{"<mxid>": "<personal name>"}`, e.g. `{"@bob:plotina.cc": "Денчик"}`.
 
+- The key is the contact's matrix id (`@localpart:server`), never a room id. That is what makes one
+  name cover every dialogue with the person.
 - The name belongs to the account that wrote it: it is account data, so no other member of the room
-  receives it.
+  receives it. `m.room.member` is **never** written either.
 - `m.room.name` is **never** written. The room's state, and therefore the name the other side sees,
   does not change.
-- An empty value means "no personal name": the key is dropped, and resetting the last alias leaves
-  `{}` behind rather than an empty string.
-- Content that is blank, broken or not a JSON object of room id to non-blank string is ignored: the
-  client behaves as if no personal name existed. That includes keys that are not room ids (v12
-  opaque ids without a colon are room ids and are accepted).
-
-The web client wrote this event first, so the Android parser is the lenient one: it accepts what the
-web client writes and drops what it cannot understand instead of failing.
+- A blank or whitespace-only value means "no personal name": the key is dropped, and resetting the
+  last name leaves `{}` behind rather than an empty string. Values are stored trimmed.
+- Content that is blank, broken or not a JSON object of mxid to non-blank string is ignored: the
+  client behaves as if no personal name existed. Keys that are not mxids are junk — which is exactly
+  why the previous, room-keyed event `cc.plotina.room_aliases` is **not read and not migrated**: its
+  keys are room ids, they fall out as junk, and the names in it are lost by decision of the owner.
+  An account data event type cannot be deleted from Matrix, so the old event will stay on the server
+  forever; nothing here reads it.
+- The parser accepts what the other clients write and drops what it cannot understand instead of
+  failing, so a payload from Mobile or Web is read byte for byte and a foreign one is not fatal.
 
 ## Where the name is applied
 
@@ -30,24 +36,32 @@ Rust change:
 
 | What | Where |
 | --- | --- |
-| Room list rows | `RoomListRoomSummaryFactory` (`features/home/impl`), through `RoomInfo.withPlotinaAlias` |
-| Open chat title, and the room details header | `RustBaseRoom.roomInfoFlow` (`libraries/matrix/impl`), which combines the SDK room info with the account's aliases |
+| Room list rows | `RoomListRoomSummaryFactory` (`features/home/impl`), through `RoomInfo.withPlotinaContactName` |
+| Open chat title, and the room details header | `RustBaseRoom.roomInfoFlow` (`libraries/matrix/impl`), which combines the SDK room info with the account's names and `m.direct` |
 | Room name in the room details screen (and anything else reading `roomInfoFlow`) | same flow |
 
-The overlay replaces `RoomInfo.name` only. `RoomInfo.rawName` - the value that mirrors the
-`m.room.name` state event - is left as the SDK reported it, and nothing in this patch sends a room
+The overlay replaces `RoomInfo.name` only. `RoomInfo.rawName` — the value that mirrors the
+`m.room.name` state event — is left as the SDK reported it, and nothing in this patch sends a room
 state event.
 
 A name is only applied to a personal dialogue: the SDK's `isDirect` (`m.direct`) or `isDm` (the
-two-member rooms the app already presents as a DM). A group keeps its own name even if an alias for
-it is left over from somewhere.
+two-member rooms the app already presents as a DM). A group keeps its own name even when a name
+exists for one of its members. A room whose own `m.room.name` is set keeps it in the title: a
+personal name renames a person, not a room (the same rule as the Mobile client, where
+`getLocalizedDisplayname` returns the room's name before the heroes).
+
+**Which contact a room is with** (`PlotinaContactNames.counterpart`): the SDK's single hero of a DM
+(`RoomInfo.heroes`, filled by `elementHeroes()` only for a two-member DM), and for a room that is
+only flagged direct an entry of the account's own `m.direct` map, read backwards by
+`PlotinaDirectRooms.parse`.
 
 ## Where the event is read
 
-`RoomAliasStore` (`libraries/matrix/api`, implemented by `RustRoomAliasStore` in
-`libraries/matrix/impl`) is session scoped and publishes the parsed map as a `StateFlow`:
+`ContactNameStore` (`libraries/matrix/api`, implemented by `RustContactNameStore` in
+`libraries/matrix/impl`) is session scoped and publishes two `StateFlow`s — the names, and the
+inverted `m.direct` map:
 
-- read through the SDK's account data API (`client.accountData`), written through `setAccountData` -
+- read through the SDK's account data API (`client.accountData`), written through `setAccountData` —
   the whole event is replaced with a map built from the stored one plus or minus the one key, so a
   concurrent name from another client of the same account is not lost;
 - re-read after each sync round trip (and on sync state changes), so a name set from another client
@@ -64,10 +78,15 @@ Room details of a DM → **«Личное имя»** (below the read/unread acti
 the right, opens a dialog with the name field, «Сохранить», «Сбросить» (only when a name is set) and
 «Отмена». Saving a blank field is the same as resetting. The name field carries no example hint in
 either locale: it is empty until the user types, as asked. The dialog is only offered in the details
-screen of a personal dialogue; groups have no such entry.
+screen of a personal dialogue; groups have no such entry. The dialog writes to the **contact** the
+room is with, so saving it from one dialog updates every dialogue with that person.
 
 ## What is not covered
 
+- **Names of people in groups** (author of a message, member list, mentions) are out of scope for
+  this patch: in Element X they come as a ready string out of Rust
+  (`RoomMemberMapper.kt`, `EventTimelineItemMapper.kt`), there is no single Kotlin point to override,
+  and a full override means forking `matrix-rust-sdk`. Owner's decision: separate work.
 - **Search by personal name.** The room list search is a filter the SDK applies to the room's real
   name (`RoomListFilter.NormalizedMatchRoomName`); matching on the overlay would need a client-side
   search over all rooms, which is a separate change. The name is *shown* in search results, it just
@@ -80,10 +99,19 @@ screen of a personal dialogue; groups have no such entry.
 
 ## Tests
 
-- `libraries/matrix/api` — `PlotinaRoomAliasesTest`: applying, reset, groups untouched,
-  broken/foreign payloads, stable and round-tripping serialisation, v12 opaque ids.
-- `libraries/matrix/impl` — `RustRoomAliasStoreTest`: the write touches only the account data event,
-  trimming, reset removes the key and writes `{}`, other names of the account are preserved, broken
-  JSON reads as empty, a failed write/read leaves the published map untouched.
-- `features/home/impl` — `RoomListRoomSummaryFactoryTest` (a DM shows the personal name, a group
-  keeps its own) and `RoomListDataSourceTest` (a name change rebuilds the list).
+- `libraries/matrix/api` — `PlotinaContactNamesTest`: applying by mxid, one person in two DMs, a
+  group untouched, a room with its own `m.room.name` untouched, the `m.direct` fallback, reset,
+  broken/foreign payloads (the old room-keyed event included), stable and round-tripping
+  serialisation, the event type is `cc.plotina.contact_names`. `PlotinaContactNamesV12Test` covers the
+  v12 opaque room ids the room-keyed model used to test: such an id is read as an `m.direct` value and
+  resolves to its contact, and is rejected as a names key.
+- `libraries/matrix/impl` — `RustContactNameStoreTest`: the write touches only the account data
+  event, trimming, reset removes the key and writes `{}`, other names of the account are preserved,
+  a name written by another client is read on refresh, the old room-keyed event is not read, broken
+  JSON reads as empty, the `m.direct` inversion, a failed write/read leaves the published map
+  untouched.
+- `features/home/impl` — `RoomListRoomSummaryFactoryTest` (a DM shows the contact's name, two DMs with
+  one person show one name, a group keeps its own, a DM with its own `m.room.name` keeps it) and
+  `RoomListDataSourceTest` (a name change rebuilds the list).
+- `features/roomdetails/impl` — `RoomDetailsPresenterTest`: the dialog is fed the contact's name,
+  saving and resetting write for the contact rather than the room, a group has no contact.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Unit tests for the personal-name overlay in Cinny (cc.plotina.room_aliases).
+# Unit tests for the personal-name overlay in Cinny (cc.plotina.contact_names).
 #
 #   scripts/test-dm-aliases.sh [UPSTREAM_SRC]
 #
@@ -9,12 +9,19 @@
 #
 # The tests run against the sources the build compiles, produced from scratch
 # every time: the tag's tree is exported into a temporary directory and every
-# patch in patches/ is applied there, so a stale working copy can neither hide
-# a patch that no longer applies nor make a second run fail. node_modules is
+# every patch in patches/ is applied there, so a stale working copy can neither
+# hide a patch that no longer applies nor make a second run fail. node_modules is
 # symlinked from UPSTREAM_SRC because the bundles are built with the esbuild that
 # ships in Cinny's own dependency tree (upstream has no test runner and this
 # patch does not add one); the tests themselves run on node --test, node 18 or
 # newer.
+#
+# Two suites, because they cover two halves of the same model:
+#   tests/contact_names.test.mjs  -- the name of a DIALOGUE (chat list, header);
+#   tests/member_names.test.mjs   -- the name of a PERSON (author line, member
+#                                    list, mention pill, A-Z order), which must
+#                                    read the same in a group as in a direct
+#                                    chat because the key is the mxid.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -57,18 +64,18 @@ for PATCH in "$ROOT"/patches/*.patch; do
   echo "applied: $(basename "$PATCH")"
 done
 
-echo "==> no example placeholder in the alias dialog"
+echo "==> no example placeholder in the name dialog"
 # The field carries no placeholder in any locale: an example someone types into
 # the patch is neither a hint nor an instruction, so its return is a failure.
-PROMPT="$WORK/src/src/app/features/room-nav/PlotinaRoomAliasPrompt.tsx"
+PROMPT="$WORK/src/src/app/features/room-nav/PlotinaContactNamePrompt.tsx"
 if grep -n 'placeholder' "$PROMPT"; then
-  echo "test-dm-aliases: PlotinaRoomAliasPrompt.tsx must name no placeholder" >&2
+  echo "test-dm-aliases: PlotinaContactNamePrompt.tsx must name no placeholder" >&2
   exit 1
 fi
 
 echo "==> bundles"
 # Pure storage rules: the file has no imports, so this bundle is the file.
-"$SRC/node_modules/.bin/esbuild" "$WORK/src/src/plotina/roomAliases.ts" \
+"$SRC/node_modules/.bin/esbuild" "$WORK/src/src/plotina/contactNames.ts" \
   --bundle --format=esm --platform=node --log-level=warning \
   --outfile="$WORK/core.mjs"
 
@@ -78,14 +85,32 @@ echo "==> bundles"
 # node_modules symlink next to this file. The banner gives esbuild's CommonJS
 # interop a real require(): matrix-widget-api (another SDK dependency) does
 # require("events") at load time.
-"$SRC/node_modules/.bin/esbuild" "$WORK/src/src/app/state/plotinaAliases.ts" \
+"$SRC/node_modules/.bin/esbuild" "$WORK/src/src/app/state/plotinaContactNames.ts" \
   --bundle --format=esm --platform=node --log-level=warning \
   --external:matrix-js-sdk \
   --banner:js="import { createRequire as __plotinaCreateRequire } from 'node:module'; const require = __plotinaCreateRequire(import.meta.url);" \
   --outfile="$WORK/src/glue.mjs"
 
+# The member-name half: the real display point (utils/room.ts), the real sort
+# comparator (hooks/useMemberSort.ts) and the pure rules they share, in one
+# bundle. The entry file is generated here rather than shipped as a source file:
+# it is test glue, not part of the client. Bundling the real modules is the
+# point -- a test that passed against a copy of the logic while the build
+# shipped another would prove nothing.
+cat > "$WORK/src/memberNamesEntry.ts" <<'ENTRY'
+export { getMemberDisplayName, getMemberSearchStr } from './src/app/utils/room';
+export * as sort from './src/app/hooks/useMemberSort';
+export * as memberNames from './src/plotina/memberNames';
+ENTRY
+"$SRC/node_modules/.bin/esbuild" "$WORK/src/memberNamesEntry.ts" \
+  --bundle --format=esm --platform=node --log-level=warning \
+  --external:matrix-js-sdk --external:react \
+  --banner:js="import { createRequire as __plotinaCreateRequire } from 'node:module'; const require = __plotinaCreateRequire(import.meta.url);" \
+  --outfile="$WORK/src/memberNames.mjs"
+
 echo "==> node --test"
 PLOTINA_ALIASES_CORE="$WORK/core.mjs" \
   PLOTINA_ALIASES_GLUE="$WORK/src/glue.mjs" \
   PLOTINA_ALIASES_SDK="$WORK/src/node_modules/matrix-js-sdk/lib/index.js" \
-  node --test "$ROOT/tests/dm_aliases.test.mjs"
+  PLOTINA_MEMBER_NAMES="$WORK/src/memberNames.mjs" \
+  node --test "$ROOT/tests/contact_names.test.mjs" "$ROOT/tests/member_names.test.mjs"

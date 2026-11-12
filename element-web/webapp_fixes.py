@@ -638,12 +638,13 @@ def ensure_theme_boot(root: Path, relative: bool) -> list[str]:
 
 
 # --------------------------------------------------------------------------
-# 3b. Personal room names (SPIKE-dm-aliases.md): plotina-dm-aliases.js keeps
-# a room_id -> label map in account data cc.plotina.room_aliases and makes
+# 3b. Personal contact names (SPIKE-dm-aliases.md): plotina-dm-aliases.js keeps
+# an mxid -> name map in account data cc.plotina.contact_names and makes
 # Room.calculateRoomName answer with it, so a DM can be renamed for one
-# account without writing m.room.name into the room. The payload is inert
-# until window.mxMatrixClientPeg appears, so its tag only has to be in the
-# document; </head> is the anchor both clients can guarantee.
+# account without writing m.room.name into the room; the same name is also
+# applied to that person's RoomMember, so their name in a group room matches.
+# The payload is inert until window.mxMatrixClientPeg appears, so its tag only
+# has to be in the document; </head> is the anchor both clients can guarantee.
 # --------------------------------------------------------------------------
 DM_ALIASES_FILE = "plotina-dm-aliases.js"
 
