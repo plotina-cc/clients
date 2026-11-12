@@ -13,9 +13,11 @@ IMAGE="${1:?usage: smoke-image.sh IMAGE:REF}"
 PORT="${PORT:-18096}"
 NAME="plotina-web-smoke-$$"
 PAGE="$(mktemp)"
+BUNDLE="$(mktemp)"
+LICENCE="$(mktemp)"
 cleanup() {
   docker rm -f "$NAME" >/dev/null 2>&1 || true
-  rm -f "$PAGE"
+  rm -f "$PAGE" "$BUNDLE" "${LICENCE:-}"
 }
 trap cleanup EXIT
 
@@ -57,12 +59,43 @@ for path in \
   curl -fsS -o /dev/null "http://127.0.0.1:${PORT}${path}"
 done
 
+# Our Element Call. Element Web opens the call widget at ./widgets/element-call/
+# from the site root, and the served bundle has to be ours: the stock upstream
+# widget has neither the per-person volume store nor the hide-stream control.
+# The Dockerfile gates the build with the same checker; this proves the running
+# container, which is what a publish and a QA pull see.
+WIDGET="http://127.0.0.1:${PORT}/widgets/element-call"
+curl -fsS -o "$PAGE" "$WIDGET/index.html"
+grep -q 'window.__plotinaEc=true' "$PAGE"
+grep -q 'src="/widgets/element-call/assets/' "$PAGE"
+grep -q 'src="../../noise/plotina-dfn.js"' "$PAGE"
+grep -q 'src="../../noise/plotina-panel.js"' "$PAGE"
+# The two files those tags point at, served from the root noise layer.
+curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/noise/plotina-dfn.js"
+curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/noise/plotina-panel.js"
+# The archive's own noise tree must not have come along (it would be 24 MB and a
+# second denoiser init): the prefix returns 404 for the widget-local copy.
+if curl -fsS -o /dev/null "$WIDGET/noise/boot.js" 2>/dev/null; then
+  echo "the widget ships its own noise/ tree" >&2
+  exit 1
+fi
+
+BUNDLE_PATH="$(grep -o 'src="[^"]*assets/index-[^"]*\.js"' "$PAGE" | head -1 | sed 's/^src="//; s/"$//')"
+test -n "$BUNDLE_PATH"
+curl -fsS -o "$BUNDLE" "http://127.0.0.1:${PORT}${BUNDLE_PATH}"
+voice_volumes="$(grep -o 'cc.plotina.voice_volumes' "$BUNDLE" | wc -l)"
+set_subscribed="$(grep -o 'setSubscribed' "$BUNDLE" | wc -l)"
+hide_stream="$(grep -o 'video_tile.hide_stream' "$BUNDLE" | wc -l)"
+echo "widget bundle: voice_volumes=$voice_volumes setSubscribed=$set_subscribed hide_stream=$hide_stream"
+test "$voice_volumes" -gt 0
+test "$set_subscribed" -gt 0
+test "$hide_stream" -gt 0
+
 # Licence and notice have to travel with the served app. The licence is read
 # through a file, not a pipe: `curl | head -1` makes curl die with 23 (SIGPIPE)
 # the moment head closes the pipe, and `set -o pipefail` turns that into a
 # failure of a check that actually passed.
 LICENCE="$(mktemp)"
-trap 'rm -f "$PAGE" "$LICENCE"' EXIT
 curl -fsS "http://127.0.0.1:${PORT}/LICENSE-AGPL-3.0" -o "$LICENCE"
 head -1 "$LICENCE" | grep -q 'GNU AFFERO GENERAL PUBLIC LICENSE'
 curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/NOTICE"
