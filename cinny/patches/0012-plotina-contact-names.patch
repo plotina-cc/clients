@@ -1,0 +1,796 @@
+diff --git a/src/app/features/room-nav/PlotinaContactNamePrompt.tsx b/src/app/features/room-nav/PlotinaContactNamePrompt.tsx
+new file mode 100644
+index 0000000..2a9a449
+--- /dev/null
++++ b/src/app/features/room-nav/PlotinaContactNamePrompt.tsx
+@@ -0,0 +1,183 @@
++/*
++Copyright 2026 Plotina <thebob3r@gmail.com>
++
++SPDX-License-Identifier: AGPL-3.0-only
++
++Plotina: the "personal name" dialog for a contact.
++
++One field and two actions, in the shape of the other prompts in this folder
++(LeaveRoomPrompt, InviteUserPrompt). The value is written to this account's own
++account data under the CONTACT's mxid, never to the room: see
++src/plotina/contactNames.ts for the contract and
++src/app/state/plotinaContactNames.ts for the writer. Saving an empty field is
++the reset, so a dialog whose name was set elsewhere still offers "Reset"
++without the user having to clear the field first.
++
++The room is only the entry point: it says WHO the contact is. Naming someone
++here renames them in every direct chat with them, which is what the hint says.
++*/
++import React, { FormEventHandler, useState } from 'react';
++import { Room } from 'matrix-js-sdk';
++import FocusTrap from 'focus-trap-react';
++import {
++  Button,
++  Box,
++  Dialog,
++  Header,
++  Icon,
++  IconButton,
++  Icons,
++  Input,
++  Overlay,
++  OverlayBackdrop,
++  OverlayCenter,
++  Spinner,
++  Text,
++  color,
++  config,
++} from 'folds';
++import { useMatrixClient } from '../../hooks/useMatrixClient';
++import { setPlotinaContactName, usePlotinaContactName } from '../../state/plotinaContactNames';
++import { stopPropagation } from '../../utils/keyboard';
++
++const STRINGS = {
++  ru: {
++    menu: 'Личное имя',
++    title: 'Личное имя',
++    hint: 'Видно только вам. Имя собеседника у него самого не меняется, а в других диалогах с ним станет таким же.',
++    save: 'Сохранить',
++    reset: 'Сбросить',
++    failed: 'Не удалось сохранить имя',
++  },
++  en: {
++    menu: 'Personal name',
++    title: 'Personal name',
++    hint: 'Only you see this. The contact\u2019s own name is unchanged, and your other chats with them will show this name too.',
++    save: 'Save',
++    reset: 'Reset',
++    failed: 'Could not save the name',
++  },
++};
++
++// Same fallback as the rest of the Plotina overlays: no language is Russian,
++// a "ru" prefix is Russian, anything else English.
++export const plotinaContactNameStrings = () => {
++  const value = (document.documentElement.lang || navigator.language || '').toLowerCase();
++  if (!value) return STRINGS.ru;
++  return value.indexOf('ru') === 0 ? STRINGS.ru : STRINGS.en;
++};
++
++type PlotinaContactNamePromptProps = {
++  room: Room;
++  onDone: () => void;
++  onCancel: () => void;
++};
++
++export function PlotinaContactNamePrompt({
++  room,
++  onDone,
++  onCancel,
++}: PlotinaContactNamePromptProps) {
++  const mx = useMatrixClient();
++  const [strings] = useState(plotinaContactNameStrings);
++  const current = usePlotinaContactName(room);
++  const [busy, setBusy] = useState(false);
++  const [error, setError] = useState<string>();
++
++  const save = (name: string) => {
++    if (busy) return;
++    setBusy(true);
++    setError(undefined);
++    setPlotinaContactName(mx, room, name).then(onDone, (err: unknown) => {
++      setBusy(false);
++      setError(err instanceof Error ? err.message : String(err));
++    });
++  };
++
++  const handleSubmit: FormEventHandler<HTMLFormElement> = (evt) => {
++    evt.preventDefault();
++    const form = evt.target as HTMLFormElement | undefined;
++    const input = form?.nameInput as HTMLInputElement | undefined;
++    save(input?.value ?? '');
++  };
++
++  return (
++    <Overlay open backdrop={<OverlayBackdrop />}>
++      <OverlayCenter>
++        <FocusTrap
++          focusTrapOptions={{
++            initialFocus: false,
++            onDeactivate: onCancel,
++            clickOutsideDeactivates: true,
++            escapeDeactivates: stopPropagation,
++          }}
++        >
++          <Dialog variant="Surface">
++            <Header
++              style={{
++                padding: `0 ${config.space.S200} 0 ${config.space.S400}`,
++                borderBottomWidth: config.borderWidth.B300,
++              }}
++              variant="Surface"
++              size="500"
++            >
++              <Box grow="Yes">
++                <Text size="H4">{strings.title}</Text>
++              </Box>
++              <IconButton size="300" onClick={onCancel} radii="300">
++                <Icon src={Icons.Cross} />
++              </IconButton>
++            </Header>
++            <Box
++              as="form"
++              onSubmit={handleSubmit}
++              style={{ padding: config.space.S400 }}
++              direction="Column"
++              gap="400"
++            >
++              <Box direction="Column" gap="200">
++                <Text priority="400" size="T300">
++                  {strings.hint}
++                </Text>
++                <Input
++                  size="500"
++                  autoFocus
++                  name="nameInput"
++                  variant="Background"
++                  defaultValue={current}
++                  aria-label={strings.title}
++                />
++                {error && (
++                  <Text size="T200" style={{ color: color.Critical.Main }}>
++                    {strings.failed}: {error}
++                  </Text>
++                )}
++              </Box>
++              <Box gap="200" justifyContent="End">
++                {current && (
++                  <Button
++                    type="button"
++                    variant="Critical"
++                    fill="None"
++                    onClick={() => save('')}
++                    aria-disabled={busy}
++                  >
++                    <Text size="B400">{strings.reset}</Text>
++                  </Button>
++                )}
++                <Button
++                  type="submit"
++                  variant="Primary"
++                  before={busy ? <Spinner fill="Solid" variant="Primary" size="200" /> : undefined}
++                  aria-disabled={busy}
++                >
++                  <Text size="B400">{strings.save}</Text>
++                </Button>
++              </Box>
++            </Box>
++          </Dialog>
++        </FocusTrap>
++      </OverlayCenter>
++    </Overlay>
++  );
++}
+diff --git a/src/app/features/room-nav/RoomNavItem.tsx b/src/app/features/room-nav/RoomNavItem.tsx
+index 0834111..149892d 100644
+--- a/src/app/features/room-nav/RoomNavItem.tsx
++++ b/src/app/features/room-nav/RoomNavItem.tsx
+@@ -61,6 +61,11 @@ import { useAutoDiscoveryInfo } from '../../hooks/useAutoDiscoveryInfo';
+ import { livekitSupport } from '../../hooks/useLivekitSupport';
+ import { StateEvent } from '../../../types/matrix/room';
+ import { webRTCSupported } from '../../utils/rtc';
++import { isPlotinaDirectRoom, usePlotinaContactName } from '../../state/plotinaContactNames';
++import {
++  PlotinaContactNamePrompt,
++  plotinaContactNameStrings,
++} from './PlotinaContactNamePrompt';
+ 
+ type RoomNavItemMenuProps = {
+   room: Room;
+@@ -82,6 +87,13 @@ const RoomNavItemMenu = forwardRef<HTMLDivElement, RoomNavItemMenuProps>(
+ 
+     const [invitePrompt, setInvitePrompt] = useState(false);
+ 
++    // Plotina: the personal-name entry is offered for direct chats only -- a
++    // group room has no contact to name and keeps the name its members see.
++    const [strings] = useState(plotinaContactNameStrings);
++    const [namePrompt, setNamePrompt] = useState(false);
++    const contactName = usePlotinaContactName(room);
++    const canSetName = isPlotinaDirectRoom(mx, room);
++
+     const handleMarkAsRead = () => {
+       markAsRead(mx, room.roomId, hideActivity);
+       requestClose();
+@@ -114,6 +126,16 @@ const RoomNavItemMenu = forwardRef<HTMLDivElement, RoomNavItemMenuProps>(
+             }}
+           />
+         )}
++        {namePrompt && (
++          <PlotinaContactNamePrompt
++            room={room}
++            onDone={() => {
++              setNamePrompt(false);
++              requestClose();
++            }}
++            onCancel={() => setNamePrompt(false)}
++          />
++        )}
+         <Box direction="Column" gap="100" style={{ padding: config.space.S100 }}>
+           <MenuItem
+             onClick={handleMarkAsRead}
+@@ -174,6 +196,19 @@ const RoomNavItemMenu = forwardRef<HTMLDivElement, RoomNavItemMenuProps>(
+               Copy Link
+             </Text>
+           </MenuItem>
++          {canSetName && (
++            <MenuItem
++              onClick={() => setNamePrompt(true)}
++              size="300"
++              after={<Icon size="100" src={Icons.Pencil} />}
++              radii="300"
++              aria-pressed={namePrompt}
++            >
++              <Text style={{ flexGrow: 1 }} as="span" size="T300" truncate>
++                {contactName ? `${strings.menu}: ${contactName}` : strings.menu}
++              </Text>
++            </MenuItem>
++          )}
+           <MenuItem
+             onClick={handleRoomSettings}
+             size="300"
+diff --git a/src/app/state/plotinaContactNames.ts b/src/app/state/plotinaContactNames.ts
+new file mode 100644
+index 0000000..de0d46f
+--- /dev/null
++++ b/src/app/state/plotinaContactNames.ts
+@@ -0,0 +1,292 @@
++/*
++Copyright 2026 Plotina <thebob3r@gmail.com>
++
++SPDX-License-Identifier: AGPL-3.0-only
++
++Plotina: personal names for CONTACTS -- the client side.
++
++The storage rules are in src/plotina/contactNames.ts (pure, unit-tested). This
++file is the only place that talks to the Matrix client and to React:
++
++  * readPlotinaContactNames()  -- current map, straight from account data;
++  * getPlotinaContactName()    -- one contact's personal name, for code that is
++                                  not a React component;
++  * isPlotinaDirectRoom()      -- "is this a personal dialogue?", answered from
++                                  room data (m.direct, the is_direct invite
++                                  flag, two joined members), never from the id's
++                                  shape;
++  * contactPartnerOf()         -- WHO this room is a dialogue with, which is
++                                  what the name is keyed by;
++  * setPlotinaContactName()    -- the only writer: merges into the map under the
++                                  partner's mxid and, for a blank name, drops
++                                  the key;
++  * usePlotinaContactName()    -- the map as a React hook, re-read on the
++                                  account data event;
++  * installPlotinaContactNames() -- the single display point.
++
++Why the SDK hook and not a component: matrix-js-sdk computes a room's display
++name in Room.calculateRoomName() and lets the application override the answer
++through client.roomNameGenerator(roomId, state) -- Room.roomNameGenerator()
++calls it first and falls back to stock behaviour on null. Cinny never sets it
++(src/client/initMatrix.ts), so the whole client keeps reading the stock name.
++Installing one generator therefore covers every surface at once: the chat list
++(RoomNavItem), the open chat's header (RoomViewHeader), room settings and call
++tiles through useRoomName(), and the 27 direct room.name reads in
++notifications, search, the A-Z room order and the room card. Nothing is
++rewritten in the DOM and no React state has to be kept in sync -- Room.name and
++Room.normalizedName (what the room search matches on) simply come out with the
++personal name.
++
++The generator resolves the room's PARTNER on every call rather than looking the
++room id up in the map, which is what makes the name follow the person: naming
++someone in one direct chat renames them in every other direct chat with them,
++and a room that is not a one-to-one chat never gets a name at all.
++
++Account data is not part of the room state, so the SDK does not recalculate a
++room when it changes: installPlotinaContactNames() listens for the account data
++event and calls Room.recalculate(), which is what emits Room.name -- the signal
++every consumer already listens to -- so the list repaints without a reload.
++The same recompute runs once the room exists (ClientEvent.Room) and once the
++first sync is applied (SyncState.Prepared), because on a cold start the account
++data arrives before the rooms and a new room is named before it is in the
++client -- see the comment at the end of installPlotinaContactNames().
++*/
++import { ClientEvent, MatrixClient, MatrixEvent, Room, SyncState } from 'matrix-js-sdk';
++import { useAccountData } from '../hooks/useAccountData';
++import { AccountDataEvent } from '../../types/matrix/accountData';
++import {
++  CONTACT_NAMES_EVENT_TYPE,
++  ContactNames,
++  DirectPartners,
++  contactNameFor,
++  contactNameForRoom,
++  contactNamesWith,
++  directPartners,
++  dmPartnerId,
++  parseContactNames,
++  resolveRoomName,
++} from '../../plotina/contactNames';
++import { getAccountData, getMDirects, isDirectInvite } from '../utils/room';
++
++const EMPTY_NAMES: ContactNames = {};
++const EMPTY_PARTNERS: DirectPartners = {};
++
++// Parsing costs a pass over the map and this is read from calculateRoomName()
++// for every room on every sync, from the A-Z room comparator and from
++// notification handlers. Account data events are immutable, so keying the
++// cache on the event object gives one parse per change.
++const parsedByEvent = new WeakMap<MatrixEvent, ContactNames>();
++const partnersByEvent = new WeakMap<MatrixEvent, DirectPartners>();
++
++export const readPlotinaContactNames = (mx: MatrixClient): ContactNames => {
++  const event = getAccountData(mx, CONTACT_NAMES_EVENT_TYPE as unknown as AccountDataEvent);
++  if (!event) return EMPTY_NAMES;
++
++  const cached = parsedByEvent.get(event);
++  if (cached) return cached;
++
++  const parsed = parseContactNames(event.getContent());
++  parsedByEvent.set(event, parsed);
++  return parsed;
++};
++
++/** room id -> mxid, from this account's m.direct. */
++const readPlotinaDirectPartners = (mx: MatrixClient): DirectPartners => {
++  const event = getAccountData(mx, AccountDataEvent.Direct);
++  if (!event) return EMPTY_PARTNERS;
++
++  const cached = partnersByEvent.get(event);
++  if (cached) return cached;
++
++  const parsed = directPartners(event.getContent());
++  partnersByEvent.set(event, parsed);
++  return parsed;
++};
++
++/** The personal name this account gave [userId], or undefined. */
++export const getPlotinaContactName = (
++  mx: MatrixClient,
++  userId: string | undefined
++): string | undefined => contactNameFor(readPlotinaContactNames(mx), userId);
++
++/**
++ * Is this a personal dialogue for the signed-in account? The answer comes from
++ * room data, not from the id: room version 12 ids are opaque "!<base64url>"
++ * with no server part, so any shape rule would silently skip production DMs.
++ *
++ * Same three tests as the Element Web overlay, so both clients agree on what
++ * may carry a personal name: a room m.direct lists, a room joined through an
++ * is_direct invite, or a room with exactly two joined members (how a
++ * one-to-one chat looks when another client never wrote m.direct). Spaces are
++ * never direct, and a group room is never masked.
++ */
++export const isPlotinaDirectRoom = (mx: MatrixClient, room: Room): boolean => {
++  if (readPlotinaDirectPartners(mx)[room.roomId]) return true;
++  if (isDirectInvite(room, mx.getUserId())) return true;
++  if (room.isSpaceRoom()) return false;
++  return room.getJoinedMemberCount() === 2;
++};
++
++/** The mxids of the joined members of a room, or undefined when unknown. */
++const joinedMemberIds = (room: Room): string[] | undefined => {
++  const members = room.getJoinedMembers?.();
++  if (!Array.isArray(members)) return undefined;
++  return members.map((member) => member.userId);
++};
++
++/**
++ * The inviter, but only for a room the SDK says is a direct invite. A pending
++ * invite has no joined members yet, so m.direct and the member list both have
++ * nothing to say -- the inviter is the only person it can be a dialogue with.
++ */
++const directInviter = (mx: MatrixClient, room: Room): string | undefined => {
++  if (!isDirectInvite(room, mx.getUserId())) return undefined;
++  return room.getDMInviter?.() ?? undefined;
++};
++
++/**
++ * The personal name of the contact this room is a dialogue with, or undefined.
++ * One helper for every caller (generator, hook, writer, the exported name
++ * function), so all four surfaces agree on who the contact is: the space flag,
++ * the member list, m.direct and the invite inviter are consulted in ONE place.
++ */
++const contactNameOfRoom = (
++  mx: MatrixClient,
++  room: Room,
++  names: ContactNames = readPlotinaContactNames(mx)
++): string | undefined =>
++  contactNameForRoom(
++    names,
++    room.roomId,
++    mx.getUserId() ?? undefined,
++    readPlotinaDirectPartners(mx),
++    joinedMemberIds(room),
++    directInviter(mx, room),
++    room.isSpaceRoom?.()
++  );
++
++/**
++ * WHO is this room a dialogue with, or undefined when it is not one-to-one.
++ * This is the key the personal name is stored under, so every direct chat with
++ * the same person resolves to the same name.
++ */
++export const contactPartnerOf = (mx: MatrixClient, room: Room): string | undefined =>
++  dmPartnerId(
++    room.roomId,
++    mx.getUserId() ?? undefined,
++    readPlotinaDirectPartners(mx),
++    joinedMemberIds(room),
++    directInviter(mx, room),
++    room.isSpaceRoom?.()
++  );
++
++/** The name this account renders for the room: personal name or real name. */
++export const plotinaRoomName = (mx: MatrixClient, room: Room): string =>
++  resolveRoomName(room.name, contactNameOfRoom(mx, room));
++
++/**
++ * Set ("Денчик") or reset (blank) the personal name of the CONTACT this room
++ * is a dialogue with. Only account data is written -- m.room.name and the room
++ * state stay untouched, which is the whole point: the other participants never
++ * learn about this name, and a group room cannot be renamed at all.
++ *
++ * The room only identifies the person; a room that is not a one-to-one chat
++ * has nobody to name and is ignored rather than writing a key nobody can be
++ * shown under.
++ */
++export const setPlotinaContactName = async (
++  mx: MatrixClient,
++  room: Room,
++  name: string | null | undefined
++): Promise<void> => {
++  const partner = contactPartnerOf(mx, room);
++  if (!partner) return;
++
++  const next = contactNamesWith(readPlotinaContactNames(mx), partner, name);
++  // Upstream types know the spec's own account data only; a custom type needs
++  // the same cast Cinny itself uses for in.cinny.spaces (SpaceTabs.tsx).
++  await mx.setAccountData(CONTACT_NAMES_EVENT_TYPE as any, next as any);
++};
++
++/**
++ * Current personal name of a room's contact, as a hook (re-renders on the
++ * event). Takes the room, not the id: the name belongs to the person the room
++ * is a dialogue with.
++ */
++export const usePlotinaContactName = (room: Room): string | undefined => {
++  const event = useAccountData(CONTACT_NAMES_EVENT_TYPE);
++  const mx = room.client;
++  return contactNameOfRoom(mx, room, parseContactNames(event?.getContent()));
++};
++
++type PlotinaContactNamesClient = MatrixClient & { plotinaContactNames?: boolean };
++
++/** Recompute one room's cached name; Room.name listeners repaint the list. */
++const recalculateOneRoom = (room: Room) => {
++  try {
++    room.recalculate(); // emits Room.name when the displayed name changes
++  } catch {
++    /* one broken room must not stop the others */
++  }
++};
++
++/**
++ * Recompute every room the client knows. Cheap: Room.recalculate() only emits
++ * Room.name for a room whose displayed name actually changed.
++ */
++export const recalculatePlotinaRoomNames = (mx: MatrixClient) => {
++  mx.getRooms().forEach(recalculateOneRoom);
++};
++
++export const installPlotinaContactNames = (mx: PlotinaContactNamesClient) => {
++  if (mx.plotinaContactNames) return;
++  // The whole point is to hand the SDK a generator on the client it computed
++  // names with; there is no other place the SDK reads it from.
++  // eslint-disable-next-line no-param-reassign
++  mx.plotinaContactNames = true;
++
++  // Return null for everything we do not answer, so the SDK keeps its own
++  // behaviour (member lists, "Empty room", the generated name of a group).
++  // eslint-disable-next-line no-param-reassign
++  mx.roomNameGenerator = (roomId: string): string | null => {
++    const room = mx.getRoom(roomId);
++    // No room in this client yet: the generator has no members to look at, so
++    // the answer waits for ClientEvent.Room / the first sync below.
++    if (!room) return null;
++    return contactNameOfRoom(mx, room) ?? null;
++  };
++
++  // Account data is not room state: nothing recalculates by itself, and the
++  // room list, the header and the notification titles would keep the old name
++  // until the next reload.
++  const handleAccountData = (event: MatrixEvent) => {
++    const type = event.getType();
++    // m.direct decides WHO a room belongs to, so a change there can make a
++    // name apply or stop applying -- both events repaint the same way.
++    if (type === CONTACT_NAMES_EVENT_TYPE || type === AccountDataEvent.Direct) {
++      recalculatePlotinaRoomNames(mx);
++    }
++  };
++  mx.on(ClientEvent.AccountData, handleAccountData);
++
++  // Cold start. Two SDK facts leave a room with the stock name and nothing
++  // recomputes it later, because account data is not room state:
++  //
++  //   * the first /sync carries global account data BEFORE the room sections
++  //     (matrix-js-sdk sync.js), so the handler above runs against an empty
++  //     room list -- the name is stored by then, but no room sees it;
++  //   * for a brand-new room the SDK calls Room.recalculate() BEFORE
++  //     storeRoom() and ClientEvent.Room, so inside the generator
++  //     mx.getRoom(roomId) is still undefined for that room and the name it is
++  //     born with is the member-list one. The list then shows that name until
++  //     the room is opened or an event arrives in it.
++  //
++  // A room is in the client's map by ClientEvent.Room, and after
++  // SyncState.Prepared the whole first sync is applied, so every room that was
++  // born before its name and every name that arrived before its room is
++  // recomputed here -- on the first paint, not on the next room event.
++  mx.on(ClientEvent.Room, recalculateOneRoom);
++  mx.on(ClientEvent.Sync, (state: SyncState) => {
++    if (state === SyncState.Prepared) recalculatePlotinaRoomNames(mx);
++  });
++};
+diff --git a/src/client/initMatrix.ts b/src/client/initMatrix.ts
+index 498d4f7..89281d5 100644
+--- a/src/client/initMatrix.ts
++++ b/src/client/initMatrix.ts
+@@ -2,6 +2,7 @@ import { createClient, MatrixClient, IndexedDBStore, IndexedDBCryptoStore } from
+ 
+ import { cryptoCallbacks } from './secretStorageKeys';
+ import { clearNavToActivePathStore } from '../app/state/navToActivePath';
++import { installPlotinaContactNames } from '../app/state/plotinaContactNames';
+ import { pushSessionToSW } from '../sw-session';
+ 
+ type Session = {
+@@ -37,6 +38,11 @@ export const initClient = async (session: Session): Promise<MatrixClient> => {
+ 
+   mx.setMaxListeners(50);
+ 
++  // Plotina: personal names for contacts (cc.plotina.contact_names). The
++  // generator is installed before the first sync, so every room name the
++  // client computes from here on resolves its contact through it.
++  installPlotinaContactNames(mx);
++
+   return mx;
+ };
+ 
+diff --git a/src/plotina/contactNames.ts b/src/plotina/contactNames.ts
+new file mode 100644
+index 0000000..8ee8bd5
+--- /dev/null
++++ b/src/plotina/contactNames.ts
+@@ -0,0 +1,212 @@
++/*
++Copyright 2026 Plotina <thebob3r@gmail.com>
++
++SPDX-License-Identifier: AGPL-3.0-only
++
++Plotina: personal names for CONTACTS -- the data contract.
++
++A person may want to call someone "Денчик" while that person's own profile, and
++what everyone else sees, keeps their real name. Renaming the room would write
++m.room.name into the room state and rename it for every participant, so the
++name lives in this account's own account data instead, bound to the PERSON:
++
++    cc.plotina.contact_names = { "@bob:plotina.cc": "Денчик" }
++
++One person with two direct chats therefore carries one name in both of them,
++immediately. A group room never takes a contact's name: the name belongs to a
++person, and what a group shows is the room's own name. Only the owner of the
++account can read the event (account data is per-user), it follows the account
++to every device, and nothing is sent to the other participants.
++
++An empty value means "reset": the key is dropped from the map on write, so
++resetting the last name leaves {}. The old room-keyed model
++(cc.plotina.room_aliases) is not read, written or migrated -- it is gone, as
++the owner asked.
++
++Element Web/Desktop, X and Mobile read and write the same event, so a name set
++in one client shows up in the others.
++
++This file is deliberately dependency-free: every function is pure, so the
++storage rules and the contact addressing can be pinned with plain node and no
++browser or Matrix client (cinny/tests/contact_names.test.mjs, run by
++cinny/scripts/test-dm-aliases.sh). The React/Matrix glue is in
++src/app/state/plotinaContactNames.ts.
++*/
++
++export const CONTACT_NAMES_EVENT_TYPE = 'cc.plotina.contact_names';
++
++export type ContactNames = Record<string, string>;
++
++/** room id -> the mxid that room is a direct chat with (from m.direct). */
++export type DirectPartners = Record<string, string>;
++
++const EMPTY_NAMES: ContactNames = {};
++
++/**
++ * Matrix user ids: "@localpart:server". The localpart is not empty (the colon
++ * is at index > 1) and neither is the server part; whitespace and "/" never
++ * appear. Only used to keep junk out of the map -- never to decide who a
++ * person is.
++ */
++export const isUserId = (raw: unknown): raw is string => {
++  if (typeof raw !== 'string' || raw.charAt(0) !== '@') return false;
++  if (/[\s/]/.test(raw)) return false;
++  const colon = raw.indexOf(':');
++  return colon > 1 && colon < raw.length - 1;
++};
++
++/**
++ * Account data content -> name map. Anything that is not a flat object of
++ * string values is read as "no names": a broken or half-written event must
++ * leave the client working exactly as it did before the feature existed.
++ *
++ * Keys are validated in the same pass, because a name under a key that is not
++ * an mxid can never be shown to anyone: dropping it here keeps the stored map
++ * and the rendered map the same map.
++ */
++export const parseContactNames = (raw: unknown): ContactNames => {
++  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return EMPTY_NAMES;
++
++  const source = raw as Record<string, unknown>;
++  const out: ContactNames = {};
++  // Object.keys, not Object.entries: cinny's tsconfig pins lib ES2016.
++  Object.keys(source).forEach((userId) => {
++    if (!isUserId(userId)) return;
++    const value = source[userId];
++    if (typeof value !== 'string') return;
++    const name = value.trim();
++    if (name) out[userId] = name;
++  });
++  return out;
++};
++
++/**
++ * m.direct content ({"@bob:server": ["!dm:server", ...]}) -> room id -> mxid.
++ *
++ * Inverted once per event and cached by the caller, because it is consulted
++ * for every room on every recalculate. Junk keys and values are dropped, so a
++ * broken m.direct cannot make a room look like a dialogue with nobody.
++ */
++export const directPartners = (content: unknown): DirectPartners => {
++  const out: DirectPartners = {};
++  if (!content || typeof content !== 'object' || Array.isArray(content)) return out;
++  const source = content as Record<string, unknown>;
++  Object.keys(source).forEach((userId) => {
++    if (!isUserId(userId)) return;
++    const rooms = source[userId];
++    if (!Array.isArray(rooms)) return;
++    rooms.forEach((roomId) => {
++      if (typeof roomId === 'string' && roomId.charAt(0) === '!') out[roomId] = userId;
++    });
++  });
++  return out;
++};
++
++/** The name this account gave a contact, or undefined when nobody set one. */
++export const contactNameFor = (
++  names: ContactNames,
++  userId: string | undefined
++): string | undefined => {
++  if (!isUserId(userId)) return undefined;
++  const name = names[userId];
++  if (typeof name !== 'string') return undefined;
++  const trimmed = name.trim();
++  return trimmed || undefined;
++};
++
++/**
++ * Who is this room a dialogue with, or undefined when it is not a one-to-one
++ * chat? The room id is only a map key here: "!localpart:server" (room versions
++ * up to 11) and the opaque "!<base64url>" of room version 12 have nothing in
++ * common but the leading "!", so no id shape may be consulted.
++ *
++ * m.direct first -- the account's own statement of which rooms are direct
++ * chats -- then exactly two joined members (how a one-to-one chat looks when
++ * another client never wrote m.direct), then [inviterId] for a pending invite
++ * whose members are not joined yet. The caller only passes an inviter for a
++ * room it knows is a direct invite. Never myself: an m.direct entry pointing at
++ * this account, or a room whose other member is me, is not a contact.
++ */
++export const dmPartnerId = (
++  roomId: string,
++  meId: string | undefined,
++  direct: DirectPartners | undefined,
++  joinedUserIds: readonly string[] | undefined,
++  inviterId?: string | undefined,
++  isSpace?: boolean
++): string | undefined => {
++  // A space is a container of rooms, never a dialogue with a person; and a
++  // room with more than two joined members is a group, whatever m.direct says.
++  // A stale or hand-edited m.direct entry must never put a contact's name on a
++  // room other people are in. Only a room whose membership is unknown falls
++  // through to m.direct alone.
++  if (isSpace) return undefined;
++  if (joinedUserIds && joinedUserIds.length > 2) return undefined;
++
++  const listed = direct && typeof roomId === 'string' ? direct[roomId] : undefined;
++  if (isUserId(listed) && listed !== meId) return listed;
++
++  if (joinedUserIds && joinedUserIds.length === 2 && isUserId(meId)) {
++    const other = joinedUserIds[0] === meId ? joinedUserIds[1] : joinedUserIds[0];
++    if (isUserId(other) && other !== meId) return other;
++  }
++
++  if (isUserId(inviterId) && inviterId !== meId) return inviterId;
++  return undefined;
++};
++
++/**
++ * The name to render for a room: the personal name of the contact it is a
++ * dialogue with, or undefined to keep the room's own name.
++ *
++ * Split out from the React hook so the decision is testable without a client,
++ * and so a group can never be masked: without a single partner there is no
++ * contact, and without a contact there is nothing to look up.
++ */
++export const contactNameForRoom = (
++  names: ContactNames,
++  roomId: string,
++  meId: string | undefined,
++  direct: DirectPartners | undefined,
++  joinedUserIds: readonly string[] | undefined,
++  inviterId?: string | undefined,
++  isSpace?: boolean
++): string | undefined => {
++  const partner = dmPartnerId(roomId, meId, direct, joinedUserIds, inviterId, isSpace);
++  if (!partner) return undefined;
++  return contactNameFor(names, partner);
++};
++
++/**
++ * Returns the map after setting (or, for a blank name, clearing) one contact.
++ *
++ * Returns a new object and never stores an empty value, so a reset leaves no
++ * key behind -- the event stays as {} because Matrix gives clients no way to
++ * delete account data (matrix-js-sdk implements deleteAccountData as a write
++ * of {}).
++ */
++export const contactNamesWith = (
++  names: ContactNames,
++  userId: string,
++  name: string | null | undefined
++): ContactNames => {
++  const next: ContactNames = { ...names };
++  if (!isUserId(userId)) return next;
++
++  const wanted = typeof name === 'string' ? name.trim() : '';
++  if (wanted) {
++    next[userId] = wanted;
++  } else {
++    delete next[userId];
++  }
++  return next;
++};
++
++/** The name to render: the personal name when there is one, else the stock. */
++export const resolveRoomName = (
++  roomName: string | undefined,
++  personalName: string | undefined
++): string => personalName || roomName || '';
++
++/** True when the map holds no names (used to skip work on the common case). */
++export const hasContactNames = (names: ContactNames): boolean => Object.keys(names).length > 0;

@@ -3,72 +3,86 @@ Copyright 2026 Plotina <thebob3r@gmail.com>
 
 SPDX-License-Identifier: AGPL-3.0-only
 
-Plotina Web/Desktop overlay: personal room names ("алиасы") for one account.
+Plotina Web/Desktop overlay: personal contact names for one account.
 
-Renaming a DM in Element writes m.room.name into the room state, so the other
-participant sees the new name too. What we want is a name that lives in the
-account and nowhere else: a map room_id -> label in account data under
-cc.plotina.room_aliases, applied by the client when it renders the room.
+The name belongs to the PERSON, not to the room. One map in the account's own
+account data, cc.plotina.contact_names, keyed by the contact's MXID:
+
+    { "@bob:example.org": "Денчик" }
+
+so a person you renamed is "Денчик" in every direct chat with them, exactly like
+a messenger's contact name: nick, default display name, and the name you gave
+them yourself are three different things, and the last one wins for you alone.
+
+Nothing here writes room state or another user's profile: the name is private to
+this account and the other side never sees it.
+
+The previous model keyed the same idea by room id (cc.plotina.room_aliases). It
+is not read and not migrated — the owner asked for a clean cut. The old event is
+left where it is: a client cannot delete account data (the SDK's own removal
+call is implemented as writing {}), so a "cleanup" would leave an empty event
+behind, which is no better than leaving the old map, and deleting the names of
+people who may still be around is worse.
 
 How it attaches without a rebuild (see SPIKE-dm-aliases.md, "Как мы правим
 element-web"):
 
-  * matrix-js-sdk v44 keeps the computed name in Room.name, an OWN property
-    recomputed by Room.recalculate() -> Room.calculateRoomName(). So there is
-    no getter to override per instance; the hook is the prototype method, and
-    `window.mxMatrixClientPeg` (set by matrix-react-sdk's init, verified in the
-    v1.12.32 bundle) is the way to reach a Room instance from outside. We take
-    the prototype from the first room the client has, wrap calculateRoomName
-    once, and answer with the alias when the room has one. The room list tile,
-    the room header, notifications and toasts all read Room.name, so they
-    follow without any DOM rewriting and without racing React.
-  * The browser tab title is the one surface that does NOT follow at once:
-    matrix-react-sdk recomputes it on room switches, so it picks the alias up
-    the next time the user changes room (measured; see SPIKE-dm-aliases.md §5).
-  * Room.calculateRoomName also serves getDefaultRoomName() with
-    ignoreRoomNameEvent=true; that call is left untouched, so "the default
-    name of this room" keeps meaning the real one.
-  * Recalculating is enough to repaint: Room.recalculate() emits Room.name,
-    which is what matrix-react-sdk subscribes to. We call it for every room
-    after the alias map changes and after the first sync.
+  * Room title. matrix-js-sdk v44 keeps the computed name in Room.name, an OWN
+    property recomputed by Room.recalculate() -> Room.calculateRoomName(). The
+    hook is therefore the prototype method, reached through
+    `window.mxMatrixClientPeg`. The room list tile, the room header, the tab
+    title and toasts all read Room.name, so they follow without DOM rewriting.
+    getDefaultRoomName() asks with ignoreRoomNameEvent=true and stays stock.
+  * Author line. element-web renders a sender from a RoomMember: its
+    `rawDisplayName` (the profile under a message) and its `name` (previews,
+    exports, member lists). Both are own properties written by
+    RoomMember.setMembershipEvent(), so the overlay wraps that method once and
+    rewrites the two fields on a person who has a personal name — in every room
+    they appear in; the SDK's own values are kept aside and put back the moment
+    the personal name goes away, so a reset returns the person's real display
+    name — including a change they made themselves while the personal name was
+    set.
+  * Live repaint. Room.recalculate() emits Room.name for the title surfaces.
+    Message tiles are React class components whose shouldComponentUpdate
+    compares props and a display name is not a prop, so the overlay emits the
+    event-level "this tile's body is stale, re-render it" signal that the tile
+    already listens to (the same one element-web uses after an edit) for the
+    events in the open room. No DOM patching, no fighting React: the tile
+    re-renders against the member objects rewritten above, and stays correct
+    through every later render.
 
-Storage: account data is per-user and server-side, so the alias follows the
-account to any device running this overlay and is invisible to other members.
-Nothing here touches room state or sync.
-
-UI: a pencil button in the open room's header, on the same line and right
-after the room name (it sits next to the name span inside the header's flex
-row, not under it), opens a small dialog ("Переименовать для себя" /
-"Сбросить"). The DOM anchors follow the same pattern as noise/boot.js and
-plotina-update-channel.js: locate by class, insert once, re-insert after
-re-renders.
+Only people are renamed. The personal name belongs to the PERSON, so the same
+name shows up in a direct chat and in every group room that person shares with
+you: the member list and the author line of their messages (owner decision,
+plan §6, "name in groups"). What is never replaced is a room's own name: a group
+keeps its name, and so does a DM the user named explicitly with m.room.name —
+that title is the room's, not the person's (plan §1.4, the same rule as the
+Mobile reference). In a group room no contact is resolved and no room name is
+touched, so a personal name can never mask a group's name.
 
 Room ids: "!localpart:server" (room versions up to 11) and the opaque
 "!<base64url>" of room version 12 have nothing in common but the leading "!".
-Synapse creates v12 rooms by default since 1.162, so production DMs are
-opaque and any format rule stricter than "starts with !, no whitespace or
-slash" silently hides the feature (the QA defect). Which room a request
-belongs to is therefore checked against the room data — the room object of
-this client and its m.direct/member list — not against an id shape.
-
-Only personal dialogues: the alias UI and setter apply to rooms this account
-has as a DM (listed in m.direct, or exactly two joined members). A group
-room's name is the room's own name; it is never masked locally (QA finding).
+Synapse creates v12 rooms by default since 1.162, so production DMs are opaque
+and any format rule stricter than "starts with !, no whitespace or slash"
+silently hides the feature (the QA defect). Which room a request belongs to is
+therefore checked against the room data — the room object of this client and its
+m.direct/member list — not against an id shape.
 
 Reset writes the map without the key, and every write is sanitised, so the
-stored object never carries empty values: removing the last alias leaves
-{}. The account data event itself stays behind as {}: matrix-js-sdk 44
-implements deleteAccountData(type) as setAccountData(type, {}), and Matrix
-has no client-side removal for account data.
+stored object never carries empty values: removing the last name leaves {}.
 
-Test handle: window.plotinaDmAliases exposes the alias map plus set/clear/
-refresh so QA can drive the same code path the dialog uses. Invalid ids and
-non-DM rooms reject with a coded Error and a visible banner, never silence.
+Test handle: window.plotinaDmAliases exposes the name map plus
+setName/clearName/names/nameForRoom/partnerOf/refresh so QA can drive the same
+code path the dialog uses. Invalid ids and non-DM rooms reject with a coded
+Error and a visible banner, never silence.
 */
 (function (root) {
   "use strict";
 
-  var ACCOUNT_DATA_TYPE = "cc.plotina.room_aliases";
+  var ACCOUNT_DATA_TYPE = "cc.plotina.contact_names";
+  // The room-keyed map an earlier build wrote. Named so the code and its tests
+  // can say out loud that it is not read; nothing migrates it.
+  var LEGACY_ACCOUNT_DATA_TYPE = "cc.plotina.room_aliases";
   var DIRECT_EVENT_TYPE = "m.direct";
   var CLIENT_POLL_MS = 250;
 
@@ -81,6 +95,18 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
   function isRoomId(id) {
     return typeof id === "string" && id.length > 1 && id.charAt(0) === "!" &&
       !/[\s\/]/.test(id);
+  }
+
+  /**
+   * A Matrix user id is "@localpart:server". Only used to keep junk out of the
+   * name map: a room id, an alias or a half-written key is not a contact.
+   */
+  function isUserId(id) {
+    if (typeof id !== "string" || id !== id.trim()) return false;
+    if (id.length < 4 || id.charAt(0) !== "@") return false;
+    if (/[\s\/]/.test(id)) return false;
+    var colon = id.indexOf(":");
+    return colon > 1 && colon < id.length - 1;
   }
 
   var STRINGS = {
@@ -99,7 +125,7 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     },
     en: {
       title: "Personal name",
-      hint: "Only you see this. The room's name for everyone else is unchanged.",
+      hint: "Only you see this. Everyone else still sees the room's own name.",
       save: "Save",
       reset: "Reset",
       cancel: "Cancel",
@@ -113,16 +139,13 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
   };
 
   function t() {
-    var lang = (document.documentElement.lang || navigator.language || "").toLowerCase();
+    var lang = ((typeof document !== "undefined" && document.documentElement &&
+      document.documentElement.lang) || (typeof navigator !== "undefined" && navigator.language) || "")
+      .toLowerCase();
     return lang.indexOf("ru") === 0 ? STRINGS.ru : STRINGS.en;
   }
 
   var state = {
-    aliases: {},
-    // room_id -> user_id for this account's m.direct rooms; refreshed on
-    // every apply() and on m.direct changes. Used to answer "is this a DM?"
-    // without asking the id's shape.
-    direct: {},
     client: null,
     patched: false,
     started: false,
@@ -141,63 +164,69 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     }
   }
 
-  /** Account data content -> {room_id: label}, strings only, trimmed. */
-  function parseAliases(content) {
+  function ownUserId(c) {
+    try {
+      return (c && typeof c.getUserId === "function" && c.getUserId()) || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /**
+   * Account data content -> {mxid: name}, strings only, trimmed.
+   *
+   * Tolerates a JSON string of the map (another client may have left one) and
+   * every kind of junk: null, a list, a number, malformed JSON, a key that is
+   * not an mxid, a blank or non-string value. Junk is skipped, never thrown, so
+   * a corrupt account-data event cannot stop the client from rendering.
+   */
+  function parseNames(content) {
     var out = {};
-    if (!content || typeof content !== "object") return out;
-    Object.keys(content).forEach(function (roomId) {
-      var value = content[roomId];
-      if (typeof value !== "string" || !value.trim()) return;
-      if (!isRoomId(roomId)) {
-        warnOnce(roomId);
-        return;
+    var raw = content;
+    if (typeof raw === "string") {
+      if (!raw.trim()) return out;
+      try {
+        raw = JSON.parse(raw);
+      } catch (e) {
+        return out;
       }
-      out[roomId] = value.trim();
+    }
+    if (!raw || typeof raw !== "object" || Object.prototype.toString.call(raw) === "[object Array]") {
+      return out;
+    }
+    Object.keys(raw).forEach(function (userId) {
+      var value = raw[userId];
+      if (typeof value !== "string" || !value.trim()) return;
+      if (!isUserId(userId)) return; // a room id or a half-written key is not a contact
+      out[userId] = value.trim();
     });
     return out;
   }
 
-  // A payload from a buggy version or another client must not spam the
-  // console on every sync; report each dropped key once, loudly enough to be
-  // visible in the client log as the "why is my alias gone" trace.
-  var warnedKeys = {};
-  function warnOnce(roomId) {
-    if (warnedKeys[roomId] || typeof console === "undefined" || !console.warn) return;
-    warnedKeys[roomId] = true;
-    console.warn("[plotina-dm-aliases] ignoring alias for a key that is not a " +
-      "room id: " + JSON.stringify(roomId));
-  }
-
-  function readAliases(c) {
-    if (!c || typeof c.getAccountData !== "function") return {};
-    var event = c.getAccountData(ACCOUNT_DATA_TYPE);
-    if (!event || typeof event.getContent !== "function") return {};
-    try {
-      return parseAliases(event.getContent());
-    } catch (e) {
-      return {};
-    }
-  }
-
-  /** Immutable update: returns a copy of *map* with one room set or removed. */
-  function withAlias(map, roomId, name) {
+  /** Immutable update: a copy of *map* with one contact named or unnamed. */
+  function withName(map, userId, name) {
     var next = {};
     Object.keys(map || {}).forEach(function (key) {
       next[key] = map[key];
     });
-    if (name && String(name).trim()) next[roomId] = String(name).trim();
-    else delete next[roomId];
+    if (!isUserId(userId)) return next;
+    var wanted = name === undefined || name === null ? "" : String(name).trim();
+    if (wanted) next[userId] = wanted;
+    else delete next[userId];
     return next;
   }
 
   /**
-   * The name the overlay shows for a room, or null for "keep the room's own".
-   * Pure: a room only takes its alias when it is a personal dialogue, so a
-   * stale alias for a group room can never mask that room's real name.
+   * The name the overlay shows for a person, or null for "keep the real one".
+   *
+   * A personal name belongs to the PERSON, not to a room: it is the same name
+   * in a direct chat with them and in any group room they share with you
+   * (owner decision, plan §6). The room's own name is a different thing and is
+   * handled by nameForRoom(), which stays DM-only.
    */
-  function aliasFor(map, roomId, direct) {
-    if (!direct) return null;
-    var value = map && map[roomId];
+  function contactNameFor(map, userId) {
+    if (!userId) return null;
+    var value = map && map[userId];
     if (typeof value !== "string") return null;
     value = value.trim();
     return value || null;
@@ -205,68 +234,112 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
 
   /**
    * Why a change request must be refused, or null when it may go ahead.
-   * Pure, so the node tests pin both id shapes (v12 opaque included) and the
-   * DM-only rule without a browser. Clearing (blank name) is only checked for
-   * the id: a stale alias must stay removable even when the room is gone.
+   * Pure, so the node tests pin both id shapes (v12 opaque included), the
+   * DM-only rule and the contact it resolves to, without a browser. Clearing
+   * (blank name) is only checked for the id: a stale name must stay removable
+   * even when the room is gone from this client.
    */
-  function aliasRejection(roomId, name, room) {
+  function nameRejection(roomId, name, room) {
     if (!isRoomId(roomId)) return "invalid_room_id";
     var wanted = String(name === undefined || name === null ? "" : name).trim();
     if (!wanted) return null;
     if (!room || !room.known) return "unknown_room";
-    if (!room.direct) return "not_direct";
+    if (!room.direct || !isUserId(room.partner)) return "not_direct";
     return null;
   }
 
-  /* --------------------------------------------------------------- SDK hook */
+  function codedError(code) {
+    var err = new Error(code);
+    err.code = code;
+    return err;
+  }
+
+  /* --------------------------------------------------------------- SDK hooks */
 
   /**
-   * Wrap Room.prototype.calculateRoomName once. The alias answer is supplied
+   * Wrap Room.prototype.calculateRoomName once. The personal name is supplied
    * per room by *resolve*, so the hook itself is testable with a fake proto.
    * ignoreRoomNameEvent=true is getDefaultRoomName()'s call and stays stock.
    */
   function installNameHook(proto, resolve) {
     if (!proto || typeof proto.calculateRoomName !== "function") return false;
-    if (proto.__plotinaRoomAliases) return true;
+    if (proto.__plotinaContactNames) return true;
     var original = proto.calculateRoomName;
     proto.calculateRoomName = function (userId, ignoreRoomNameEvent) {
       if (!ignoreRoomNameEvent) {
-        var alias = resolve(this.roomId);
-        if (alias) return alias;
+        var name = resolve(this.roomId);
+        if (name) return name;
       }
       return original.apply(this, arguments);
     };
-    proto.__plotinaRoomAliases = true;
+    proto.__plotinaContactNames = true;
     return true;
   }
 
-  function patchRooms(c) {
-    var rooms = c.getRooms ? c.getRooms() : [];
-    if (!rooms || !rooms.length) return false;
-    var patched = installNameHook(Object.getPrototypeOf(rooms[0]), function (roomId) {
-      return aliasFor(state.aliases, roomId, isDirectRoom(roomId));
-    });
-    if (patched) state.patched = true;
-    return patched;
-  }
-
-  function recalculateRooms(c) {
-    var rooms = c.getRooms ? c.getRooms() : [];
-    for (var i = 0; i < rooms.length; i++) {
-      var room = rooms[i];
-      if (typeof room.recalculate === "function") {
-        try {
-          room.recalculate(); // emits Room.name when the display name changes
-        } catch (e) {
-          /* one broken room must not stop the others */
-        }
-      }
+  /**
+   * Rewrite a RoomMember's name, keeping the SDK's own value aside.
+   *
+   * RoomMember.name and .rawDisplayName are plain own properties that
+   * setMembershipEvent() writes from the membership event, so they can be
+   * rewritten in place. What the SDK wrote is remembered per member object; if
+   * something else writes that member later (a sync, a profile change), the new
+   * value becomes the stock one, which is how a reset returns the person's
+   * current real display name rather than the one from before the rename.
+   *
+   * name=null/"" restores the stock value. Returns true when the member was
+   * touched. A member object without the fields is still handled (they stay
+   * undefined on restore).
+   */
+  var memberStock = typeof WeakMap === "function" ? new WeakMap() : null;
+  function applyMemberName(member, name) {
+    if (!member || typeof member !== "object") return false;
+    if (!memberStock) return false;
+    var record = memberStock.get(member);
+    var wanted = name === undefined || name === null ? "" : String(name).trim();
+    if (!record) {
+      record = { stock: { name: member.name, raw: member.rawDisplayName }, applied: null };
+      memberStock.set(member, record);
+    } else if (member.name !== record.applied) {
+      record.stock = { name: member.name, raw: member.rawDisplayName };
+      record.applied = null;
     }
+    if (wanted) {
+      member.name = wanted;
+      member.rawDisplayName = wanted;
+      record.applied = wanted;
+    } else {
+      member.name = record.stock.name;
+      member.rawDisplayName = record.stock.raw;
+      record.applied = null;
+    }
+    return true;
   }
 
-  /* --------------------------------------------------------- DM detection */
+  /**
+   * Wrap RoomMember.prototype.setMembershipEvent once, so a member the SDK
+   * rewrites after a sync keeps the personal name. *resolve* answers with the
+   * name for a member, or null.
+   */
+  function installMemberHook(proto, resolve) {
+    if (!proto || typeof proto.setMembershipEvent !== "function") return false;
+    if (proto.__plotinaContactNames) return true;
+    var original = proto.setMembershipEvent;
+    proto.setMembershipEvent = function () {
+      var result = original.apply(this, arguments);
+      try {
+        applyMemberName(this, resolve(this));
+      } catch (e) {
+        /* one broken member must not break the sync */
+      }
+      return result;
+    };
+    proto.__plotinaContactNames = true;
+    return true;
+  }
 
-  /** m.direct content -> {room_id: user_id}; only room ids are kept. */
+  /* ---------------------------------------------------------- DM detection */
+
+  /** m.direct content -> {room_id: user_id}; only room ids and mxids are kept. */
   function readDirectRooms(c) {
     var out = {};
     if (!c || typeof c.getAccountData !== "function") return out;
@@ -275,7 +348,7 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     if (!content || typeof content !== "object") return out;
     Object.keys(content).forEach(function (userId) {
       var list = content[userId];
-      if (!Array.isArray(list)) return;
+      if (!Array.isArray(list) || !isUserId(userId)) return;
       list.forEach(function (roomId) {
         if (isRoomId(roomId)) out[roomId] = userId;
       });
@@ -283,17 +356,42 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     return out;
   }
 
-  /** Joined member count of a room, or null when the client cannot say. */
-  function joinedCount(room) {
+  /**
+   * Does this room carry its own m.room.name? Then that is the room's name and
+   * a personal name of a person inside it must not replace it (plan §1.4).
+   */
+  function hasExplicitRoomName(room) {
+    if (!room) return false;
+    try {
+      var state = room.currentState;
+      if (state && typeof state.getStateEvents === "function") {
+        var event = state.getStateEvents("m.room.name", "");
+        if (event) {
+          var content = typeof event.getContent === "function" ? event.getContent() : event;
+          if (content && typeof content.name === "string" && content.name.trim()) return true;
+        }
+      }
+      // The SDK keeps the raw m.room.name on the room itself as well; an empty
+      // string means "no name", not an explicit one.
+      if (typeof room.name === "string" && room.name.trim()) return true;
+    } catch (e) {
+      return false; // unknown means "let the personal name apply", as before
+    }
+    return false;
+  }
+
+  /** Joined member ids of a room, or null when the client cannot say. */
+  function joinedMemberIds(room) {
     if (!room) return null;
     try {
-      if (typeof room.getJoinedMemberCount === "function") {
-        var count = room.getJoinedMemberCount();
-        if (typeof count === "number") return count;
-      }
       if (typeof room.getJoinedMembers === "function") {
         var members = room.getJoinedMembers();
-        if (members) return members.length;
+        if (Array.isArray(members)) {
+          return members.map(function (m) { return m && m.userId; }).filter(Boolean);
+        }
+      }
+      if (typeof room.getJoinedMemberCount === "function" && room.getJoinedMemberCount() !== 2) {
+        return null;
       }
     } catch (e) {
       return null;
@@ -301,65 +399,337 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     return null;
   }
 
+  /* ---------------------------------------------------------------- engine */
+
   /**
-   * Is this room a personal dialogue for the signed-in account? Room data,
-   * not the id: v12 opaque ids carry no server part and no shape to test.
-   * A DM is a room m.direct lists, or a room with exactly two joined members
-   * (which is how Element itself presents one-to-one chats). Member data can
-   * arrive after the first name calculation; the SDK recalculates on member
-   * changes, and apply() recalculates on every sync.
+   * The storage + resolution model, with the Matrix client injected.
+   *
+   * Split out from the page wiring so the whole model — reading, resolving,
+   * writing, refusing — is exercised by node tests against a fake client
+   * without a browser.
    */
-  function isDirectRoom(roomId) {
-    if (state.direct[roomId]) return true;
-    var c = state.client || client();
-    var room = c && typeof c.getRoom === "function" ? c.getRoom(roomId) : null;
-    return joinedCount(room) === 2;
+  function createEngine(options) {
+    var opts = options || {};
+    var engine = {
+      client: opts.client || null,
+      names: {},
+      direct: {},
+      repaint: typeof opts.repaint === "function" ? opts.repaint : null,
+    };
+
+    engine.client_ = function () {
+      return engine.client || client();
+    };
+
+    /** The contact a room is a personal dialogue with, or null. */
+    engine.partnerOf = function (roomId) {
+      var c = engine.client_();
+      if (!isRoomId(roomId) || !c) return null;
+      var me = ownUserId(c);
+      var fromDirect = engine.direct[roomId];
+      if (isUserId(fromDirect) && fromDirect !== me) return fromDirect;
+      var room = typeof c.getRoom === "function" ? c.getRoom(roomId) : null;
+      var ids = joinedMemberIds(room);
+      if (!ids || ids.length !== 2) return null;
+      var others = ids.filter(function (id) { return id && id !== me; });
+      return others.length === 1 ? others[0] : null;
+    };
+
+    /**
+     * The name shown for a room title, or null for the room's own. DM-only.
+     *
+     * An explicit m.room.name is the name of the ROOM and outranks the name of
+     * the person in it (plan §1.4, same rule as Mobile 0023): a DM the user
+     * named "Наш проект" keeps that title, while the person inside it still
+     * carries their personal name in the member list and on their messages.
+     */
+    engine.nameForRoom = function (roomId) {
+      var c = engine.client_();
+      var room = c && typeof c.getRoom === "function" ? c.getRoom(roomId) : null;
+      if (hasExplicitRoomName(room)) return null;
+      var partner = engine.partnerOf(roomId);
+      return contactNameFor(engine.names, partner);
+    };
+
+    /** What the client knows about a room, for nameRejection(). */
+    engine.roomState = function (roomId) {
+      var c = engine.client_();
+      var room = c && typeof c.getRoom === "function" ? c.getRoom(roomId) : null;
+      var partner = engine.partnerOf(roomId);
+      return { known: !!(room || engine.direct[roomId]), direct: !!partner, partner: partner };
+    };
+
+    /** Re-read m.direct and the name map, then apply them. */
+    engine.refresh = function () {
+      var c = engine.client_();
+      if (!c) return {};
+      var content = null;
+      try {
+        var event = typeof c.getAccountData === "function" ? c.getAccountData(ACCOUNT_DATA_TYPE) : null;
+        content = event && typeof event.getContent === "function" ? event.getContent() : null;
+      } catch (e) {
+        content = null; // a broken event means "no names", never a crash
+      }
+      engine.direct = readDirectRooms(c);
+      engine.apply(parseNames(content));
+      return engine.names;
+    };
+
+    /** Swap the name map in, then rewrite members and repaint. */
+    engine.apply = function (names) {
+      engine.names = names || {};
+      var c = engine.client_();
+      if (!c) return;
+      engine.direct = readDirectRooms(c);
+      engine.install(c);
+      engine.applyToMembers(c);
+      if (engine.repaint) {
+        try {
+          engine.repaint(c);
+        } catch (e) {
+          /* a repaint failure is cosmetic; it must never break a write */
+        }
+      }
+    };
+
+    /**
+     * Rewrite every member that has a personal name, in every room.
+     *
+     * The name belongs to the person, so the same MXID is renamed in a group
+     * room exactly as in a direct chat (owner decision, plan §6): the room's
+     * member list and the author line of that person's messages follow. Only
+     * named people are touched — every other member gets null, which restores
+     * the stock value, so removing a name can never leave a masked member
+     * behind.
+     */
+    engine.applyToMembers = function (c) {
+      var rooms = typeof c.getRooms === "function" ? c.getRooms() : [];
+      for (var i = 0; i < rooms.length; i++) {
+        var room = rooms[i];
+        if (!room || !isRoomId(room.roomId)) continue;
+        var members = null;
+        try {
+          members = room.currentState && room.currentState.members;
+        } catch (e) {
+          members = null;
+        }
+        if (members) {
+          Object.keys(members).forEach(function (userId) {
+            try {
+              applyMemberName(members[userId], contactNameFor(engine.names, userId));
+            } catch (e) {
+              /* one broken member must not stop the rest */
+            }
+          });
+        }
+        // Events do NOT point at these members: each MatrixEvent carries a
+        // SENTINEL RoomMember (room-state.ts getSentinelMember), created on
+        // demand and frozen at the event's position. The author line and the
+        // room-list preview read that object, so renaming only the live
+        // members leaves the message showing the real display name.
+        var sentinels = null;
+        try {
+          sentinels = room.currentState && room.currentState.sentinels;
+        } catch (e) {
+          sentinels = null;
+        }
+        if (sentinels) {
+          Object.keys(sentinels).forEach(function (userId) {
+            try {
+              applyMemberName(sentinels[userId], contactNameFor(engine.names, userId));
+            } catch (e) {
+              /* one broken sentinel must not stop the rest */
+            }
+          });
+        }
+        if (typeof room.recalculate === "function") {
+          try {
+            room.recalculate(); // emits Room.name when the display name changed
+          } catch (e) {
+            /* one broken room must not stop the others */
+          }
+        }
+      }
+    };
+
+    /** Install both prototype hooks for this client, once. */
+    engine.install = function (c) {
+      var rooms = typeof c.getRooms === "function" ? c.getRooms() : [];
+      var roomProto = rooms.length ? Object.getPrototypeOf(rooms[0]) : null;
+      var nameHook = roomProto && installNameHook(roomProto, function (roomId) {
+        return engine.nameForRoom(roomId);
+      });
+      var memberProto = null;
+      for (var i = 0; i < rooms.length && !memberProto; i++) {
+        var members = rooms[i] && rooms[i].currentState && rooms[i].currentState.members;
+        var first = members && Object.keys(members)[0];
+        if (first) memberProto = Object.getPrototypeOf(members[first]);
+      }
+      var memberHook = memberProto && installMemberHook(memberProto, function (member) {
+        // By person, not by room: a member of a group room carries the same
+        // personal name as in their direct chat.
+        return contactNameFor(engine.names, member && member.userId);
+      });
+      if (nameHook || memberHook) state.patched = true;
+      return !!(nameHook && memberHook);
+    };
+
+    /**
+     * Write the sanitised map, never the caller's object: blank labels and keys
+     * that are not mxids must not reach the server, and removing the last name
+     * writes {} with no empty values.
+     */
+    engine.write = function (next) {
+      var c = engine.client_();
+      if (!c) return Promise.reject(new Error("no Matrix client yet"));
+      var clean = parseNames(next);
+      return c.setAccountData(ACCOUNT_DATA_TYPE, clean).then(function () {
+        // Apply locally at once; the accountData sync event re-reads the same
+        // map, so this is idempotent rather than racy.
+        engine.apply(clean);
+        return engine.names;
+      });
+    };
+
+    /** Name the person behind *roomId*; blank *name* resets it. */
+    engine.setName = function (roomId, name) {
+      var rejection = nameRejection(roomId, name, engine.roomState(roomId));
+      if (rejection) return Promise.reject(codedError(rejection));
+      var partner = engine.partnerOf(roomId);
+      if (!partner) return Promise.reject(codedError("not_direct"));
+      return engine.write(withName(engine.names, partner, name));
+    };
+
+    /**
+     * Reset the name of the person behind *roomId*.
+     *
+     * Resetting has to work even when the room is gone from this client (a
+     * stale name must always be removable), so a missing partner is a no-op
+     * rather than a refusal — the key is addressed by contact, not by room.
+     */
+    engine.clearName = function (roomId) {
+      if (!isRoomId(roomId)) return Promise.reject(codedError("invalid_room_id"));
+      var partner = engine.partnerOf(roomId);
+      if (!partner) return Promise.resolve(engine.names);
+      return engine.write(withName(engine.names, partner, ""));
+    };
+
+    return engine;
   }
 
-  /** What the client knows about a room, for aliasRejection(). */
-  function roomState(roomId) {
-    var c = state.client || client();
-    var room = c && typeof c.getRoom === "function" ? c.getRoom(roomId) : null;
-    return { known: !!(room || state.direct[roomId]), direct: isDirectRoom(roomId) };
+  /* ------------------------------------------------------------ page wiring */
+
+  /**
+   * Repaint the rooms after a name change: the title surfaces, the message
+   * tiles and the room-list preview.
+   *
+   * Every room is repainted, not just the one on screen. The personal name
+   * belongs to a person who may appear in several rooms (two DMs with them, a
+   * group), and a render-on-demand surface that is not currently open — the
+   * room-list preview above all — would otherwise keep the old sender name
+   * until the next message arrived in that room.
+   *
+   * A display name is not a React prop, so message tiles need the "this tile's
+   * body is stale" signal they already handle — the same one element-web emits
+   * after an edit. They then re-render against the member objects already
+   * rewritten by the caller. The preview is a store value generated from the
+   * last events, so it is refreshed by the action element-web dispatches for a
+   * live timeline event; that makes the store recompute the text (and read the
+   * new name) instead of showing the old one until the next message.
+   *
+   * *deps* carries the dispatcher and the open-room lookup so the whole
+   * decision is exercisable without a DOM.
+   */
+  function createRepaint(deps) {
+    var dispatcher = deps && deps.dispatcher;
+    var openRoomId = deps && typeof deps.openRoomId === "function" ? deps.openRoomId : function () { return null; };
+    return function repaint(c) {
+      var open = null;
+      try {
+        open = openRoomId();
+      } catch (e) {
+        open = null;
+      }
+      var rooms = typeof c.getRooms === "function" ? c.getRooms() : [];
+      for (var i = 0; i < rooms.length; i++) {
+        var room = rooms[i];
+        if (!room) continue;
+        if (typeof room.recalculate === "function") {
+          try {
+            room.recalculate();
+          } catch (e) {
+            /* one broken room must not stop the others */
+          }
+        }
+        var events = [];
+        try {
+          events = room.getLiveTimeline().getEvents();
+        } catch (e) {
+          events = []; // no timeline (an invite, a room being built): nothing to refresh
+        }
+        for (var j = 0; j < events.length; j++) {
+          var event = events[j];
+          if (!event || typeof event.emit !== "function") continue;
+          try {
+            // MatrixEventEvent.Replaced: "the body of this tile is stale".
+            event.emit("Event.replaced", event);
+          } catch (e) {
+            /* one stubborn tile is not a reason to stop */
+          }
+        }
+        refreshRoomListPreview(room, events, dispatcher);
+      }
+      return open;
+    };
   }
 
-  /** Swap the alias map in and repaint every room that might be affected. */
-  function apply(aliases) {
-    state.aliases = aliases;
-    var c = state.client || client();
-    if (!c) return;
-    state.direct = readDirectRooms(c);
-    if (patchRooms(c)) recalculateRooms(c);
-    var event = document.getElementById("plotina-dm-alias-dialog");
-    if (event) syncDialog();
+  /**
+   * Ask the message-preview store to recompute this room's preview.
+   *
+   * The store keeps the preview text per room and only regenerates it when a
+   * live timeline event is dispatched, so a rename alone would leave the old
+   * name in the room list until the next message. The payload is the one
+   * element-web itself dispatches for a live event; if the dispatcher or the
+   * action is not there (a future renderer), the preview simply refreshes on
+   * the next message, as it did before.
+   */
+  function refreshRoomListPreview(room, events, dispatcher) {
+    if (!dispatcher || typeof dispatcher.dispatch !== "function") return;
+    var last = events && events.length ? events[events.length - 1] : null;
+    if (!last) return;
+    try {
+      dispatcher.dispatch({
+        action: "MatrixActions.Room.timeline",
+        event: last,
+        room: room,
+        isLiveEvent: true,
+        isLiveUnfilteredRoomTimelineEvent: true,
+      });
+    } catch (e) {
+      /* the preview is cosmetic here; never let it break a rename */
+    }
   }
 
-  function refresh() {
-    var c = state.client || client();
-    if (!c) return {};
-    apply(readAliases(c));
-    return state.aliases;
+  /** The room id currently on screen, from the hash route, or null. */
+  function openRoomIdFromHash() {
+    var hash = typeof location !== "undefined" ? location.hash || "" : "";
+    if (hash.indexOf("#/room/") !== 0) return null;
+    try {
+      return decodeURIComponent(hash.slice("#/room/".length).split("/")[0].split("?")[0]);
+    } catch (e) {
+      return null;
+    }
   }
 
-  /* ------------------------------------------------------------ account data */
+  var repaintRoom = createRepaint({
+    dispatcher: root.mxDispatcher,
+    openRoomId: openRoomIdFromHash,
+  });
 
-  function writeAliases(next) {
-    var c = state.client || client();
-    if (!c) return Promise.reject(new Error("no Matrix client yet"));
-    // Write the sanitised map, never the caller's object: blank labels and
-    // keys that are not room ids must not reach the server (QA finding on
-    // reset), and removing the last alias writes {} with no empty values.
-    var clean = parseAliases(next);
-    return c.setAccountData(ACCOUNT_DATA_TYPE, clean).then(function () {
-      // Apply locally at once; the accountData sync event re-reads the same
-      // map, so this is idempotent rather than racy.
-      apply(clean);
-      return state.aliases;
-    });
-  }
+  var engine = createEngine({ repaint: repaintRoom });
 
-  /** Coded error the UI can translate; the message is already human-facing. */
-  function aliasError(code, roomId) {
+  /** Coded error with the human-facing message the dialog shows. */
+  function uiError(code, roomId) {
     var s = t();
     var messages = {
       invalid_room_id: s.invalid + JSON.stringify(String(roomId)),
@@ -371,38 +741,45 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     return err;
   }
 
-  function setAlias(roomId, name) {
-    var rejection = aliasRejection(roomId, name, roomState(roomId));
-    if (rejection) {
-      // The QA defect was a silent no-op: the write went through, nothing
-      // changed on screen. A refused write now says why, in the dialog and in
-      // a banner, and still rejects so callers (the test handle) see it.
-      var err = aliasError(rejection, roomId);
+  function setName(roomId, name) {
+    return engine.setName(roomId, name).then(function (next) {
+      return next;
+    }, function (rejection) {
+      var code = rejection && rejection.code;
+      if (!code) throw rejection;
+      // The QA defect was a silent no-op: the write went through and nothing
+      // changed on screen. A refused write now says why, in a banner, and still
+      // rejects so callers (the test handle) see it.
+      var err = uiError(code, roomId);
       showError(err.message);
-      return Promise.reject(err);
-    }
-    return writeAliases(withAlias(state.aliases, roomId, name));
+      throw err;
+    });
   }
 
-  function clearAlias(roomId) {
-    return setAlias(roomId, "");
+  function clearName(roomId) {
+    return setName(roomId, "");
   }
 
-  /* ---------------------------------------------------------------- wiring */
+  function refresh() {
+    return engine.refresh();
+  }
 
   function attach(c) {
     if (!c || c.__plotinaDmAliasesAttached) return;
     c.__plotinaDmAliasesAttached = true;
     state.client = c;
+    engine.client = c;
 
-    apply(readAliases(c));
+    engine.refresh();
 
-    // A room created after startup inherits the patched prototype, but its
+    // A room created after startup inherits the patched prototypes, but its
     // first name was computed before the patch could see it in some orders;
-    // recalculate on arrival so the alias wins either way.
+    // recalculate on arrival so the personal name wins either way.
     if (typeof c.on === "function") {
       c.on("Room", function (room) {
-        if (patchRooms(c) && room && typeof room.recalculate === "function") {
+        engine.install(c);
+        engine.applyToMembers(c);
+        if (room && typeof room.recalculate === "function") {
           try {
             room.recalculate();
           } catch (e) {
@@ -410,22 +787,27 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
           }
         }
       });
+      c.on("RoomState.members", function () {
+        // A member arrived or changed. The member hook renamed it already, but
+        // the tiles may still be showing the previous object.
+        repaintRoom(c);
+      });
       c.on("accountData", function (event) {
         if (!event || typeof event.getType !== "function") return;
         var type = event.getType();
         if (type === ACCOUNT_DATA_TYPE) {
-          apply(parseAliases(event.getContent ? event.getContent() : null));
+          engine.apply(parseNames(event.getContent ? event.getContent() : null));
         } else if (type === DIRECT_EVENT_TYPE) {
-          // A room that just became (or stopped being) a DM changes whether
-          // its alias applies at all; re-read m.direct and repaint.
-          apply(state.aliases);
+          // A room that just became (or stopped being) a DM changes whether a
+          // personal name applies at all; re-read m.direct and repaint.
+          engine.apply(engine.names);
         }
       });
       c.on("sync", function (syncState) {
         if (syncState === "PREPARED" || syncState === "SYNCING") {
           // The first sync is where both the rooms and the account data
           // arrive; reading again costs nothing on later ones.
-          apply(readAliases(c));
+          engine.refresh();
         }
       });
     }
@@ -443,12 +825,13 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     startUi();
 
     // Element can replace the MatrixClient in place (account switch, logout
-    // then login without a reload). The alias map and the prototype patch
+    // then login without a reload). The name map and the prototype patches
     // belong to whatever client object is current, so follow it.
     root.setInterval(function () {
       var current = client();
       if (current && current !== state.client) {
         state.patched = false;
+        engine.client = current;
         attach(current);
       }
     }, 2000);
@@ -567,9 +950,9 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
 
   function ensureHeaderButton() {
     var roomId = currentRoomId();
-    // The alias is a personal-dialogue feature (QA finding): no pencil on a
+    // The personal name is a dialogue feature (QA finding): no pencil on a
     // group room, where the name belongs to the room and to everyone in it.
-    if (!roomId || !isDirectRoom(roomId)) {
+    if (!roomId || !engine.partnerOf(roomId)) {
       removeHeaderButton();
       return;
     }
@@ -600,7 +983,7 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
       showError(t().invalid + JSON.stringify(String(roomId)));
       return;
     }
-    if (!isDirectRoom(roomId)) {
+    if (!engine.partnerOf(roomId)) {
       showError(t().notDirect);
       return;
     }
@@ -652,7 +1035,7 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     if (!wrap || !state.dialogRoomId) return;
     var input = wrap.querySelector("input");
     if (input && document.activeElement !== input) {
-      input.value = state.aliases[state.dialogRoomId] || "";
+      input.value = engine.nameForRoom(state.dialogRoomId) || "";
     }
   }
 
@@ -660,7 +1043,7 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
     var roomId = state.dialogRoomId;
     if (!roomId) return;
     var status = document.querySelector("#plotina-dm-alias-dialog .plotina-alias-status");
-    setAlias(roomId, value).then(function () {
+    setName(roomId, value).then(function () {
       closeDialog();
     }, function (err) {
       if (status) status.textContent = t().failed + (err && err.message ? err.message : err);
@@ -698,34 +1081,53 @@ non-DM rooms reject with a coded Error and a visible banner, never silence.
 
   root.plotinaDmAliases = {
     ACCOUNT_DATA_TYPE: ACCOUNT_DATA_TYPE,
+    LEGACY_ACCOUNT_DATA_TYPE: LEGACY_ACCOUNT_DATA_TYPE,
     ready: function () {
       return !!(state.client && state.patched);
     },
-    aliases: function () {
-      return state.aliases;
+    /** The contact map: {mxid: name}. */
+    names: function () {
+      return engine.names;
+    },
+    /** The personal name shown for a room, or null. */
+    nameForRoom: function (roomId) {
+      return engine.nameForRoom(roomId);
+    },
+    /** The mxid this room is a personal dialogue with, or null. */
+    partnerOf: function (roomId) {
+      return engine.partnerOf(roomId);
     },
     /** Is the given room a DM for this account (m.direct or 2 members)? */
-    isDirect: isDirectRoom,
+    isDirect: function (roomId) {
+      return !!engine.partnerOf(roomId);
+    },
     refresh: refresh,
-    setAlias: setAlias,
-    clearAlias: clearAlias,
+    setName: setName,
+    clearName: clearName,
   };
 
   /* ------------------------------------------------------------ node tests */
 
-  // CommonJS export for element-web/tests/dm_aliases.test.js: the pure pieces
-  // only. node has no DOM and no Matrix client, so the browser entry point
-  // below is skipped there (branding_test.py wires the test into the suite).
+  // CommonJS export for element-web/tests/contact_names.test.js: the pure
+  // pieces and the engine factory only. node has no DOM and no Matrix client,
+  // so the browser entry point below is skipped there (branding_test.py wires
+  // the test into the suite).
   if (typeof module !== "undefined" && module.exports) {
     module.exports = {
       ACCOUNT_DATA_TYPE: ACCOUNT_DATA_TYPE,
+      LEGACY_ACCOUNT_DATA_TYPE: LEGACY_ACCOUNT_DATA_TYPE,
       DIRECT_EVENT_TYPE: DIRECT_EVENT_TYPE,
       isRoomId: isRoomId,
-      parseAliases: parseAliases,
-      withAlias: withAlias,
-      aliasFor: aliasFor,
-      aliasRejection: aliasRejection,
+      isUserId: isUserId,
+      parseNames: parseNames,
+      withName: withName,
+      contactNameFor: contactNameFor,
+      nameRejection: nameRejection,
       installNameHook: installNameHook,
+      installMemberHook: installMemberHook,
+      applyMemberName: applyMemberName,
+      createEngine: createEngine,
+      createRepaint: createRepaint,
     };
     return;
   }
