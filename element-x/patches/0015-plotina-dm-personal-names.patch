@@ -1,16 +1,16 @@
 diff --git a/features/home/impl/src/main/kotlin/io/element/android/features/home/impl/datasource/RoomListDataSource.kt b/features/home/impl/src/main/kotlin/io/element/android/features/home/impl/datasource/RoomListDataSource.kt
-index 56b2c1ad..5b9e880f 100644
+index 56b2c1ad..68735dfb 100644
 --- a/features/home/impl/src/main/kotlin/io/element/android/features/home/impl/datasource/RoomListDataSource.kt
 +++ b/features/home/impl/src/main/kotlin/io/element/android/features/home/impl/datasource/RoomListDataSource.kt
 @@ -19,6 +19,7 @@ import io.element.android.libraries.di.SessionScope
  import io.element.android.libraries.di.annotations.SessionCoroutineScope
  import io.element.android.libraries.matrix.api.core.RoomId
  import io.element.android.libraries.matrix.api.notificationsettings.NotificationSettingsService
-+import io.element.android.libraries.matrix.api.room.alias.RoomAliasStore
++import io.element.android.libraries.matrix.api.room.alias.ContactNameStore
  import io.element.android.libraries.matrix.api.roomlist.RoomList
  import io.element.android.libraries.matrix.api.roomlist.RoomListFilter
  import io.element.android.libraries.matrix.api.roomlist.RoomListService
-@@ -34,7 +35,9 @@ import kotlinx.coroutines.coroutineScope
+@@ -34,9 +35,12 @@ import kotlinx.coroutines.coroutineScope
  import kotlinx.coroutines.delay
  import kotlinx.coroutines.flow.Flow
  import kotlinx.coroutines.flow.MutableSharedFlow
@@ -19,21 +19,24 @@ index 56b2c1ad..5b9e880f 100644
 +import kotlinx.coroutines.flow.drop
  import kotlinx.coroutines.flow.first
  import kotlinx.coroutines.flow.launchIn
++import kotlinx.coroutines.flow.merge
  import kotlinx.coroutines.flow.onEach
-@@ -60,10 +63,12 @@ class RoomListDataSource(
+ import kotlinx.coroutines.launch
+ import kotlinx.coroutines.sync.Mutex
+@@ -60,10 +64,12 @@ class RoomListDataSource(
      private val sessionCoroutineScope: CoroutineScope,
      private val dateTimeObserver: DateTimeObserver,
      private val analyticsService: AnalyticsService,
-+    private val roomAliasStore: RoomAliasStore,
++    private val contactNameStore: ContactNameStore,
  ) {
      init {
          observeNotificationSettings()
          observeDateTimeChanges()
-+        observeRoomAliases()
++        observeContactNames()
      }
  
      private val roomList = roomListService.createRoomList(
-@@ -145,6 +150,20 @@ class RoomListDataSource(
+@@ -145,6 +151,20 @@ class RoomListDataSource(
              .launchIn(sessionCoroutineScope)
      }
  
@@ -42,12 +45,12 @@ index 56b2c1ad..5b9e880f 100644
 +     * every visible row has to be rebuilt from the cached summaries with the new names. Reading the
 +     * store here rather than at session start keeps the read off the client when no screen shows names.
 +     */
-+    private fun observeRoomAliases() {
++    private fun observeContactNames() {
 +        sessionCoroutineScope.launch {
-+            roomAliasStore.refresh()
-+            roomAliasStore.aliases
-+                .drop(1)
-+                .collect { rebuildAllRoomSummaries() }
++            contactNameStore.refresh()
++            merge(contactNameStore.names.drop(1), contactNameStore.directRooms.drop(1))
++                .onEach { rebuildAllRoomSummaries() }
++                .collect()
 +        }
 +    }
 +
@@ -55,15 +58,15 @@ index 56b2c1ad..5b9e880f 100644
          lock.withLock {
              diffCacheUpdater.updateWith(roomSummaries)
 diff --git a/features/home/impl/src/main/kotlin/io/element/android/features/home/impl/datasource/RoomListRoomSummaryFactory.kt b/features/home/impl/src/main/kotlin/io/element/android/features/home/impl/datasource/RoomListRoomSummaryFactory.kt
-index ba3e8592..de70faf1 100644
+index ba3e8592..fbf55fec 100644
 --- a/features/home/impl/src/main/kotlin/io/element/android/features/home/impl/datasource/RoomListRoomSummaryFactory.kt
 +++ b/features/home/impl/src/main/kotlin/io/element/android/features/home/impl/datasource/RoomListRoomSummaryFactory.kt
 @@ -20,6 +20,8 @@ import io.element.android.libraries.eventformatter.api.RoomLatestEventFormatter
  import io.element.android.libraries.matrix.api.room.CallIntentConsensus
  import io.element.android.libraries.matrix.api.room.CurrentUserMembership
  import io.element.android.libraries.matrix.api.room.RoomInfo
-+import io.element.android.libraries.matrix.api.room.alias.RoomAliasStore
-+import io.element.android.libraries.matrix.api.room.alias.withPlotinaAlias
++import io.element.android.libraries.matrix.api.room.alias.ContactNameStore
++import io.element.android.libraries.matrix.api.room.alias.withPlotinaContactName
  import io.element.android.libraries.matrix.api.roomlist.LatestEventValue
  import io.element.android.libraries.matrix.api.roomlist.RoomSummary
  import io.element.android.libraries.matrix.ui.model.dmUserStatus
@@ -71,61 +74,71 @@ index ba3e8592..de70faf1 100644
  class RoomListRoomSummaryFactory(
      private val dateFormatter: DateFormatter,
      private val roomLatestEventFormatter: RoomLatestEventFormatter,
-+    private val roomAliasStore: RoomAliasStore,
++    private val contactNameStore: ContactNameStore,
  ) {
      fun create(roomSummary: RoomSummary): RoomListRoomSummary {
          val roomInfo = roomSummary.info
-@@ -38,7 +41,9 @@ class RoomListRoomSummaryFactory(
+@@ -38,7 +41,13 @@ class RoomListRoomSummaryFactory(
          return RoomListRoomSummary(
              id = roomSummary.roomId.value,
              roomId = roomSummary.roomId,
 -            name = roomInfo.name,
-+            // Plotina: the account's personal name for a personal dialogue wins over the room's own
-+            // name; groups and rooms without a personal name keep theirs.
-+            name = roomInfo.withPlotinaAlias(roomAliasStore.aliases.value).name,
++            // Plotina: the account's personal name for the contact wins over the room's own name;
++            // groups, rooms the contact has no name for and rooms with their own m.room.name keep
++            // theirs.
++            name = roomInfo.withPlotinaContactName(
++                names = contactNameStore.names.value,
++                directRooms = contactNameStore.directRooms.value,
++            ).name,
              numberOfUnreadMessages = roomInfo.numUnreadMessages,
              numberOfUnreadMentions = roomInfo.numUnreadMentions,
              numberOfUnreadNotifications = roomInfo.numUnreadNotifications,
 diff --git a/features/home/impl/src/test/kotlin/io/element/android/features/home/impl/datasource/RoomListDataSourceTest.kt b/features/home/impl/src/test/kotlin/io/element/android/features/home/impl/datasource/RoomListDataSourceTest.kt
-index 6df5e05d..6fc684a9 100644
+index 6df5e05d..c0d251a4 100644
 --- a/features/home/impl/src/test/kotlin/io/element/android/features/home/impl/datasource/RoomListDataSourceTest.kt
 +++ b/features/home/impl/src/test/kotlin/io/element/android/features/home/impl/datasource/RoomListDataSourceTest.kt
-@@ -18,7 +18,9 @@ import io.element.android.libraries.matrix.test.A_ROOM_ID
+@@ -17,8 +17,12 @@ import io.element.android.libraries.matrix.api.roomlist.RoomListService
+ import io.element.android.libraries.matrix.test.A_ROOM_ID
  import io.element.android.libraries.matrix.test.A_ROOM_ID_2
  import io.element.android.libraries.matrix.test.A_ROOM_ID_3
++import io.element.android.libraries.matrix.test.A_USER_ID_2
++import io.element.android.libraries.matrix.api.user.MatrixUser
  import io.element.android.libraries.matrix.test.notificationsettings.FakeNotificationSettingsService
 +import io.element.android.libraries.matrix.test.room.aRoomInfo
  import io.element.android.libraries.matrix.test.room.aRoomSummary
-+import io.element.android.libraries.matrix.test.room.alias.FakeRoomAliasStore
++import io.element.android.libraries.matrix.test.room.alias.FakeContactNameStore
  import io.element.android.libraries.matrix.test.roomlist.FakeDynamicRoomList
  import io.element.android.libraries.matrix.test.roomlist.FakeRoomListService
  import io.element.android.services.analytics.test.FakeAnalyticsService
-@@ -103,6 +105,33 @@ class RoomListDataSourceTest {
+@@ -103,6 +107,36 @@ class RoomListDataSourceTest {
          }
      }
  
 +    @Test
 +    fun `when the account's personal names change, the room summaries are refreshed`() = runTest {
 +        val roomList = FakeDynamicRoomList(
-+            summaries = MutableStateFlow(listOf(aRoomSummary(info = aRoomInfo(id = A_ROOM_ID, name = "Alice", isDm = true)))),
++            summaries = MutableStateFlow(
++                listOf(aRoomSummary(info = aRoomInfo(id = A_ROOM_ID, name = "Alice", rawName = null, isDm = true, heroes = listOf(MatrixUser(A_USER_ID_2))))),
++            ),
 +        )
 +        val roomListService = FakeRoomListService(
 +            createRoomListLambda = { roomList }
 +        ).apply {
 +            postState(RoomListService.State.Running)
 +        }
-+        val roomAliasStore = FakeRoomAliasStore()
++        val contactNameStore = FakeContactNameStore()
 +        val roomListDataSource = createRoomListDataSource(
 +            roomListService = roomListService,
-+            roomListRoomSummaryFactory = aRoomListRoomSummaryFactory(roomAliasStore = roomAliasStore),
-+            roomAliasStore = roomAliasStore,
++            roomListRoomSummaryFactory = aRoomListRoomSummaryFactory(contactNameStore = contactNameStore),
++            contactNameStore = contactNameStore,
 +        )
 +
 +        roomListDataSource.roomSummariesFlow.test {
 +            roomListDataSource.launchIn(backgroundScope)
 +            assertThat(awaitItem().first().name).isEqualTo("Alice")
 +
-+            roomAliasStore.givenAliases(mapOf(A_ROOM_ID to "Денчик"))
++            // What another client of the same account writes for the contact, keyed by mxid.
++            contactNameStore.givenNames(mapOf(A_USER_ID_2 to "Денчик"))
 +
 +            assertThat(awaitItem().first().name).isEqualTo("Денчик")
 +        }
@@ -134,61 +147,91 @@ index 6df5e05d..6fc684a9 100644
      /**
       * Tracking issue #4182: rooms duplicated in the room list around midnight.
       *
-@@ -266,6 +295,7 @@ class RoomListDataSourceTest {
+@@ -266,6 +300,7 @@ class RoomListDataSourceTest {
          notificationSettingsService: FakeNotificationSettingsService = FakeNotificationSettingsService(),
          dateTimeObserver: FakeDateTimeObserver = FakeDateTimeObserver(),
          analyticsService: FakeAnalyticsService = FakeAnalyticsService(),
-+        roomAliasStore: FakeRoomAliasStore = FakeRoomAliasStore(),
++        contactNameStore: FakeContactNameStore = FakeContactNameStore(),
      ) = RoomListDataSource(
          roomListService = roomListService,
          roomListRoomSummaryFactory = roomListRoomSummaryFactory,
-@@ -274,5 +304,6 @@ class RoomListDataSourceTest {
+@@ -274,5 +309,6 @@ class RoomListDataSourceTest {
          sessionCoroutineScope = backgroundScope,
          dateTimeObserver = dateTimeObserver,
          analyticsService = analyticsService,
-+        roomAliasStore = roomAliasStore,
++        contactNameStore = contactNameStore,
      )
  }
 diff --git a/features/home/impl/src/test/kotlin/io/element/android/features/home/impl/datasource/RoomListRoomSummaryFactoryTest.kt b/features/home/impl/src/test/kotlin/io/element/android/features/home/impl/datasource/RoomListRoomSummaryFactoryTest.kt
-index bfd92094..25e7ad63 100644
+index bfd92094..1fd96c49 100644
 --- a/features/home/impl/src/test/kotlin/io/element/android/features/home/impl/datasource/RoomListRoomSummaryFactoryTest.kt
 +++ b/features/home/impl/src/test/kotlin/io/element/android/features/home/impl/datasource/RoomListRoomSummaryFactoryTest.kt
-@@ -13,8 +13,11 @@ import io.element.android.libraries.dateformatter.api.DateFormatter
+@@ -13,8 +13,14 @@ import io.element.android.libraries.dateformatter.api.DateFormatter
  import io.element.android.libraries.dateformatter.test.FakeDateFormatter
  import io.element.android.libraries.eventformatter.api.RoomLatestEventFormatter
  import io.element.android.libraries.eventformatter.test.FakeRoomLatestEventFormatter
-+import io.element.android.libraries.matrix.api.room.alias.RoomAliasStore
++import io.element.android.libraries.matrix.api.room.alias.ContactNameStore
++import io.element.android.libraries.matrix.api.user.MatrixUser
 +import io.element.android.libraries.matrix.test.A_ROOM_ID
++import io.element.android.libraries.matrix.test.A_ROOM_ID_2
++import io.element.android.libraries.matrix.test.A_USER_ID_2
  import io.element.android.libraries.matrix.test.room.aRoomInfo
  import io.element.android.libraries.matrix.test.room.aRoomSummary
-+import io.element.android.libraries.matrix.test.room.alias.FakeRoomAliasStore
++import io.element.android.libraries.matrix.test.room.alias.FakeContactNameStore
  import org.junit.Test
  
  class RoomListRoomSummaryFactoryTest {
-@@ -37,12 +40,47 @@ class RoomListRoomSummaryFactoryTest {
+@@ -37,12 +43,97 @@ class RoomListRoomSummaryFactoryTest {
  
          assertThat(formatter.lastIsDmRoom).isFalse()
      }
 +
 +    @Test
-+    fun `a dm shows the account's personal name`() {
++    fun `a dm shows the account's personal name for the contact`() {
 +        val factory = aRoomListRoomSummaryFactory(
-+            roomAliasStore = FakeRoomAliasStore(mapOf(A_ROOM_ID to "Денчик")),
++            contactNameStore = FakeContactNameStore(mapOf(A_USER_ID_2 to "Денчик")),
 +        )
 +
-+        val summary = factory.create(aRoomSummary(info = aRoomInfo(id = A_ROOM_ID, name = "Alice", isDm = true)))
++        val summary = factory.create(
++            aRoomSummary(info = aRoomInfo(id = A_ROOM_ID, name = "Alice", rawName = null, isDm = true, heroes = listOf(MatrixUser(A_USER_ID_2)))),
++        )
 +
 +        assertThat(summary.name).isEqualTo("Денчик")
 +    }
 +
 +    @Test
-+    fun `a group keeps its own name`() {
++    fun `the same contact in two dms shows one name in both rows`() {
 +        val factory = aRoomListRoomSummaryFactory(
-+            roomAliasStore = FakeRoomAliasStore(mapOf(A_ROOM_ID to "Денчик")),
++            contactNameStore = FakeContactNameStore(mapOf(A_USER_ID_2 to "Денчик")),
++        )
++
++        val first = factory.create(
++            aRoomSummary(info = aRoomInfo(id = A_ROOM_ID, name = "Alice", rawName = null, isDm = true, heroes = listOf(MatrixUser(A_USER_ID_2)))),
++        )
++        val second = factory.create(
++            aRoomSummary(info = aRoomInfo(id = A_ROOM_ID_2, name = "Alice", rawName = null, isDm = true, heroes = listOf(MatrixUser(A_USER_ID_2)))),
++        )
++
++        assertThat(first.name).isEqualTo("Денчик")
++        assertThat(second.name).isEqualTo("Денчик")
++    }
++
++    @Test
++    fun `a group keeps its own name even when its member has a personal name`() {
++        val factory = aRoomListRoomSummaryFactory(
++            contactNameStore = FakeContactNameStore(mapOf(A_USER_ID_2 to "Денчик")),
 +        )
 +
 +        val summary = factory.create(
-+            aRoomSummary(info = aRoomInfo(id = A_ROOM_ID, name = "Weekend plans", isDm = false, isDirect = false)),
++            aRoomSummary(
++                info = aRoomInfo(
++                    id = A_ROOM_ID,
++                    name = "Weekend plans",
++                    isDm = false,
++                    isDirect = false,
++                    heroes = listOf(MatrixUser(A_USER_ID_2)),
++                ),
++            ),
 +        )
 +
 +        assertThat(summary.name).isEqualTo("Weekend plans")
@@ -198,39 +241,62 @@ index bfd92094..25e7ad63 100644
 +    fun `a dm without a personal name keeps its own name`() {
 +        val factory = aRoomListRoomSummaryFactory()
 +
-+        val summary = factory.create(aRoomSummary(info = aRoomInfo(id = A_ROOM_ID, name = "Alice", isDm = true)))
++        val summary = factory.create(
++            aRoomSummary(info = aRoomInfo(id = A_ROOM_ID, name = "Alice", rawName = null, isDm = true, heroes = listOf(MatrixUser(A_USER_ID_2)))),
++        )
 +
 +        assertThat(summary.name).isEqualTo("Alice")
++    }
++
++    @Test
++    fun `a dm with its own m room name keeps that name`() {
++        val factory = aRoomListRoomSummaryFactory(
++            contactNameStore = FakeContactNameStore(mapOf(A_USER_ID_2 to "Денчик")),
++        )
++
++        val summary = factory.create(
++            aRoomSummary(
++                info = aRoomInfo(
++                    id = A_ROOM_ID,
++                    name = "Our chat",
++                    rawName = "Our chat",
++                    isDm = true,
++                    heroes = listOf(MatrixUser(A_USER_ID_2)),
++                ),
++            ),
++        )
++
++        assertThat(summary.name).isEqualTo("Our chat")
 +    }
  }
  
  fun aRoomListRoomSummaryFactory(
      dateFormatter: DateFormatter = FakeDateFormatter { _, _, _ -> "Today" },
      roomLatestEventFormatter: RoomLatestEventFormatter = FakeRoomLatestEventFormatter(),
-+    roomAliasStore: RoomAliasStore = FakeRoomAliasStore(),
++    contactNameStore: ContactNameStore = FakeContactNameStore(),
  ) = RoomListRoomSummaryFactory(
      dateFormatter = dateFormatter,
      roomLatestEventFormatter = roomLatestEventFormatter,
-+    roomAliasStore = roomAliasStore,
++    contactNameStore = contactNameStore,
  )
 diff --git a/features/home/impl/src/test/kotlin/io/element/android/features/home/impl/roomlist/RoomListPresenterTest.kt b/features/home/impl/src/test/kotlin/io/element/android/features/home/impl/roomlist/RoomListPresenterTest.kt
-index f45e0fa7..ddc10035 100644
+index f45e0fa7..e37cfe35 100644
 --- a/features/home/impl/src/test/kotlin/io/element/android/features/home/impl/roomlist/RoomListPresenterTest.kt
 +++ b/features/home/impl/src/test/kotlin/io/element/android/features/home/impl/roomlist/RoomListPresenterTest.kt
 @@ -785,6 +785,7 @@ class RoomListPresenterTest {
              sessionCoroutineScope = backgroundScope,
              dateTimeObserver = FakeDateTimeObserver(),
              analyticsService = FakeAnalyticsService(),
-+            roomAliasStore = client.roomAliasStore,
++            contactNameStore = client.contactNameStore,
          ),
          searchPresenter = searchPresenter,
          globalSearchPresenter = { aGlobalSearchState() },
 diff --git a/features/roomdetails/impl/src/main/kotlin/io/element/android/features/roomdetails/impl/PlotinaPersonalNameDialog.kt b/features/roomdetails/impl/src/main/kotlin/io/element/android/features/roomdetails/impl/PlotinaPersonalNameDialog.kt
 new file mode 100644
-index 00000000..65754189
+index 00000000..195765ef
 --- /dev/null
 +++ b/features/roomdetails/impl/src/main/kotlin/io/element/android/features/roomdetails/impl/PlotinaPersonalNameDialog.kt
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,96 @@
 +/*
 + * Copyright (c) 2026 Element Creations Ltd.
 + *
@@ -266,9 +332,10 @@ index 00000000..65754189
 +/**
 + * Plotina: the dialog behind "Personal name" in the room details screen of a personal dialogue.
 + *
-+ * The name typed here is saved in the account's own account data (see
-+ * `RoomAliasStore`), so it changes nothing for the other side: [onSave] with a blank
-+ * field or [onReset] both mean "forget my name for this chat".
++ * The name typed here is saved in the account's own account data (see `ContactNameStore`), under
++ * the contact's matrix id, so it changes nothing for the other side and applies to every dialogue
++ * with that person: [onSave] with a blank field or [onReset] both mean "forget my name for this
++ * contact".
 + */
 +@Composable
 +internal fun PlotinaPersonalNameDialog(
@@ -353,7 +420,7 @@ index 9d06db37..1b75b3ab 100644
 +    data class SetPlotinaPersonalName(val name: String?) : RoomDetailsEvent
  }
 diff --git a/features/roomdetails/impl/src/main/kotlin/io/element/android/features/roomdetails/impl/RoomDetailsPresenter.kt b/features/roomdetails/impl/src/main/kotlin/io/element/android/features/roomdetails/impl/RoomDetailsPresenter.kt
-index e8a8079a..d01d1792 100644
+index e8a8079a..0948cf1e 100644
 --- a/features/roomdetails/impl/src/main/kotlin/io/element/android/features/roomdetails/impl/RoomDetailsPresenter.kt
 +++ b/features/roomdetails/impl/src/main/kotlin/io/element/android/features/roomdetails/impl/RoomDetailsPresenter.kt
 @@ -14,9 +14,11 @@ import androidx.compose.runtime.State
@@ -368,29 +435,40 @@ index e8a8079a..d01d1792 100644
  import dev.zacsweers.metro.Assisted
  import dev.zacsweers.metro.AssistedFactory
  import dev.zacsweers.metro.AssistedInject
-@@ -112,6 +114,8 @@ class RoomDetailsPresenter(
+@@ -44,6 +46,7 @@ import io.element.android.libraries.matrix.api.encryption.identity.IdentityState
+ import io.element.android.libraries.matrix.api.notificationsettings.NotificationSettingsService
+ import io.element.android.libraries.matrix.api.room.JoinedRoom
+ import io.element.android.libraries.matrix.api.room.RoomMember
++import io.element.android.libraries.matrix.api.room.alias.PlotinaContactNames
+ import io.element.android.libraries.matrix.api.room.join.JoinRule
+ import io.element.android.libraries.matrix.api.room.powerlevels.canEditRolesAndPermissions
+ import io.element.android.libraries.matrix.api.room.powerlevels.permissionsAsState
+@@ -112,6 +115,8 @@ class RoomDetailsPresenter(
          LaunchedEffect(Unit) {
              room.updateRoomNotificationSettings()
              observeNotificationSettings()
 +            // Plotina: the personal names of this account, in case this screen is the first one shown.
-+            client.roomAliasStore.refresh()
++            client.contactNameStore.refresh()
          }
  
          val isDm = roomInfo.isDm
-@@ -122,6 +126,12 @@ class RoomDetailsPresenter(
+@@ -122,6 +127,15 @@ class RoomDetailsPresenter(
          val dmMember by room.getDirectRoomMember(membersState)
          val roomMemberDetailsPresenter = roomMemberDetailsPresenter(dmMember?.userId)
          val roomType = getRoomType(dmMember)
 +
-+        // Plotina: the account's own name for a personal dialogue, read from its account data. The
-+        // dialog starts from that name, and hides the reset button when there is nothing to reset.
-+        val plotinaAliases by client.roomAliasStore.aliases.collectAsState()
++        // Plotina: the account's own name for the person this dialogue is with, read from its account
++        // data. The dialog starts from that name, and hides the reset button when there is nothing to
++        // reset. Keyed by the contact, so the same name shows in every dialogue with them.
++        val plotinaNames by client.contactNameStore.names.collectAsState()
++        val plotinaDirectRooms by client.contactNameStore.directRooms.collectAsState()
 +        var plotinaPersonalNameDialogVisible by remember { mutableStateOf(false) }
-+        val plotinaPersonalName = if (roomInfo.isDirect || isDm) plotinaAliases[room.roomId] else null
++        val plotinaContact = PlotinaContactNames.counterpart(roomInfo, plotinaDirectRooms)
++        val plotinaPersonalName = plotinaContact?.let { plotinaNames[it] }
          val roomCallState = roomCallStatePresenter.present()
          val joinedMemberCount by remember { derivedStateOf { roomInfo.joinedMembersCount } }
  
-@@ -180,6 +190,21 @@ class RoomDetailsPresenter(
+@@ -180,6 +194,28 @@ class RoomDetailsPresenter(
                  }
                  is RoomDetailsEvent.MarkAsRead -> scope.markAsRead()
                  is RoomDetailsEvent.MarkAsUnread -> scope.markAsUnread()
@@ -402,30 +480,46 @@ index e8a8079a..d01d1792 100644
 +                }
 +                is RoomDetailsEvent.SetPlotinaPersonalName -> {
 +                    plotinaPersonalNameDialogVisible = false
++                    val contact = plotinaContact
 +                    scope.launch(dispatchers.io) {
-+                        client.roomAliasStore.setAlias(room.roomId, event.name)
-+                            .onFailure {
-+                                snackbarDispatcher.post(SnackbarMessage(CommonStrings.common_error))
-+                            }
++                        if (contact == null) {
++                            // Nothing to write to: a name belongs to a contact, and this room has none
++                            // (the entry point is hidden for such rooms, so this is the belt as well).
++                            snackbarDispatcher.post(SnackbarMessage(CommonStrings.common_error))
++                        } else {
++                            client.contactNameStore.setName(contact, event.name)
++                                .onFailure {
++                                    snackbarDispatcher.post(SnackbarMessage(CommonStrings.common_error))
++                                }
++                        }
 +                    }
 +                }
              }
          }
  
-@@ -224,6 +249,8 @@ class RoomDetailsPresenter(
+@@ -224,6 +260,9 @@ class RoomDetailsPresenter(
              roomVersion = roomInfo.roomVersion,
              roomHistoryVisibility = roomInfo.historyVisibility,
              hasNewContent = hasNewContent,
 +            plotinaPersonalName = plotinaPersonalName,
++            plotinaContact = plotinaContact,
 +            plotinaPersonalNameDialogVisible = plotinaPersonalNameDialogVisible,
              eventSink = ::handleEvent,
          )
      }
 diff --git a/features/roomdetails/impl/src/main/kotlin/io/element/android/features/roomdetails/impl/RoomDetailsState.kt b/features/roomdetails/impl/src/main/kotlin/io/element/android/features/roomdetails/impl/RoomDetailsState.kt
-index 44640587..c6752da0 100644
+index 44640587..035b1b41 100644
 --- a/features/roomdetails/impl/src/main/kotlin/io/element/android/features/roomdetails/impl/RoomDetailsState.kt
 +++ b/features/roomdetails/impl/src/main/kotlin/io/element/android/features/roomdetails/impl/RoomDetailsState.kt
-@@ -53,6 +53,12 @@ data class RoomDetailsState(
+@@ -15,6 +15,7 @@ import io.element.android.features.userprofile.api.UserProfileState
+ import io.element.android.libraries.designsystem.utils.snackbar.SnackbarMessage
+ import io.element.android.libraries.matrix.api.core.RoomAlias
+ import io.element.android.libraries.matrix.api.core.RoomId
++import io.element.android.libraries.matrix.api.core.UserId
+ import io.element.android.libraries.matrix.api.room.RoomMember
+ import io.element.android.libraries.matrix.api.room.RoomNotificationSettings
+ import io.element.android.libraries.matrix.api.room.history.RoomHistoryVisibility
+@@ -53,6 +54,17 @@ data class RoomDetailsState(
      val roomVersion: String?,
      val roomHistoryVisibility: RoomHistoryVisibility,
      val hasNewContent: Boolean,
@@ -434,28 +528,35 @@ index 44640587..c6752da0 100644
 +     * this is not a personal dialogue).
 +     */
 +    val plotinaPersonalName: String?,
++    /**
++     * Plotina: the contact this room is a personal dialogue with, or null when the room is not one.
++     * A personal name belongs to the contact, so this is what the dialog writes to.
++     */
++    val plotinaContact: UserId?,
 +    val plotinaPersonalNameDialogVisible: Boolean,
      val eventSink: (RoomDetailsEvent) -> Unit
  ) {
      val roomBadges = buildList {
 diff --git a/features/roomdetails/impl/src/main/kotlin/io/element/android/features/roomdetails/impl/RoomDetailsStatePreviewParam.kt b/features/roomdetails/impl/src/main/kotlin/io/element/android/features/roomdetails/impl/RoomDetailsStatePreviewParam.kt
-index d1652b30..375d9b23 100644
+index d1652b30..e1ac97f4 100644
 --- a/features/roomdetails/impl/src/main/kotlin/io/element/android/features/roomdetails/impl/RoomDetailsStatePreviewParam.kt
 +++ b/features/roomdetails/impl/src/main/kotlin/io/element/android/features/roomdetails/impl/RoomDetailsStatePreviewParam.kt
-@@ -127,6 +127,8 @@ fun aRoomDetailsState(
+@@ -127,6 +127,9 @@ fun aRoomDetailsState(
      showDebugInfo: Boolean = false,
      roomHistoryVisibility: RoomHistoryVisibility = RoomHistoryVisibility.Shared,
      hasNewContent: Boolean = false,
 +    plotinaPersonalName: String? = null,
++    plotinaContact: UserId? = null,
 +    plotinaPersonalNameDialogVisible: Boolean = false,
      eventSink: (RoomDetailsEvent) -> Unit = {},
  ) = RoomDetailsState(
      roomId = roomId,
-@@ -159,6 +161,8 @@ fun aRoomDetailsState(
+@@ -159,6 +162,9 @@ fun aRoomDetailsState(
      roomVersion = "12",
      roomHistoryVisibility = roomHistoryVisibility,
      hasNewContent = hasNewContent,
 +    plotinaPersonalName = plotinaPersonalName,
++    plotinaContact = plotinaContact,
 +    plotinaPersonalNameDialogVisible = plotinaPersonalNameDialogVisible,
      eventSink = eventSink,
  )
@@ -509,7 +610,7 @@ index 62697700..198d9b79 100644
  
  @Composable
 diff --git a/features/roomdetails/impl/src/main/res/values-ru/translations.xml b/features/roomdetails/impl/src/main/res/values-ru/translations.xml
-index 1a6b928e..210b140c 100644
+index 1a6b928e..0902555d 100644
 --- a/features/roomdetails/impl/src/main/res/values-ru/translations.xml
 +++ b/features/roomdetails/impl/src/main/res/values-ru/translations.xml
 @@ -64,6 +64,9 @@
@@ -523,7 +624,7 @@ index 1a6b928e..210b140c 100644
    <string name="screen_room_details_requests_to_join_title">"Запросы на вступление"</string>
    <string name="screen_room_details_roles_and_permissions">"Роли и разрешения"</string>
 diff --git a/features/roomdetails/impl/src/main/res/values/localazy.xml b/features/roomdetails/impl/src/main/res/values/localazy.xml
-index ce384c03..49667bad 100644
+index ce384c03..ccd7c215 100644
 --- a/features/roomdetails/impl/src/main/res/values/localazy.xml
 +++ b/features/roomdetails/impl/src/main/res/values/localazy.xml
 @@ -67,6 +67,9 @@
@@ -536,39 +637,262 @@ index ce384c03..49667bad 100644
    <string name="screen_room_details_profile_row_title">"Profile"</string>
    <string name="screen_room_details_requests_to_join_title">"Requests to join"</string>
    <string name="screen_room_details_roles_and_permissions">"Roles &amp; permissions"</string>
+diff --git a/features/roomdetails/impl/src/test/kotlin/io/element/android/features/roomdetails/impl/MatrixRoomFixture.kt b/features/roomdetails/impl/src/test/kotlin/io/element/android/features/roomdetails/impl/MatrixRoomFixture.kt
+index edb9115a..92c5ae6f 100644
+--- a/features/roomdetails/impl/src/test/kotlin/io/element/android/features/roomdetails/impl/MatrixRoomFixture.kt
++++ b/features/roomdetails/impl/src/test/kotlin/io/element/android/features/roomdetails/impl/MatrixRoomFixture.kt
+@@ -16,6 +16,7 @@ import io.element.android.libraries.matrix.api.room.RoomMember
+ import io.element.android.libraries.matrix.api.room.join.JoinRule
+ import io.element.android.libraries.matrix.api.room.powerlevels.RoomPermissions
+ import io.element.android.libraries.matrix.api.timeline.ReceiptType
++import io.element.android.libraries.matrix.api.user.MatrixUser
+ import io.element.android.libraries.matrix.test.AN_AVATAR_URL
+ import io.element.android.libraries.matrix.test.A_ROOM_ALIAS
+ import io.element.android.libraries.matrix.test.A_ROOM_ID
+@@ -41,6 +42,8 @@ fun aFakeBaseRoom(
+     isEncrypted: Boolean = true,
+     isPublic: Boolean = true,
+     isDirect: Boolean = false,
++    isDm: Boolean = false,
++    heroes: List<MatrixUser> = emptyList(),
+     joinRule: JoinRule? = null,
+     activeMemberCount: Long = 1,
+     joinedMemberCount: Long = 1,
+@@ -68,6 +71,8 @@ fun aFakeBaseRoom(
+         avatarUrl = avatarUrl,
+         canonicalAlias = canonicalAlias,
+         isDirect = isDirect,
++        isDm = isDm,
++        heroes = heroes,
+         isPublic = isPublic,
+         isEncrypted = isEncrypted,
+         joinRule = joinRule,
+@@ -89,6 +94,8 @@ fun aJoinedRoom(
+     isEncrypted: Boolean = true,
+     isPublic: Boolean = true,
+     isDirect: Boolean = false,
++    isDm: Boolean = false,
++    heroes: List<MatrixUser> = emptyList(),
+     joinRule: JoinRule? = null,
+     activeMemberCount: Long = 1,
+     joinedMemberCount: Long = 1,
+@@ -137,6 +144,8 @@ fun aJoinedRoom(
+         avatarUrl = avatarUrl,
+         canonicalAlias = canonicalAlias,
+         isDirect = isDirect,
++        isDm = isDm,
++        heroes = heroes,
+         isPublic = isPublic,
+         isEncrypted = isEncrypted,
+         joinRule = joinRule,
+diff --git a/features/roomdetails/impl/src/test/kotlin/io/element/android/features/roomdetails/impl/RoomDetailsPresenterTest.kt b/features/roomdetails/impl/src/test/kotlin/io/element/android/features/roomdetails/impl/RoomDetailsPresenterTest.kt
+index da79d436..12d86cd8 100644
+--- a/features/roomdetails/impl/src/test/kotlin/io/element/android/features/roomdetails/impl/RoomDetailsPresenterTest.kt
++++ b/features/roomdetails/impl/src/test/kotlin/io/element/android/features/roomdetails/impl/RoomDetailsPresenterTest.kt
+@@ -33,6 +33,7 @@ import io.element.android.libraries.matrix.api.room.StateEventType
+ import io.element.android.libraries.matrix.api.room.join.JoinRule
+ import io.element.android.libraries.matrix.api.room.powerlevels.RoomPermissions
+ import io.element.android.libraries.matrix.api.timeline.ReceiptType
++import io.element.android.libraries.matrix.api.user.MatrixUser
+ import io.element.android.libraries.matrix.test.AN_AVATAR_URL
+ import io.element.android.libraries.matrix.test.AN_EVENT_ID
+ import io.element.android.libraries.matrix.test.A_ROOM_NAME
+@@ -44,6 +45,7 @@ import io.element.android.libraries.matrix.test.FakeMatrixClient
+ import io.element.android.libraries.matrix.test.encryption.FakeEncryptionService
+ import io.element.android.libraries.matrix.test.notificationsettings.FakeNotificationSettingsService
+ import io.element.android.libraries.matrix.test.room.aRoomInfo
++import io.element.android.libraries.matrix.test.room.alias.FakeContactNameStore
+ import io.element.android.libraries.matrix.test.room.powerlevels.FakeRoomPermissions
+ import io.element.android.libraries.preferences.api.store.AppPreferencesStore
+ import io.element.android.libraries.preferences.api.store.SessionPreferencesStore
+@@ -93,8 +95,12 @@ class RoomDetailsPresenterTest {
+         navigator: RoomDetailsNavigator = FakeRoomDetailsNavigator(),
+         notificationCleaner: NotificationCleaner = FakeNotificationCleaner(),
+         sessionPreferencesStore: SessionPreferencesStore = InMemorySessionPreferencesStore(),
++        contactNameStore: FakeContactNameStore = FakeContactNameStore(),
+     ): RoomDetailsPresenter {
+-        val matrixClient = FakeMatrixClient(notificationSettingsService = notificationSettingsService)
++        val matrixClient = FakeMatrixClient(
++            notificationSettingsService = notificationSettingsService,
++            contactNameStore = contactNameStore,
++        )
+         val roomMemberDetailsPresenterFactory = object : RoomMemberDetailsPresenter.Factory {
+             override fun create(roomMemberId: UserId): RoomMemberDetailsPresenter {
+                 return RoomMemberDetailsPresenter(
+@@ -736,6 +742,76 @@ class RoomDetailsPresenterTest {
+         }
+     }
+ 
++    @Test
++    fun `present - the personal name shown is the account's name for the contact`() = runTest {
++        val contactNameStore = FakeContactNameStore(initialNames = mapOf(A_USER_ID_2 to "Денчик"))
++        val room = aJoinedRoom(
++            roomPermissions = roomPermissions(),
++            isDm = true,
++            heroes = listOf(MatrixUser(A_USER_ID_2)),
++        )
++        val presenter = createRoomDetailsPresenter(room = room, contactNameStore = contactNameStore)
++        presenter.testWithLifecycleOwner(lifecycleOwner = fakeLifecycleOwner) {
++            val state = consumeItemsUntilPredicate { it.plotinaContact != null }.last()
++            assertThat(state.plotinaPersonalName).isEqualTo("Денчик")
++            cancelAndIgnoreRemainingEvents()
++        }
++    }
++
++    @Test
++    fun `present - a personal name is written for the contact, not for the room`() = runTest {
++        val contactNameStore = FakeContactNameStore()
++        val room = aJoinedRoom(
++            roomPermissions = roomPermissions(),
++            isDm = true,
++            heroes = listOf(MatrixUser(A_USER_ID_2)),
++        )
++        val presenter = createRoomDetailsPresenter(room = room, contactNameStore = contactNameStore)
++        presenter.testWithLifecycleOwner(lifecycleOwner = fakeLifecycleOwner) {
++            awaitItem().eventSink(RoomDetailsEvent.SetPlotinaPersonalName("Денчик"))
++            consumeItemsUntilPredicate { contactNameStore.setNameCalls.isNotEmpty() }
++
++            assertThat(contactNameStore.setNameCalls).containsExactly(A_USER_ID_2 to "Денчик")
++            cancelAndIgnoreRemainingEvents()
++        }
++    }
++
++    @Test
++    fun `present - resetting a personal name writes a reset for the contact`() = runTest {
++        val contactNameStore = FakeContactNameStore(initialNames = mapOf(A_USER_ID_2 to "Денчик"))
++        val room = aJoinedRoom(
++            roomPermissions = roomPermissions(),
++            isDm = true,
++            heroes = listOf(MatrixUser(A_USER_ID_2)),
++        )
++        val presenter = createRoomDetailsPresenter(room = room, contactNameStore = contactNameStore)
++        presenter.testWithLifecycleOwner(lifecycleOwner = fakeLifecycleOwner) {
++            awaitItem().eventSink(RoomDetailsEvent.SetPlotinaPersonalName(null))
++            consumeItemsUntilPredicate { contactNameStore.setNameCalls.isNotEmpty() }
++
++            assertThat(contactNameStore.setNameCalls).containsExactly(A_USER_ID_2 to null)
++            cancelAndIgnoreRemainingEvents()
++        }
++    }
++
++    @Test
++    fun `present - a group has no personal name and writes nothing`() = runTest {
++        val contactNameStore = FakeContactNameStore(initialNames = mapOf(A_USER_ID_2 to "Денчик"))
++        val room = aJoinedRoom(
++            roomPermissions = roomPermissions(),
++            isDm = false,
++            isDirect = false,
++            heroes = listOf(MatrixUser(A_USER_ID_2)),
++        )
++        val presenter = createRoomDetailsPresenter(room = room, contactNameStore = contactNameStore)
++        presenter.testWithLifecycleOwner(lifecycleOwner = fakeLifecycleOwner) {
++            val state = awaitItem()
++            assertThat(state.plotinaContact).isNull()
++            assertThat(state.plotinaPersonalName).isNull()
++            cancelAndIgnoreRemainingEvents()
++        }
++    }
++
+     private fun roomPermissions(
+         canInvite: Boolean = true,
+         canKick: Boolean = true,
 diff --git a/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/MatrixClient.kt b/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/MatrixClient.kt
-index 1260c9ec..4a3665e2 100644
+index 1260c9ec..1cbb2646 100644
 --- a/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/MatrixClient.kt
 +++ b/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/MatrixClient.kt
-@@ -35,6 +35,7 @@ import io.element.android.libraries.matrix.api.room.NotJoinedRoom
+@@ -34,6 +34,7 @@ import io.element.android.libraries.matrix.api.room.JoinedRoom
+ import io.element.android.libraries.matrix.api.room.NotJoinedRoom
  import io.element.android.libraries.matrix.api.room.RoomInfo
  import io.element.android.libraries.matrix.api.room.RoomMembershipObserver
++import io.element.android.libraries.matrix.api.room.alias.ContactNameStore
  import io.element.android.libraries.matrix.api.room.alias.ResolvedRoomAlias
-+import io.element.android.libraries.matrix.api.room.alias.RoomAliasStore
  import io.element.android.libraries.matrix.api.room.location.BeaconInfoUpdate
  import io.element.android.libraries.matrix.api.roomdirectory.RoomDirectoryService
- import io.element.android.libraries.matrix.api.roomlist.RoomListService
 @@ -466,6 +467,14 @@ interface MatrixClient : ClientUrlContentFetcher {
       */
      suspend fun setAccountData(eventType: String, content: String): Result<Unit>
  
 +    /**
-+     * Plotina: the personal names this account gives to its personal dialogues, read from the
-+     * `cc.plotina.room_aliases` account data event and kept up to date while the session lives.
++     * Plotina: the personal names this account gives to its contacts, read from the
++     * `cc.plotina.contact_names` account data event and kept up to date while the session lives.
 +     *
 +     * Session scoped, so the names of one account are never visible from another.
 +     */
-+    val roomAliasStore: RoomAliasStore
++    val contactNameStore: ContactNameStore
 +
      /**
       * Marks the room with the provided [roomId] as read, sending a fully read receipt for [eventId].
       *
-diff --git a/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaRoomAliases.kt b/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaRoomAliases.kt
+diff --git a/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/room/alias/ContactNameStore.kt b/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/room/alias/ContactNameStore.kt
 new file mode 100644
-index 00000000..32b2fc53
+index 00000000..74c31ab2
 --- /dev/null
-+++ b/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaRoomAliases.kt
-@@ -0,0 +1,97 @@
++++ b/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/room/alias/ContactNameStore.kt
+@@ -0,0 +1,58 @@
++/*
++ * Copyright (c) 2026 Element Creations Ltd.
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial.
++ * Please see LICENSE files in the repository root for full details.
++ */
++
++package io.element.android.libraries.matrix.api.room.alias
++
++import io.element.android.libraries.matrix.api.core.RoomId
++import io.element.android.libraries.matrix.api.core.UserId
++import kotlinx.coroutines.flow.StateFlow
++
++/**
++ * The account's personal names for its contacts, read from the [PLOTINA_CONTACT_NAMES_EVENT_TYPE]
++ * account data event.
++ *
++ * Session scoped: one store per logged-in account, so two accounts on the same device never see each
++ * other's names. [names] is hot and re-emits whenever the stored map changes, which is what the room
++ * list and the open chat listen to.
++ */
++interface ContactNameStore {
++    /**
++     * The current map of contact mxid to personal name. Empty until the first read completes, and
++     * empty again if the stored content cannot be understood.
++     */
++    val names: StateFlow<Map<UserId, String>>
++
++    /**
++     * Who each direct room is with, from the account's `m.direct` event. Only used to find the
++     * contact of a room the app does not treat as a two-member DM: for those the SDK already hands
++     * us the counterpart as the room's single hero.
++     */
++    val directRooms: StateFlow<Map<RoomId, UserId>>
++
++    /**
++     * The personal name saved for [userId], or null when it has none. Does not check whether any room
++     * is a personal dialogue with that contact: use [PlotinaContactNames.nameFor] for that.
++     */
++    fun nameFor(userId: UserId): String?
++
++    /**
++     * Re-reads the account data events and publishes the result.
++     *
++     * Fails only when the events cannot be read at all; content that is not valid JSON is not a
++     * failure, it is an empty map. Callers can ignore the result: [names] keeps its previous value.
++     */
++    suspend fun refresh(): Result<Unit>
++
++    /**
++     * Sets the personal name of [userId] to [name], or removes it when [name] is null or blank.
++     *
++     * Writes the whole [PLOTINA_CONTACT_NAMES_EVENT_TYPE] account data event, preserving the other
++     * entries, and never touches any room's state. The local map is updated only once the write
++     * succeeded.
++     */
++    suspend fun setName(userId: UserId, name: String?): Result<Unit>
++}
+diff --git a/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaContactNames.kt b/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaContactNames.kt
+new file mode 100644
+index 00000000..5b4f085e
+--- /dev/null
++++ b/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaContactNames.kt
+@@ -0,0 +1,154 @@
 +/*
 + * Copyright (c) 2026 Element Creations Ltd.
 + *
@@ -580,156 +904,155 @@ index 00000000..32b2fc53
 +
 +import io.element.android.libraries.matrix.api.core.MatrixPatterns
 +import io.element.android.libraries.matrix.api.core.RoomId
++import io.element.android.libraries.matrix.api.core.UserId
 +import io.element.android.libraries.matrix.api.room.RoomInfo
 +import kotlinx.serialization.json.Json
++import kotlinx.serialization.json.JsonArray
 +import kotlinx.serialization.json.JsonObject
 +import kotlinx.serialization.json.JsonPrimitive
 +import kotlinx.serialization.json.buildJsonObject
 +import kotlinx.serialization.json.put
 +
 +/**
-+ * The account data type holding the user's personal names for rooms.
++ * The account data type holding the user's personal names for contacts.
 + *
-+ * Plotina: a personal name is a label the account owner gives to a personal dialogue (a DM). It lives
-+ * in this account data event as `{"<room_id>": "<name>"}`, so only that account sees it: the room's
-+ * `m.room.name` state event is never written and the other side keeps the name it always had. An
-+ * empty value means "no personal name" and the key is dropped, so resetting the last alias leaves
-+ * `{}` behind rather than an empty string.
++ * Plotina: a personal name is a label the account owner gives to a person. It lives in this account
++ * data event as `{"<mxid>": "<name>"}`, so only that account sees it: nothing is ever written to
++ * `m.room.member`, `m.room.name` or the other side's profile. The key is the contact, not the room,
++ * which is what makes one name cover every conversation with that person - a second dialogue with
++ * the same person shows the same name without a second write, and a newly created one shows it at
++ * once.
 + *
-+ * The contract is shared with the other Plotina clients (Element Web/Desktop writes and reads the
++ * The contract is shared with the other Plotina clients (Mobile and Web/Desktop write and read the
 + * same event), so the parsing here is deliberately forgiving: anything that is not a JSON object of
-+ * room id to non-blank string is ignored instead of failing, which keeps a broken or foreign payload
-+ * from breaking the room list.
++ * mxid to non-blank string is ignored instead of failing, which keeps a broken or foreign payload
++ * from breaking the room list. The previous, room-keyed event `cc.plotina.room_aliases` is not read
++ * and not migrated: its keys are not mxids, so it falls out as junk like any other foreign content.
 + */
-+const val PLOTINA_ROOM_ALIASES_EVENT_TYPE = "cc.plotina.room_aliases"
++const val PLOTINA_CONTACT_NAMES_EVENT_TYPE = "cc.plotina.contact_names"
 +
-+object PlotinaRoomAliases {
++object PlotinaContactNames {
 +    private val json = Json { ignoreUnknownKeys = true }
 +
 +    /**
-+     * The personal names in an account data [content] payload, keyed by room id.
++     * The personal names in an account data [content] payload, keyed by the contact's matrix id.
 +     *
 +     * Never throws: blank, malformed or non-object content yields an empty map, and entries whose key
-+     * is not a room id or whose value is not a non-blank string are dropped.
++     * is not an mxid or whose value is not a non-blank string are dropped.
 +     */
-+    fun parse(content: String?): Map<RoomId, String> {
++    fun parse(content: String?): Map<UserId, String> {
 +        if (content.isNullOrBlank()) return emptyMap()
 +        val root = runCatching { json.parseToJsonElement(content) }.getOrNull() as? JsonObject ?: return emptyMap()
-+        val aliases = LinkedHashMap<RoomId, String>(root.size)
++        val names = LinkedHashMap<UserId, String>(root.size)
 +        root.forEach { (key, value) ->
-+            // Only keys that a RoomId accepts end up here: RoomId validates itself in debug builds,
-+            // so a foreign key must be filtered before it is wrapped.
-+            if (!MatrixPatterns.isRoomId(key)) return@forEach
++            // Only keys that a UserId accepts end up here: UserId validates itself in debug builds,
++            // so a foreign key (a room id from the old model, say) must be filtered before it is wrapped.
++            if (!MatrixPatterns.isUserId(key)) return@forEach
 +            val name = (value as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()
 +            if (name.isNullOrEmpty()) return@forEach
-+            aliases[RoomId(key)] = name
++            names[UserId(key)] = name
 +        }
-+        return aliases
++        return names
 +    }
 +
 +    /**
-+     * The account data content for [aliases], as a compact JSON object with sorted keys.
++     * The account data content for [names], as a compact JSON object with sorted keys.
 +     *
-+     * Blank names are dropped, so the payload never carries an empty value. Sorted keys keep the
-+     * written content stable: saving the same map twice writes the same bytes.
++     * Blank names are dropped, so the payload never carries an empty value: a reset removes the key,
++     * and resetting the last name writes `{}`. Sorted keys keep the written content stable: saving the
++     * same map twice writes the same bytes.
 +     */
-+    fun serialize(aliases: Map<RoomId, String>): String = buildJsonObject {
-+        aliases.entries
-+            .mapNotNull { (roomId, name) -> name.trim().takeIf { it.isNotEmpty() }?.let { roomId.value to it } }
-+            .sortedBy { (roomId, _) -> roomId }
-+            .forEach { (roomId, name) -> put(roomId, name) }
++    fun serialize(names: Map<UserId, String>): String = buildJsonObject {
++        names.entries
++            .mapNotNull { (userId, name) -> name.trim().takeIf { it.isNotEmpty() }?.let { userId.value to it } }
++            .sortedBy { (userId, _) -> userId }
++            .forEach { (userId, name) -> put(userId, name) }
 +    }.toString()
 +
 +    /**
-+     * The personal name to show for [roomId], or null to keep the room's own name.
++     * The contact this room is a personal dialogue with, or null when the room is not one.
 +     *
-+     * A room only takes its personal name when it is a personal dialogue: an alias left over for a
-+     * group (or set by another client for one) must never mask the group's real name. A personal
-+     * dialogue is either what the SDK flags as direct (`m.direct`) or the two-member room the app
-+     * already presents as a DM.
++     * A personal dialogue is either what the SDK flags as direct (`m.direct`) or the two-member room
++     * the app already presents as a DM. The SDK hands us the counterpart as the single hero of a DM;
++     * for a room that is only flagged direct (an `m.direct` entry with more members) there is no hero,
++     * so the account's own `m.direct` map answers instead.
 +     */
-+    fun aliasFor(aliases: Map<RoomId, String>, roomId: RoomId, isDirect: Boolean, isDm: Boolean): String? {
-+        if (!isDirect && !isDm) return null
-+        return aliases[roomId]
++    fun counterpart(roomInfo: RoomInfo, directRooms: Map<RoomId, UserId> = emptyMap()): UserId? {
++        if (!roomInfo.isDirect && !roomInfo.isDm) return null
++        return roomInfo.heroes.firstOrNull()?.userId ?: directRooms[roomInfo.id]
++    }
++
++    /**
++     * The personal name to show for [roomInfo], or null to keep the room's own name.
++     *
++     * A name is only applied to a personal dialogue: a name left over for a group must never mask the
++     * group's real name. An explicit `m.room.name` keeps the title, exactly as the Mobile client does
++     * (`getLocalizedDisplayname` returns the room's name before the heroes): a personal name renames a
++     * person, not a room.
++     */
++    fun nameFor(
++        names: Map<UserId, String>,
++        roomInfo: RoomInfo,
++        directRooms: Map<RoomId, UserId> = emptyMap(),
++    ): String? {
++        if (!roomInfo.rawName.isNullOrBlank()) return null
++        val contact = counterpart(roomInfo, directRooms) ?: return null
++        return names[contact]
 +    }
 +}
 +
 +/**
-+ * The [RoomInfo] to display: the room's own name, with the user's personal name on top when the room
-+ * is a personal dialogue and has one.
++ * The `m.direct` account data event, read backwards: room id to the account it names as the contact.
++ *
++ * `m.direct` is written by every client as `{"<mxid>": ["<room id>", ...]}`, so inverting it is the
++ * only way to know who a direct room is with when the room has more members than the two the app
++ * treats as a DM. Parsing is as forgiving as the names: anything that is not an array of room ids
++ * under an mxid is skipped.
++ */
++object PlotinaDirectRooms {
++    private val json = Json { ignoreUnknownKeys = true }
++
++    fun parse(content: String?): Map<RoomId, UserId> {
++        if (content.isNullOrBlank()) return emptyMap()
++        val root = runCatching { json.parseToJsonElement(content) }.getOrNull() as? JsonObject ?: return emptyMap()
++        val rooms = LinkedHashMap<RoomId, UserId>()
++        root.forEach { (key, value) ->
++            if (!MatrixPatterns.isUserId(key)) return@forEach
++            val roomIds = value as? JsonArray ?: return@forEach
++            val userId = UserId(key)
++            roomIds.forEach { roomId ->
++                val id = (roomId as? JsonPrimitive)?.takeIf { it.isString }?.content
++                if (id == null || !MatrixPatterns.isRoomId(id)) return@forEach
++                // A room may appear under more than one account only if the payload is broken; the
++                // first entry wins, so the answer does not depend on the order of the object.
++                rooms.putIfAbsent(RoomId(id), userId)
++            }
++        }
++        return rooms
++    }
++}
++
++/**
++ * The [RoomInfo] to display: the room's own name, with the account's personal name for the contact on
++ * top when the room is a personal dialogue and that contact has one.
 + *
 + * Only [RoomInfo.name] is replaced - the one field the app renders. [RoomInfo.rawName], which mirrors
 + * the `m.room.name` state event, and everything else stay as the SDK reported them, so nothing here
 + * can travel back to the room's state or to the other side.
 + */
-+fun RoomInfo.withPlotinaAlias(aliases: Map<RoomId, String>): RoomInfo {
-+    val alias = PlotinaRoomAliases.aliasFor(aliases, id, isDirect, isDm) ?: return this
-+    return copy(name = alias)
++fun RoomInfo.withPlotinaContactName(
++    names: Map<UserId, String>,
++    directRooms: Map<RoomId, UserId> = emptyMap(),
++): RoomInfo {
++    val name = PlotinaContactNames.nameFor(names, this, directRooms) ?: return this
++    return copy(name = name)
 +}
-\ No newline at end of file
-diff --git a/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/room/alias/RoomAliasStore.kt b/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/room/alias/RoomAliasStore.kt
+diff --git a/libraries/matrix/api/src/test/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaContactNamesTest.kt b/libraries/matrix/api/src/test/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaContactNamesTest.kt
 new file mode 100644
-index 00000000..91453b1c
+index 00000000..8e455c02
 --- /dev/null
-+++ b/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/room/alias/RoomAliasStore.kt
-@@ -0,0 +1,50 @@
-+/*
-+ * Copyright (c) 2026 Element Creations Ltd.
-+ *
-+ * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial.
-+ * Please see LICENSE files in the repository root for full details.
-+ */
-+
-+package io.element.android.libraries.matrix.api.room.alias
-+
-+import io.element.android.libraries.matrix.api.core.RoomId
-+import kotlinx.coroutines.flow.StateFlow
-+
-+/**
-+ * The account's personal names for its personal dialogues, read from the
-+ * [PLOTINA_ROOM_ALIASES_EVENT_TYPE] account data event.
-+ *
-+ * Session scoped: one store per logged-in account, so two accounts on the same device never see each
-+ * other's names. [aliases] is hot and re-emits whenever the stored map changes, which is what the room
-+ * list and the open chat listen to.
-+ */
-+interface RoomAliasStore {
-+    /**
-+     * The current map of room id to personal name. Empty until the first read completes, and empty
-+     * again if the stored content cannot be understood.
-+     */
-+    val aliases: StateFlow<Map<RoomId, String>>
-+
-+    /**
-+     * The personal name saved for [roomId], or null when it has none. Does not check whether the room
-+     * is a personal dialogue: use [PlotinaRoomAliases.aliasFor] for that.
-+     */
-+    fun nameFor(roomId: RoomId): String?
-+
-+    /**
-+     * Re-reads the account data event and publishes the result.
-+     *
-+     * Fails only when the event cannot be read at all; content that is not valid JSON is not a failure,
-+     * it is an empty map. Callers can ignore the result: [aliases] simply keeps its previous value.
-+     */
-+    suspend fun refresh(): Result<Unit>
-+
-+    /**
-+     * Sets the personal name of [roomId] to [name], or removes it when [name] is null or blank.
-+     *
-+     * Writes the whole [PLOTINA_ROOM_ALIASES_EVENT_TYPE] account data event, preserving the other
-+     * entries, and never touches the room's state. The local map is updated only once the write
-+     * succeeded.
-+     */
-+    suspend fun setAlias(roomId: RoomId, name: String?): Result<Unit>
-+}
-\ No newline at end of file
-diff --git a/libraries/matrix/api/src/test/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaRoomAliasesTest.kt b/libraries/matrix/api/src/test/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaRoomAliasesTest.kt
-new file mode 100644
-index 00000000..fa49c116
---- /dev/null
-+++ b/libraries/matrix/api/src/test/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaRoomAliasesTest.kt
-@@ -0,0 +1,185 @@
++++ b/libraries/matrix/api/src/test/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaContactNamesTest.kt
+@@ -0,0 +1,279 @@
 +/*
 + * Copyright (c) 2026 Element Creations Ltd.
 + *
@@ -741,74 +1064,124 @@ index 00000000..fa49c116
 +
 +import com.google.common.truth.Truth.assertThat
 +import io.element.android.libraries.matrix.api.core.RoomId
++import io.element.android.libraries.matrix.api.core.UserId
++import io.element.android.libraries.matrix.api.user.MatrixUser
++import io.element.android.libraries.matrix.test.A_USER_ID
++import io.element.android.libraries.matrix.test.A_USER_ID_2
 +import io.element.android.libraries.matrix.test.room.aRoomInfo
 +import org.junit.Test
 +
-+class PlotinaRoomAliasesTest {
-+    private val aRoomId = RoomId("!aRoomId:domain")
-+    private val anotherRoomId = RoomId("!anotherRoomId:domain")
++class PlotinaContactNamesTest {
++    private val aUserId = UserId("@aUserId:domain")
++    private val anotherUserId = UserId("@anotherUserId:domain")
++    private val dm1 = RoomId("!firstDm:domain")
++    private val dm2 = RoomId("!secondDm:domain")
 +
 +    // region apply
 +
 +    @Test
 +    fun `a personal name replaces the name of a dm`() {
-+        val info = aRoomInfo(id = aRoomId, name = "Alice", isDm = true)
++        val info = aRoomInfo(id = dm1, name = "Bob", rawName = null, isDm = true, heroes = listOf(MatrixUser(A_USER_ID_2)))
 +
-+        val result = info.withPlotinaAlias(mapOf(aRoomId to "Денчик"))
++        val result = info.withPlotinaContactName(mapOf(A_USER_ID_2 to "Денчик"))
 +
 +        assertThat(result.name).isEqualTo("Денчик")
 +    }
 +
 +    @Test
 +    fun `a personal name replaces the name of a room the sdk flags as direct`() {
-+        val info = aRoomInfo(id = aRoomId, name = "Alice", isDm = false, isDirect = true)
++        val info = aRoomInfo(id = dm1, name = "Bob", rawName = null, isDm = false, isDirect = true)
 +
-+        val result = info.withPlotinaAlias(mapOf(aRoomId to "Денчик"))
++        val result = info.withPlotinaContactName(
++            names = mapOf(A_USER_ID_2 to "Денчик"),
++            directRooms = mapOf(dm1 to A_USER_ID_2),
++        )
 +
 +        assertThat(result.name).isEqualTo("Денчик")
 +    }
 +
 +    @Test
-+    fun `a group keeps its own name even when it has a personal name`() {
-+        val info = aRoomInfo(id = aRoomId, name = "Weekend plans", isDm = false, isDirect = false)
++    fun `one person in two dms shows the same name in both`() {
++        // The contract keys by the contact, so a second dialogue with the same person needs no second
++        // write and cannot show a different name: both rooms resolve through the same key.
++        val names = mapOf(A_USER_ID_2 to "Денчик")
++        val first = aRoomInfo(id = dm1, name = "Bob", rawName = null, isDm = true, heroes = listOf(MatrixUser(A_USER_ID_2)))
++        val second = aRoomInfo(id = dm2, name = "Bob", rawName = null, isDm = true, heroes = listOf(MatrixUser(A_USER_ID_2)))
 +
-+        val result = info.withPlotinaAlias(mapOf(aRoomId to "Денчик"))
++        assertThat(first.withPlotinaContactName(names).name).isEqualTo("Денчик")
++        assertThat(second.withPlotinaContactName(names).name).isEqualTo("Денчик")
++    }
++
++    @Test
++    fun `a group keeps its own name even when its members have personal names`() {
++        val info = aRoomInfo(
++            id = dm1,
++            name = "Weekend plans",
++            isDm = false,
++            isDirect = false,
++            heroes = listOf(MatrixUser(A_USER_ID_2)),
++        )
++
++        val result = info.withPlotinaContactName(mapOf(A_USER_ID_2 to "Денчик"))
 +
 +        assertThat(result.name).isEqualTo("Weekend plans")
 +    }
 +
 +    @Test
-+    fun `a room without a personal name keeps its name`() {
-+        val info = aRoomInfo(id = aRoomId, name = "Alice", isDm = true)
++    fun `a room whose own name was set keeps it`() {
++        // A personal name renames a person, not a room: an explicit m.room.name wins in the title,
++        // exactly as in the Mobile client (getLocalizedDisplayname returns it before the heroes).
++        val info = aRoomInfo(id = dm1, name = "Our chat", rawName = "Our chat", isDm = true, heroes = listOf(MatrixUser(A_USER_ID_2)))
 +
-+        val result = info.withPlotinaAlias(mapOf(anotherRoomId to "Денчик"))
++        val result = info.withPlotinaContactName(mapOf(A_USER_ID_2 to "Денчик"))
 +
-+        assertThat(result.name).isEqualTo("Alice")
++        assertThat(result.name).isEqualTo("Our chat")
++    }
++
++    @Test
++    fun `a contact without a personal name keeps the room's name`() {
++        val info = aRoomInfo(id = dm1, name = "Bob", rawName = null, isDm = true, heroes = listOf(MatrixUser(A_USER_ID_2)))
++
++        val result = info.withPlotinaContactName(mapOf(anotherUserId to "Денчик"))
++
++        assertThat(result.name).isEqualTo("Bob")
 +    }
 +
 +    @Test
 +    fun `the name from the room state is never replaced`() {
-+        val info = aRoomInfo(id = aRoomId, name = "Alice", rawName = "The real room name", isDm = true)
++        val info = aRoomInfo(id = dm1, name = "Bob", rawName = "The real room name", isDm = true, heroes = listOf(MatrixUser(A_USER_ID_2)))
 +
-+        val result = info.withPlotinaAlias(mapOf(aRoomId to "Денчик"))
++        val result = info.withPlotinaContactName(mapOf(A_USER_ID_2 to "Денчик"))
 +
 +        assertThat(result.rawName).isEqualTo("The real room name")
 +    }
 +
 +    @Test
 +    fun `nothing but the name changes`() {
-+        val info = aRoomInfo(id = aRoomId, name = "Alice", isDm = true)
++        val info = aRoomInfo(id = dm1, name = "Bob", rawName = null, isDm = true, heroes = listOf(MatrixUser(A_USER_ID_2)))
 +
-+        val result = info.withPlotinaAlias(mapOf(aRoomId to "Денчик"))
++        val result = info.withPlotinaContactName(mapOf(A_USER_ID_2 to "Денчик"))
 +
 +        assertThat(result.copy(name = info.name)).isEqualTo(info)
 +    }
 +
 +    @Test
-+    fun `an empty alias map changes nothing`() {
-+        val info = aRoomInfo(id = aRoomId, name = "Alice", isDm = true)
++    fun `an empty name map changes nothing`() {
++        val info = aRoomInfo(id = dm1, name = "Bob", rawName = null, isDm = true, heroes = listOf(MatrixUser(A_USER_ID_2)))
 +
-+        assertThat(info.withPlotinaAlias(emptyMap())).isSameInstanceAs(info)
++        assertThat(info.withPlotinaContactName(emptyMap())).isSameInstanceAs(info)
++    }
++
++    @Test
++    fun `a dm without a hero falls back to the account's m direct map`() {
++        val info = aRoomInfo(id = dm1, name = "Bob", rawName = null, isDm = false, isDirect = true, heroes = emptyList())
++
++        val result = info.withPlotinaContactName(
++            names = mapOf(A_USER_ID_2 to "Денчик"),
++            directRooms = mapOf(dm1 to A_USER_ID_2),
++        )
++
++        assertThat(result.name).isEqualTo("Денчик")
 +    }
 +
 +    // endregion
@@ -816,68 +1189,72 @@ index 00000000..fa49c116
 +    // region parse
 +
 +    @Test
-+    fun `a payload is read as a room id to name map`() {
-+        val content = """{"!aRoomId:domain":"Денчик","!anotherRoomId:domain":"Мама"}"""
++    fun `a payload is read as a contact mxid to name map`() {
++        val content = """{"@aUserId:domain":"Денчик","@anotherUserId:domain":"Мама"}"""
 +
-+        val aliases = PlotinaRoomAliases.parse(content)
++        val names = PlotinaContactNames.parse(content)
 +
-+        assertThat(aliases).containsExactly(aRoomId, "Денчик", anotherRoomId, "Мама")
++        assertThat(names).containsExactly(aUserId, "Денчик", anotherUserId, "Мама")
++    }
++
++    @Test
++    fun `the payload the other clients write is read`() {
++        // Byte for byte the shape Mobile's plotinaContactNamesAfterSet and Web's overlay produce.
++        val names = PlotinaContactNames.parse("""{"@bob:plotina.cc":"Денчик"}""")
++
++        assertThat(names).containsExactly(UserId("@bob:plotina.cc"), "Денчик")
 +    }
 +
 +    @Test
 +    fun `names are trimmed`() {
-+        val aliases = PlotinaRoomAliases.parse("""{"!aRoomId:domain":"  Денчик  "}""")
++        val names = PlotinaContactNames.parse("""{"@aUserId:domain":"  Денчик  "}""")
 +
-+        assertThat(aliases).containsExactly(aRoomId, "Денчик")
++        assertThat(names).containsExactly(aUserId, "Денчик")
 +    }
 +
 +    @Test
 +    fun `a blank payload is an empty map`() {
-+        assertThat(PlotinaRoomAliases.parse(null)).isEmpty()
-+        assertThat(PlotinaRoomAliases.parse("")).isEmpty()
-+        assertThat(PlotinaRoomAliases.parse("   ")).isEmpty()
++        assertThat(PlotinaContactNames.parse(null)).isEmpty()
++        assertThat(PlotinaContactNames.parse("")).isEmpty()
++        assertThat(PlotinaContactNames.parse("   ")).isEmpty()
 +    }
 +
 +    @Test
 +    fun `broken json is an empty map rather than a crash`() {
-+        assertThat(PlotinaRoomAliases.parse("""{"!aRoomId:domain":""")).isEmpty()
-+        assertThat(PlotinaRoomAliases.parse("not json at all")).isEmpty()
-+        assertThat(PlotinaRoomAliases.parse("{]")).isEmpty()
++        assertThat(PlotinaContactNames.parse("""{"@aUserId:domain":""")).isEmpty()
++        assertThat(PlotinaContactNames.parse("not json at all")).isEmpty()
++        assertThat(PlotinaContactNames.parse("{]")).isEmpty()
 +    }
 +
 +    @Test
 +    fun `content that is not a json object is an empty map`() {
-+        assertThat(PlotinaRoomAliases.parse("[]")).isEmpty()
-+        assertThat(PlotinaRoomAliases.parse("""["!aRoomId:domain"]""")).isEmpty()
-+        assertThat(PlotinaRoomAliases.parse("\"a string\"")).isEmpty()
-+        assertThat(PlotinaRoomAliases.parse("42")).isEmpty()
++        assertThat(PlotinaContactNames.parse("[]")).isEmpty()
++        assertThat(PlotinaContactNames.parse("""["@aUserId:domain"]""")).isEmpty()
++        assertThat(PlotinaContactNames.parse("\"a string\"")).isEmpty()
++        assertThat(PlotinaContactNames.parse("42")).isEmpty()
 +    }
 +
 +    @Test
-+    fun `keys that are not room ids are dropped`() {
-+        val content = """{"aRoomId:domain":"Денчик","#alias:domain":"Мама","!not a room id":"x","":"y"}"""
++    fun `keys that are not mxids are dropped`() {
++        val content = """{"aUserId:domain":"Денчик","#alias:domain":"Мама","!aRoomId:domain":"Петя","":"y"}"""
 +
-+        val aliases = PlotinaRoomAliases.parse(content)
++        assertThat(PlotinaContactNames.parse(content)).isEmpty()
++    }
 +
-+        assertThat(aliases).isEmpty()
++    @Test
++    fun `the old room keyed event is junk, not a name`() {
++        // cc.plotina.room_aliases is never read and never migrated: its keys are room ids, so the
++        // contact parser drops all of them and the client behaves as if there were no names.
++        val oldEvent = """{"!aRoomId:domain":"Денчик","!anotherRoomId:domain":"Мама"}"""
++
++        assertThat(PlotinaContactNames.parse(oldEvent)).isEmpty()
 +    }
 +
 +    @Test
 +    fun `values that are not non blank strings are dropped`() {
-+        val content = """{"!aRoomId:domain":"","!anotherRoomId:domain":"   ","!third:domain":42,"!fourth:domain":null}"""
++        val content = """{"@aUserId:domain":"","@anotherUserId:domain":"   ","@c:domain":42,"@d:domain":null}"""
 +
-+        val aliases = PlotinaRoomAliases.parse(content)
-+
-+        assertThat(aliases).isEmpty()
-+    }
-+
-+    @Test
-+    fun `a v12 opaque room id is accepted`() {
-+        val opaque = RoomId("!opaqueBase64Url-Id_NoDomain")
-+
-+        val aliases = PlotinaRoomAliases.parse("""{"!opaqueBase64Url-Id_NoDomain":"Денчик"}""")
-+
-+        assertThat(aliases).containsExactly(opaque, "Денчик")
++        assertThat(PlotinaContactNames.parse(content)).isEmpty()
 +    }
 +
 +    // endregion
@@ -885,46 +1262,153 @@ index 00000000..fa49c116
 +    // region serialize
 +
 +    @Test
-+    fun `a map is written as room id to name json`() {
-+        val content = PlotinaRoomAliases.serialize(mapOf(aRoomId to "Денчик"))
++    fun `a map is written as mxid to name json`() {
++        val content = PlotinaContactNames.serialize(mapOf(aUserId to "Денчик"))
 +
-+        assertThat(content).isEqualTo("""{"!aRoomId:domain":"Денчик"}""")
++        assertThat(content).isEqualTo("""{"@aUserId:domain":"Денчик"}""")
 +    }
 +
 +    @Test
 +    fun `a reset writes no empty value`() {
 +        // A blank name cannot be represented: the entry disappears, and a map that becomes empty is
 +        // written as {} rather than as an empty value the other clients would have to understand.
-+        val content = PlotinaRoomAliases.serialize(mapOf(aRoomId to "  ", anotherRoomId to "Мама"))
++        val content = PlotinaContactNames.serialize(mapOf(aUserId to "  ", anotherUserId to "Мама"))
 +
-+        assertThat(content).isEqualTo("""{"!anotherRoomId:domain":"Мама"}""")
-+        assertThat(PlotinaRoomAliases.serialize(mapOf(aRoomId to ""))).isEqualTo("{}")
-+        assertThat(PlotinaRoomAliases.serialize(emptyMap())).isEqualTo("{}")
++        assertThat(content).isEqualTo("""{"@anotherUserId:domain":"Мама"}""")
++        assertThat(PlotinaContactNames.serialize(mapOf(aUserId to ""))).isEqualTo("{}")
++        assertThat(PlotinaContactNames.serialize(emptyMap())).isEqualTo("{}")
 +    }
 +
 +    @Test
 +    fun `written content is stable and round trips`() {
-+        val aliases = mapOf(anotherRoomId to " Мама ", aRoomId to "Денчик")
++        val names = mapOf(anotherUserId to " Мама ", aUserId to "Денчик")
 +
-+        val first = PlotinaRoomAliases.serialize(aliases)
-+        val second = PlotinaRoomAliases.serialize(aliases.entries.reversed().associate { it.toPair() })
++        val first = PlotinaContactNames.serialize(names)
++        val second = PlotinaContactNames.serialize(names.entries.reversed().associate { it.toPair() })
 +
 +        assertThat(first).isEqualTo(second)
-+        assertThat(PlotinaRoomAliases.parse(first)).containsExactly(aRoomId, "Денчик", anotherRoomId, "Мама")
++        assertThat(PlotinaContactNames.parse(first)).containsExactly(aUserId, "Денчик", anotherUserId, "Мама")
 +    }
 +
 +    // endregion
++
++    // region m.direct
++
++    @Test
++    fun `the m direct event is read as room id to contact`() {
++        val content = """{"@aUserId:domain":["!firstDm:domain","!secondDm:domain"],"@anotherUserId:domain":["!third:domain"]}"""
++
++        val rooms = PlotinaDirectRooms.parse(content)
++
++        assertThat(rooms).containsExactly(
++            dm1, aUserId,
++            dm2, aUserId,
++            RoomId("!third:domain"), anotherUserId,
++        )
++    }
++
++    @Test
++    fun `a broken m direct event is an empty map`() {
++        assertThat(PlotinaDirectRooms.parse(null)).isEmpty()
++        assertThat(PlotinaDirectRooms.parse("""{"@aUserId:domain":{"!firstDm:domain":"x"}}""")).isEmpty()
++        assertThat(PlotinaDirectRooms.parse("""{"@aUserId:domain":["not a room id"]}""")).isEmpty()
++        assertThat(PlotinaDirectRooms.parse("""["@aUserId:domain"]""")).isEmpty()
++        assertThat(PlotinaDirectRooms.parse("{ this is not json")).isEmpty()
++    }
++
++    // endregion
++
++    @Test
++    fun `the event type is the contract's, not the old room keyed one`() {
++        assertThat(PLOTINA_CONTACT_NAMES_EVENT_TYPE).isEqualTo("cc.plotina.contact_names")
++    }
++
++    @Test
++    fun `the account's own user is not mistaken for a contact`() {
++        // A payload that names ourselves must not be applied; the guard is on the room, so this only
++        // checks the resolver does not invent a name for a non-dialogue room of ours.
++        val info = aRoomInfo(id = dm1, name = "Notes", isDm = false, isDirect = false, heroes = listOf(MatrixUser(A_USER_ID)))
++
++        assertThat(info.withPlotinaContactName(mapOf(A_USER_ID to "Я")).name).isEqualTo("Notes")
++    }
 +}
-\ No newline at end of file
+diff --git a/libraries/matrix/api/src/test/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaContactNamesV12Test.kt b/libraries/matrix/api/src/test/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaContactNamesV12Test.kt
+new file mode 100644
+index 00000000..c762c094
+--- /dev/null
++++ b/libraries/matrix/api/src/test/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaContactNamesV12Test.kt
+@@ -0,0 +1,62 @@
++/*
++ * Copyright (c) 2026 Element Creations Ltd.
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial.
++ * Please see LICENSE files in the repository root for full details.
++ */
++
++package io.element.android.libraries.matrix.api.room.alias
++
++import com.google.common.truth.Truth.assertThat
++import io.element.android.libraries.matrix.api.core.RoomId
++import io.element.android.libraries.matrix.api.core.UserId
++import io.element.android.libraries.matrix.api.user.MatrixUser
++import io.element.android.libraries.matrix.test.room.aRoomInfo
++import org.junit.Test
++
++/**
++ * v12 rooms: since MSC4291 a room id is an opaque base64url string with no `:domain` part. The
++ * room-keyed model covered this with "a v12 opaque room id is accepted"; the contact model has to
++ * cover the same ground where a room id now shows up - as a value of the account's `m.direct` map,
++ * read backwards to answer "who is this DM with" when the room has no single hero.
++ */
++class PlotinaContactNamesV12Test {
++    private val bob = UserId("@bob:plotina.cc")
++    // A real v12 room id: `!` plus base64url, no domain.
++    private val v12Dm = RoomId("!T8BPsYkGZ1uAhCqWv3n")
++
++    @Test
++    fun `a v12 room id is read from the m direct event`() {
++        val rooms = PlotinaDirectRooms.parse("""{"@bob:plotina.cc":["!T8BPsYkGZ1uAhCqWv3n"]}""")
++
++        assertThat(rooms).containsExactly(v12Dm, bob)
++    }
++
++    @Test
++    fun `a contact name resolves for a v12 direct room without a hero`() {
++        val info = aRoomInfo(
++            id = v12Dm,
++            name = "bob",
++            rawName = null,
++            isDm = false,
++            isDirect = true,
++            heroes = emptyList(),
++        )
++
++        val result = info.withPlotinaContactName(
++            names = mapOf(bob to "Денчик"),
++            directRooms = PlotinaDirectRooms.parse("""{"@bob:plotina.cc":["!T8BPsYkGZ1uAhCqWv3n"]}"""),
++        )
++
++        assertThat(result.name).isEqualTo("Денчик")
++    }
++
++    @Test
++    fun `a v12 room id is not a contact key`() {
++        // The contact key is an mxid. A payload written by the old, room-keyed client has room ids in
++        // the keys - v12 ones included - and all of them must fall out as junk.
++        val names = PlotinaContactNames.parse("""{"!T8BPsYkGZ1uAhCqWv3n":"Денчик"}""")
++
++        assertThat(names).isEmpty()
++    }
++}
 diff --git a/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/RustMatrixClient.kt b/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/RustMatrixClient.kt
-index 9e63a790..f718e950 100644
+index 9e63a790..7c421dfa 100644
 --- a/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/RustMatrixClient.kt
 +++ b/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/RustMatrixClient.kt
 @@ -47,6 +47,7 @@ import io.element.android.libraries.matrix.api.room.RoomInfo
  import io.element.android.libraries.matrix.api.room.RoomMember
  import io.element.android.libraries.matrix.api.room.RoomMembershipObserver
  import io.element.android.libraries.matrix.api.room.alias.ResolvedRoomAlias
-+import io.element.android.libraries.matrix.api.room.alias.RoomAliasStore
++import io.element.android.libraries.matrix.api.room.alias.ContactNameStore
  import io.element.android.libraries.matrix.api.room.history.RoomHistoryVisibility
  import io.element.android.libraries.matrix.api.room.join.JoinRule
  import io.element.android.libraries.matrix.api.roomdirectory.RoomVisibility
@@ -932,7 +1416,7 @@ index 9e63a790..f718e950 100644
  import io.element.android.libraries.matrix.impl.room.RoomSyncSubscriber
  import io.element.android.libraries.matrix.impl.room.RustRoomFactory
  import io.element.android.libraries.matrix.impl.room.TimelineEventFilterFactory
-+import io.element.android.libraries.matrix.impl.room.alias.RustRoomAliasStore
++import io.element.android.libraries.matrix.impl.room.alias.RustContactNameStore
  import io.element.android.libraries.matrix.impl.room.history.map
  import io.element.android.libraries.matrix.impl.room.join.map
  import io.element.android.libraries.matrix.impl.room.location.map
@@ -940,8 +1424,8 @@ index 9e63a790..f718e950 100644
          sessionDispatcher = sessionDispatcher,
      )
  
-+    // Plotina: personal names of the account's personal dialogues (cc.plotina.room_aliases).
-+    override val roomAliasStore: RoomAliasStore = RustRoomAliasStore(
++    // Plotina: personal names of the account's contacts (cc.plotina.contact_names).
++    override val contactNameStore: ContactNameStore = RustContactNameStore(
 +        client = innerClient,
 +        syncService = syncService,
 +        sessionCoroutineScope = sessionCoroutineScope,
@@ -955,19 +1439,19 @@ index 9e63a790..f718e950 100644
          timelineEventFilterFactory = timelineEventFilterFactory,
          roomMembershipObserver = roomMembershipObserver,
          roomInfoMapper = roomInfoMapper,
-+        roomAliases = roomAliasStore,
++        contactNameStore = contactNameStore,
          featureFlagService = featureFlagService,
          analyticsService = analyticsService,
      )
 diff --git a/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/di/SessionMatrixBindingContainer.kt b/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/di/SessionMatrixBindingContainer.kt
-index f50c0a04..c72030f9 100644
+index f50c0a04..79c50e5d 100644
 --- a/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/di/SessionMatrixBindingContainer.kt
 +++ b/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/di/SessionMatrixBindingContainer.kt
 @@ -23,6 +23,7 @@ import io.element.android.libraries.matrix.api.media.MatrixMediaLoader
  import io.element.android.libraries.matrix.api.media.MediaPreviewService
  import io.element.android.libraries.matrix.api.notificationsettings.NotificationSettingsService
  import io.element.android.libraries.matrix.api.room.RoomMembershipObserver
-+import io.element.android.libraries.matrix.api.room.alias.RoomAliasStore
++import io.element.android.libraries.matrix.api.room.alias.ContactNameStore
  import io.element.android.libraries.matrix.api.roomdirectory.RoomDirectoryService
  import io.element.android.libraries.matrix.api.roomlist.RoomListService
  import io.element.android.libraries.matrix.api.scanner.ContentScanner
@@ -975,25 +1459,25 @@ index f50c0a04..c72030f9 100644
          return matrixClient.roomListService
      }
  
-+    // Plotina: personal names of the account's personal dialogues. Session scoped through the client.
++    // Plotina: personal names of the account's contacts. Session scoped through the client.
 +    @Provides
-+    fun providesRoomAliasStore(matrixClient: MatrixClient): RoomAliasStore {
-+        return matrixClient.roomAliasStore
++    fun providesContactNameStore(matrixClient: MatrixClient): ContactNameStore {
++        return matrixClient.contactNameStore
 +    }
 +
      @Provides
      fun providesSyncService(matrixClient: MatrixClient): SyncService {
          return matrixClient.syncService
 diff --git a/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/room/RustBaseRoom.kt b/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/room/RustBaseRoom.kt
-index 7c5cd106..48a2bd7c 100644
+index 7c5cd106..11695009 100644
 --- a/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/room/RustBaseRoom.kt
 +++ b/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/room/RustBaseRoom.kt
 @@ -23,6 +23,8 @@ import io.element.android.libraries.matrix.api.room.RoomMember
  import io.element.android.libraries.matrix.api.room.RoomMembersState
  import io.element.android.libraries.matrix.api.room.RoomMembershipObserver
  import io.element.android.libraries.matrix.api.room.draft.ComposerDraft
-+import io.element.android.libraries.matrix.api.room.alias.RoomAliasStore
-+import io.element.android.libraries.matrix.api.room.alias.withPlotinaAlias
++import io.element.android.libraries.matrix.api.room.alias.ContactNameStore
++import io.element.android.libraries.matrix.api.room.alias.withPlotinaContactName
  import io.element.android.libraries.matrix.api.room.powerlevels.RoomPermissions
  import io.element.android.libraries.matrix.api.room.powerlevels.RoomPowerLevelsValues
  import io.element.android.libraries.matrix.api.room.tombstone.PredecessorRoom
@@ -1009,11 +1493,11 @@ index 7c5cd106..48a2bd7c 100644
      coroutineDispatchers: CoroutineDispatchers,
      private val roomSyncSubscriber: RoomSyncSubscriber,
      private val roomMembershipObserver: RoomMembershipObserver,
-+    private val roomAliases: RoomAliasStore,
++    private val contactNameStore: ContactNameStore,
      sessionCoroutineScope: CoroutineScope,
      roomInfoMapper: RoomInfoMapper,
      initialRoomInfo: RoomInfo,
-@@ -76,13 +80,28 @@ class RustBaseRoom(
+@@ -76,13 +80,32 @@ class RustBaseRoom(
  
      override val roomCoroutineScope = sessionCoroutineScope.childScope(coroutineDispatchers.main, "RoomScope-$roomId")
  
@@ -1025,13 +1509,16 @@ index 7c5cd106..48a2bd7c 100644
 -        })
 -    }.stateIn(roomCoroutineScope, started = SharingStarted.Lazily, initialValue = initialRoomInfo)
 +    // Plotina: the SDK's room info carries the room's own display name; the account's personal name
-+    // (cc.plotina.room_aliases) is laid over it here, so both the open chat header and the room details
-+    // screen follow the alias, and follow it again whenever the account data changes.
-+    private val initialPlotinaRoomInfo = initialRoomInfo.withPlotinaAlias(roomAliases.aliases.value)
++    // for the contact (cc.plotina.contact_names) is laid over it here, so both the open chat header and
++    // the room details screen follow it, and follow it again whenever the account data changes.
++    private val initialPlotinaRoomInfo = initialRoomInfo.withPlotinaContactName(
++        names = contactNameStore.names.value,
++        directRooms = contactNameStore.directRooms.value,
++    )
 +    override val roomInfoFlow: StateFlow<RoomInfo> = combine(
 +        mxCallbackFlow {
 +            // The SDK only pushes a room info after a change; without a first value the combine below
-+            // would hold the initial room info until then and the alias would be late on screen.
++            // would hold the initial room info until then and the name would be late on screen.
 +            channel.trySend(initialRoomInfo)
 +            innerRoom.subscribeToRoomInfoUpdates(object : RoomInfoListener {
 +                override fun call(roomInfo: org.matrix.rustcomponents.sdk.RoomInfo) {
@@ -1039,8 +1526,9 @@ index 7c5cd106..48a2bd7c 100644
 +                }
 +            })
 +        },
-+        roomAliases.aliases,
-+    ) { roomInfo, aliases -> roomInfo.withPlotinaAlias(aliases) }
++        contactNameStore.names,
++        contactNameStore.directRooms,
++    ) { roomInfo, names, directRooms -> roomInfo.withPlotinaContactName(names, directRooms) }
 +        .stateIn(
 +            roomCoroutineScope,
 +            started = SharingStarted.Lazily,
@@ -1050,14 +1538,14 @@ index 7c5cd106..48a2bd7c 100644
      override fun predecessorRoom(): PredecessorRoom? {
          return runCatchingExceptions { innerRoom.predecessorRoom()?.map() }
 diff --git a/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/room/RustRoomFactory.kt b/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/room/RustRoomFactory.kt
-index 6d20a23f..8cc95b41 100644
+index 6d20a23f..d9d7b69d 100644
 --- a/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/room/RustRoomFactory.kt
 +++ b/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/room/RustRoomFactory.kt
 @@ -19,6 +19,7 @@ import io.element.android.libraries.matrix.api.notificationsettings.Notification
  import io.element.android.libraries.matrix.api.room.BaseRoom
  import io.element.android.libraries.matrix.api.room.JoinedRoom
  import io.element.android.libraries.matrix.api.room.RoomMembershipObserver
-+import io.element.android.libraries.matrix.api.room.alias.RoomAliasStore
++import io.element.android.libraries.matrix.api.room.alias.ContactNameStore
  import io.element.android.libraries.matrix.api.roomlist.RoomListService
  import io.element.android.libraries.matrix.api.roomlist.awaitLoaded
  import io.element.android.libraries.matrix.impl.room.join.map
@@ -1065,7 +1553,7 @@ index 6d20a23f..8cc95b41 100644
      private val featureFlagService: FeatureFlagService,
      private val roomMembershipObserver: RoomMembershipObserver,
      private val roomInfoMapper: RoomInfoMapper,
-+    private val roomAliases: RoomAliasStore,
++    private val contactNameStore: ContactNameStore,
      private val analyticsService: AnalyticsService,
  ) {
      private val dispatcher = dispatchers.computation.limitedParallelism(1)
@@ -1073,16 +1561,16 @@ index 6d20a23f..8cc95b41 100644
          coroutineDispatchers = dispatchers,
          roomSyncSubscriber = roomSyncSubscriber,
          roomMembershipObserver = roomMembershipObserver,
-+        roomAliases = roomAliases,
++        contactNameStore = contactNameStore,
          roomInfoMapper = roomInfoMapper,
          initialRoomInfo = roomInfoMapper.map(roomInfo),
          sessionCoroutineScope = sessionCoroutineScope,
-diff --git a/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/room/alias/RustRoomAliasStore.kt b/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/room/alias/RustRoomAliasStore.kt
+diff --git a/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/room/alias/RustContactNameStore.kt b/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/room/alias/RustContactNameStore.kt
 new file mode 100644
-index 00000000..d13cb19c
+index 00000000..af142edd
 --- /dev/null
-+++ b/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/room/alias/RustRoomAliasStore.kt
-@@ -0,0 +1,114 @@
++++ b/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/room/alias/RustContactNameStore.kt
+@@ -0,0 +1,125 @@
 +/*
 + * Copyright (c) 2026 Element Creations Ltd.
 + *
@@ -1096,9 +1584,11 @@ index 00000000..d13cb19c
 +import io.element.android.libraries.core.coroutine.childScope
 +import io.element.android.libraries.core.extensions.runCatchingExceptions
 +import io.element.android.libraries.matrix.api.core.RoomId
-+import io.element.android.libraries.matrix.api.room.alias.PLOTINA_ROOM_ALIASES_EVENT_TYPE
-+import io.element.android.libraries.matrix.api.room.alias.PlotinaRoomAliases
-+import io.element.android.libraries.matrix.api.room.alias.RoomAliasStore
++import io.element.android.libraries.matrix.api.core.UserId
++import io.element.android.libraries.matrix.api.room.alias.ContactNameStore
++import io.element.android.libraries.matrix.api.room.alias.PLOTINA_CONTACT_NAMES_EVENT_TYPE
++import io.element.android.libraries.matrix.api.room.alias.PlotinaContactNames
++import io.element.android.libraries.matrix.api.room.alias.PlotinaDirectRooms
 +import io.element.android.libraries.matrix.api.sync.SyncService
 +import kotlinx.coroutines.CoroutineScope
 +import kotlinx.coroutines.FlowPreview
@@ -1120,66 +1610,70 @@ index 00000000..d13cb19c
 +import kotlin.time.Duration.Companion.seconds
 +
 +/**
-+ * Plotina: [RoomAliasStore] on top of the account data API of the Rust SDK.
++ * Plotina: [ContactNameStore] on top of the account data API of the Rust SDK.
 + *
-+ * The event is read once at start and then re-read after every sync round trip, so a name set from
++ * Both events are read once at start and then re-read after every sync round trip, so a name set from
 + * another client of the same account shows up here as soon as that client's account data has been
-+ * synced. Writing goes through `setAccountData` only: the room's own state is never touched, which is
-+ * what makes the name private to this account.
++ * synced. Writing goes through `setAccountData` only: no room state is touched, which is what makes
++ * the name private to this account.
 + */
-+class RustRoomAliasStore(
++class RustContactNameStore(
 +    private val client: Client,
 +    private val syncService: SyncService,
 +    sessionCoroutineScope: CoroutineScope,
 +    dispatchers: CoroutineDispatchers,
-+) : RoomAliasStore {
++) : ContactNameStore {
 +    private val dispatcher = dispatchers.io.limitedParallelism(2)
-+    private val storeScope = sessionCoroutineScope.childScope(dispatchers.main, "RoomAliasStore")
++    private val storeScope = sessionCoroutineScope.childScope(dispatchers.main, "ContactNameStore")
 +
-+    // The reads and the read-modify-write of setAlias() must not interleave: a refresh landing in the
++    // The reads and the read-modify-write of setName() must not interleave: a refresh landing in the
 +    // middle of a save would otherwise publish the map from before the save.
 +    private val mutex = Mutex()
 +
-+    private val _aliases = MutableStateFlow<Map<RoomId, String>>(emptyMap())
-+    override val aliases: StateFlow<Map<RoomId, String>> = _aliases.asStateFlow()
++    private val _names = MutableStateFlow<Map<UserId, String>>(emptyMap())
++    override val names: StateFlow<Map<UserId, String>> = _names.asStateFlow()
++
++    private val _directRooms = MutableStateFlow<Map<RoomId, UserId>>(emptyMap())
++    override val directRooms: StateFlow<Map<RoomId, UserId>> = _directRooms.asStateFlow()
 +
 +    init {
 +        storeScope.launch { observeSync() }
 +    }
 +
-+    override fun nameFor(roomId: RoomId): String? = _aliases.value[roomId]
++    override fun nameFor(userId: UserId): String? = _names.value[userId]
 +
 +    override suspend fun refresh(): Result<Unit> = withContext(dispatcher) {
 +        runCatchingExceptions {
-+            // Read and publish under the same lock as setAlias(): a read that started before a write
++            // Read and publish under the same lock as setName(): a read that started before a write
 +            // must not publish its stale map after it.
 +            mutex.withLock {
-+                _aliases.value = PlotinaRoomAliases.parse(client.accountData(PLOTINA_ROOM_ALIASES_EVENT_TYPE))
++                _names.value = PlotinaContactNames.parse(client.accountData(PLOTINA_CONTACT_NAMES_EVENT_TYPE))
++                _directRooms.value = PlotinaDirectRooms.parse(client.accountData(M_DIRECT_EVENT_TYPE))
 +            }
 +        }.onFailure {
-+            // A failure to read must not clear what is already displayed: keep the previous map.
-+            Timber.e(it, "Plotina: could not read $PLOTINA_ROOM_ALIASES_EVENT_TYPE")
++            // A failure to read must not clear what is already displayed: keep the previous maps.
++            Timber.e(it, "Plotina: could not read the personal names of this account")
 +        }
 +    }
 +
-+    override suspend fun setAlias(roomId: RoomId, name: String?): Result<Unit> = withContext(dispatcher) {
++    override suspend fun setName(userId: UserId, name: String?): Result<Unit> = withContext(dispatcher) {
 +        mutex.withLock {
 +            runCatchingExceptions {
 +                // Build the new content from what the server has, not from the snapshot: another
 +                // client of this account may have added a name we have not synced yet, and this
 +                // write replaces the whole event.
-+                val stored = PlotinaRoomAliases.parse(client.accountData(PLOTINA_ROOM_ALIASES_EVENT_TYPE))
++                val stored = PlotinaContactNames.parse(client.accountData(PLOTINA_CONTACT_NAMES_EVENT_TYPE))
 +                val updated = stored.toMutableMap()
 +                val trimmed = name?.trim()
 +                if (trimmed.isNullOrEmpty()) {
-+                    updated.remove(roomId)
++                    updated.remove(userId)
 +                } else {
-+                    updated[roomId] = trimmed
++                    updated[userId] = trimmed
 +                }
-+                client.setAccountData(PLOTINA_ROOM_ALIASES_EVENT_TYPE, PlotinaRoomAliases.serialize(updated))
-+                _aliases.value = updated
++                client.setAccountData(PLOTINA_CONTACT_NAMES_EVENT_TYPE, PlotinaContactNames.serialize(updated))
++                _names.value = updated
 +            }.onFailure {
-+                Timber.e(it, "Plotina: could not write $PLOTINA_ROOM_ALIASES_EVENT_TYPE")
++                Timber.e(it, "Plotina: could not write $PLOTINA_CONTACT_NAMES_EVENT_TYPE")
 +            }
 +        }
 +    }
@@ -1196,17 +1690,21 @@ index 00000000..d13cb19c
 +            .onEach { refresh() }
 +            .launchIn(storeScope)
 +    }
++
++    private companion object {
++        /** The Matrix event that maps a contact to the rooms the account talks to them in. */
++        const val M_DIRECT_EVENT_TYPE = "m.direct"
++    }
 +}
-\ No newline at end of file
 diff --git a/libraries/matrix/impl/src/test/kotlin/io/element/android/libraries/matrix/impl/room/RustBaseRoomTest.kt b/libraries/matrix/impl/src/test/kotlin/io/element/android/libraries/matrix/impl/room/RustBaseRoomTest.kt
-index 6508c041..bcdc8fdd 100644
+index 6508c041..eace49c2 100644
 --- a/libraries/matrix/impl/src/test/kotlin/io/element/android/libraries/matrix/impl/room/RustBaseRoomTest.kt
 +++ b/libraries/matrix/impl/src/test/kotlin/io/element/android/libraries/matrix/impl/room/RustBaseRoomTest.kt
 @@ -15,6 +15,7 @@ import io.element.android.libraries.matrix.api.room.CurrentUserMembership
  import io.element.android.libraries.matrix.api.room.RoomInfo
  import io.element.android.libraries.matrix.api.room.RoomMember
  import io.element.android.libraries.matrix.api.room.RoomMembershipObserver
-+import io.element.android.libraries.matrix.api.room.alias.RoomAliasStore
++import io.element.android.libraries.matrix.api.room.alias.ContactNameStore
  import io.element.android.libraries.matrix.api.room.powerlevels.RoomPowerLevels
  import io.element.android.libraries.matrix.api.timeline.item.event.MembershipChange
  import io.element.android.libraries.matrix.impl.fixtures.fakes.FakeFfiRoom
@@ -1214,7 +1712,7 @@ index 6508c041..bcdc8fdd 100644
  import io.element.android.libraries.matrix.test.A_SESSION_ID
  import io.element.android.libraries.matrix.test.A_USER_ID
  import io.element.android.libraries.matrix.test.room.aRoomInfo
-+import io.element.android.libraries.matrix.test.room.alias.FakeRoomAliasStore
++import io.element.android.libraries.matrix.test.room.alias.FakeContactNameStore
  import io.element.android.libraries.matrix.test.room.defaultRoomPowerLevelValues
  import io.element.android.tests.testutils.testCoroutineDispatchers
  import kotlinx.collections.immutable.persistentMapOf
@@ -1222,7 +1720,7 @@ index 6508c041..bcdc8fdd 100644
          initialRoomInfo: RoomInfo = aRoomInfo(),
          innerRoom: FakeFfiRoom = FakeFfiRoom(),
          roomMembershipObserver: RoomMembershipObserver = RoomMembershipObserver(),
-+        roomAliases: RoomAliasStore = FakeRoomAliasStore(),
++        contactNameStore: ContactNameStore = FakeContactNameStore(),
      ): RustBaseRoom {
          val dispatchers = testCoroutineDispatchers()
          return RustBaseRoom(
@@ -1230,16 +1728,16 @@ index 6508c041..bcdc8fdd 100644
                  dispatchers = dispatchers,
              ),
              roomMembershipObserver = roomMembershipObserver,
-+            roomAliases = roomAliases,
++            contactNameStore = contactNameStore,
              sessionCoroutineScope = backgroundScope,
              roomInfoMapper = RoomInfoMapper(),
              initialRoomInfo = initialRoomInfo,
-diff --git a/libraries/matrix/impl/src/test/kotlin/io/element/android/libraries/matrix/impl/room/alias/RustRoomAliasStoreTest.kt b/libraries/matrix/impl/src/test/kotlin/io/element/android/libraries/matrix/impl/room/alias/RustRoomAliasStoreTest.kt
+diff --git a/libraries/matrix/impl/src/test/kotlin/io/element/android/libraries/matrix/impl/room/alias/RustContactNameStoreTest.kt b/libraries/matrix/impl/src/test/kotlin/io/element/android/libraries/matrix/impl/room/alias/RustContactNameStoreTest.kt
 new file mode 100644
-index 00000000..dff555a5
+index 00000000..f793c0b3
 --- /dev/null
-+++ b/libraries/matrix/impl/src/test/kotlin/io/element/android/libraries/matrix/impl/room/alias/RustRoomAliasStoreTest.kt
-@@ -0,0 +1,158 @@
++++ b/libraries/matrix/impl/src/test/kotlin/io/element/android/libraries/matrix/impl/room/alias/RustContactNameStoreTest.kt
+@@ -0,0 +1,212 @@
 +/*
 + * Copyright (c) 2026 Element Creations Ltd.
 + *
@@ -1251,12 +1749,14 @@ index 00000000..dff555a5
 +
 +import com.google.common.truth.Truth.assertThat
 +import io.element.android.libraries.core.coroutine.CoroutineDispatchers
-+import io.element.android.libraries.matrix.api.room.alias.PLOTINA_ROOM_ALIASES_EVENT_TYPE
-+import io.element.android.libraries.matrix.api.room.alias.PlotinaRoomAliases
++import io.element.android.libraries.matrix.api.core.UserId
++import io.element.android.libraries.matrix.api.room.alias.PLOTINA_CONTACT_NAMES_EVENT_TYPE
++import io.element.android.libraries.matrix.api.room.alias.PlotinaContactNames
 +import io.element.android.libraries.matrix.api.sync.SyncService
 +import io.element.android.libraries.matrix.impl.fixtures.fakes.FakeFfiClient
 +import io.element.android.libraries.matrix.test.A_ROOM_ID
-+import io.element.android.libraries.matrix.test.A_ROOM_ID_2
++import io.element.android.libraries.matrix.test.A_USER_ID
++import io.element.android.libraries.matrix.test.A_USER_ID_2
 +import io.element.android.libraries.matrix.test.sync.FakeSyncService
 +import io.element.android.tests.testutils.testCoroutineDispatchers
 +import kotlinx.coroutines.test.TestScope
@@ -1264,12 +1764,12 @@ index 00000000..dff555a5
 +import org.junit.Test
 +import org.matrix.rustcomponents.sdk.Client
 +
-+class RustRoomAliasStoreTest {
++class RustContactNameStoreTest {
 +    @Test
 +    fun `setting a name writes the account data event and nothing else`() = runTest {
 +        val accountData = mutableMapOf<String, String>()
 +        val setAccountDataCalls = mutableListOf<Pair<String, String>>()
-+        val store = aRustRoomAliasStore(
++        val store = aRustContactNameStore(
 +            client = FakeFfiClient(
 +                accountDataResult = { accountData[it] },
 +                setAccountDataResult = { type, content ->
@@ -1279,97 +1779,149 @@ index 00000000..dff555a5
 +            ),
 +        )
 +
-+        val result = store.setAlias(A_ROOM_ID, "Денчик")
++        val result = store.setName(A_USER_ID_2, "Денчик")
 +
 +        assertThat(result.isSuccess).isTrue()
 +        // The only write is the account data event: no room state event, no m.room.name.
-+        assertThat(setAccountDataCalls.map { it.first }).containsExactly(PLOTINA_ROOM_ALIASES_EVENT_TYPE)
-+        assertThat(setAccountDataCalls.single().second).isEqualTo("""{"!aRoomId:domain":"Денчик"}""")
-+        assertThat(store.aliases.value).containsExactly(A_ROOM_ID, "Денчик")
-+        assertThat(store.nameFor(A_ROOM_ID)).isEqualTo("Денчик")
++        assertThat(setAccountDataCalls.map { it.first }).containsExactly(PLOTINA_CONTACT_NAMES_EVENT_TYPE)
++        assertThat(setAccountDataCalls.single().second).isEqualTo("""{"@bob:server.org":"Денчик"}""")
++        assertThat(store.names.value).containsExactly(A_USER_ID_2, "Денчик")
++        assertThat(store.nameFor(A_USER_ID_2)).isEqualTo("Денчик")
 +    }
 +
 +    @Test
 +    fun `a name is trimmed before it is written`() = runTest {
 +        val accountData = mutableMapOf<String, String>()
-+        val store = aRustRoomAliasStore(client = anAccountDataClient(accountData))
++        val store = aRustContactNameStore(client = anAccountDataClient(accountData))
 +
-+        store.setAlias(A_ROOM_ID, "  Денчик  ").getOrThrow()
++        store.setName(A_USER_ID_2, "  Денчик  ").getOrThrow()
 +
-+        assertThat(accountData[PLOTINA_ROOM_ALIASES_EVENT_TYPE]).isEqualTo("""{"!aRoomId:domain":"Денчик"}""")
++        assertThat(accountData[PLOTINA_CONTACT_NAMES_EVENT_TYPE]).isEqualTo("""{"@bob:server.org":"Денчик"}""")
 +    }
 +
 +    @Test
 +    fun `resetting a name removes its key and leaves no empty value`() = runTest {
-+        val accountData = mutableMapOf(PLOTINA_ROOM_ALIASES_EVENT_TYPE to """{"!aRoomId:domain":"Денчик"}""")
-+        val store = aRustRoomAliasStore(client = anAccountDataClient(accountData))
++        val accountData = mutableMapOf(PLOTINA_CONTACT_NAMES_EVENT_TYPE to """{"@bob:server.org":"Денчик"}""")
++        val store = aRustContactNameStore(client = anAccountDataClient(accountData))
 +        store.refresh().getOrThrow()
 +
-+        store.setAlias(A_ROOM_ID, null).getOrThrow()
++        store.setName(A_USER_ID_2, null).getOrThrow()
 +
-+        assertThat(accountData[PLOTINA_ROOM_ALIASES_EVENT_TYPE]).isEqualTo("{}")
-+        assertThat(store.aliases.value).isEmpty()
-+        assertThat(store.nameFor(A_ROOM_ID)).isNull()
++        assertThat(accountData[PLOTINA_CONTACT_NAMES_EVENT_TYPE]).isEqualTo("{}")
++        assertThat(store.names.value).isEmpty()
++        assertThat(store.nameFor(A_USER_ID_2)).isNull()
 +    }
 +
 +    @Test
 +    fun `resetting a blank name is a reset too`() = runTest {
-+        val accountData = mutableMapOf(PLOTINA_ROOM_ALIASES_EVENT_TYPE to """{"!aRoomId:domain":"Денчик"}""")
-+        val store = aRustRoomAliasStore(client = anAccountDataClient(accountData))
++        val accountData = mutableMapOf(PLOTINA_CONTACT_NAMES_EVENT_TYPE to """{"@bob:server.org":"Денчик"}""")
++        val store = aRustContactNameStore(client = anAccountDataClient(accountData))
 +        store.refresh().getOrThrow()
 +
-+        store.setAlias(A_ROOM_ID, "   ").getOrThrow()
++        store.setName(A_USER_ID_2, "   ").getOrThrow()
 +
-+        assertThat(accountData[PLOTINA_ROOM_ALIASES_EVENT_TYPE]).isEqualTo("{}")
-+        assertThat(store.aliases.value).isEmpty()
++        assertThat(accountData[PLOTINA_CONTACT_NAMES_EVENT_TYPE]).isEqualTo("{}")
++        assertThat(store.names.value).isEmpty()
 +    }
 +
 +    @Test
 +    fun `writing one name keeps the other names of the account`() = runTest {
-+        val accountData = mutableMapOf(PLOTINA_ROOM_ALIASES_EVENT_TYPE to """{"!aRoomId:domain":"Денчик"}""")
-+        val store = aRustRoomAliasStore(client = anAccountDataClient(accountData))
++        val accountData = mutableMapOf(PLOTINA_CONTACT_NAMES_EVENT_TYPE to """{"@alice:server.org":"Мама"}""")
++        val store = aRustContactNameStore(client = anAccountDataClient(accountData))
 +
-+        store.setAlias(A_ROOM_ID_2, "Мама").getOrThrow()
++        store.setName(A_USER_ID_2, "Денчик").getOrThrow()
 +
-+        assertThat(PlotinaRoomAliases.parse(accountData[PLOTINA_ROOM_ALIASES_EVENT_TYPE]))
-+            .containsExactly(A_ROOM_ID, "Денчик", A_ROOM_ID_2, "Мама")
-+        assertThat(store.aliases.value).containsExactly(A_ROOM_ID, "Денчик", A_ROOM_ID_2, "Мама")
++        assertThat(PlotinaContactNames.parse(accountData[PLOTINA_CONTACT_NAMES_EVENT_TYPE]))
++            .containsExactly(A_USER_ID, "Мама", A_USER_ID_2, "Денчик")
++        assertThat(store.names.value).containsExactly(A_USER_ID, "Мама", A_USER_ID_2, "Денчик")
 +    }
 +
 +    @Test
-+    fun `reading broken json does not fail and leaves no name behind`() = runTest {
-+        val accountData = mutableMapOf(PLOTINA_ROOM_ALIASES_EVENT_TYPE to "{ this is not json")
-+        val store = aRustRoomAliasStore(client = anAccountDataClient(accountData))
++    fun `a name set from another client of the same account is read on refresh`() = runTest {
++        // This is the cross-client case: the other client writes the contract's event keyed by mxid.
++        val accountData = mutableMapOf(PLOTINA_CONTACT_NAMES_EVENT_TYPE to """{"@bob:server.org":"Денчик"}""")
++        val store = aRustContactNameStore(client = anAccountDataClient(accountData))
++
++        store.refresh().getOrThrow()
++
++        assertThat(store.nameFor(A_USER_ID_2)).isEqualTo("Денчик")
++    }
++
++    @Test
++    fun `the old room keyed event is not read`() = runTest {
++        // cc.plotina.room_aliases stays in account data forever (an event type cannot be deleted), and
++        // it is deliberately not migrated: its room-id keys are junk for the contact model.
++        val accountData = mutableMapOf("cc.plotina.room_aliases" to """{"!aRoomId:domain":"Денчик"}""")
++        val store = aRustContactNameStore(client = anAccountDataClient(accountData))
 +
 +        val result = store.refresh()
 +
 +        assertThat(result.isSuccess).isTrue()
-+        assertThat(store.aliases.value).isEmpty()
++        assertThat(store.names.value).isEmpty()
++    }
++
++    @Test
++    fun `reading broken json does not fail and leaves no name behind`() = runTest {
++        val accountData = mutableMapOf(PLOTINA_CONTACT_NAMES_EVENT_TYPE to "{ this is not json")
++        val store = aRustContactNameStore(client = anAccountDataClient(accountData))
++
++        val result = store.refresh()
++
++        assertThat(result.isSuccess).isTrue()
++        assertThat(store.names.value).isEmpty()
++    }
++
++    @Test
++    fun `reading broken m direct content does not fail`() = runTest {
++        val accountData = mutableMapOf(
++            PLOTINA_CONTACT_NAMES_EVENT_TYPE to """{"@bob:server.org":"Денчик"}""",
++            "m.direct" to "{ this is not json",
++        )
++        val store = aRustContactNameStore(client = anAccountDataClient(accountData))
++
++        val result = store.refresh()
++
++        assertThat(result.isSuccess).isTrue()
++        assertThat(store.names.value).containsExactly(A_USER_ID_2, "Денчик")
++        assertThat(store.directRooms.value).isEmpty()
++    }
++
++    @Test
++    fun `the account's m direct map is read so a direct room resolves to its contact`() = runTest {
++        val accountData = mutableMapOf(
++            PLOTINA_CONTACT_NAMES_EVENT_TYPE to """{"@bob:server.org":"Денчик"}""",
++            "m.direct" to """{"@bob:server.org":["!aRoomId:domain"]}""",
++        )
++        val store = aRustContactNameStore(client = anAccountDataClient(accountData))
++
++        store.refresh().getOrThrow()
++
++        assertThat(store.directRooms.value).containsExactly(A_ROOM_ID, A_USER_ID_2)
 +    }
 +
 +    @Test
 +    fun `a failed write leaves the published names untouched`() = runTest {
-+        val store = aRustRoomAliasStore(
++        val store = aRustContactNameStore(
 +            client = FakeFfiClient(
-+                accountDataResult = { """{"!aRoomId:domain":"Денчик"}""" },
++                accountDataResult = { """{"@bob:server.org":"Денчик"}""" },
 +                setAccountDataResult = { _, _ -> error("the server said no") },
 +            ),
 +        )
 +        store.refresh().getOrThrow()
 +
-+        val result = store.setAlias(A_ROOM_ID_2, "Мама")
++        val result = store.setName(A_USER_ID, "Мама")
 +
 +        assertThat(result.isFailure).isTrue()
-+        assertThat(store.aliases.value).containsExactly(A_ROOM_ID, "Денчик")
++        assertThat(store.names.value).containsExactly(A_USER_ID_2, "Денчик")
 +    }
 +
 +    @Test
 +    fun `a failed read keeps the names already published`() = runTest {
 +        var shouldFail = false
-+        val store = aRustRoomAliasStore(
++        val store = aRustContactNameStore(
 +            client = FakeFfiClient(
 +                accountDataResult = {
-+                    if (shouldFail) error("the store is locked") else """{"!aRoomId:domain":"Денчик"}"""
++                    if (shouldFail) error("the store is locked") else """{"@bob:server.org":"Денчик"}"""
 +                },
 +            ),
 +        )
@@ -1379,7 +1931,7 @@ index 00000000..dff555a5
 +        val result = store.refresh()
 +
 +        assertThat(result.isFailure).isTrue()
-+        assertThat(store.aliases.value).containsExactly(A_ROOM_ID, "Денчик")
++        assertThat(store.names.value).containsExactly(A_USER_ID_2, "Денчик")
 +    }
 +
 +    private fun anAccountDataClient(accountData: MutableMap<String, String>) = FakeFfiClient(
@@ -1387,27 +1939,26 @@ index 00000000..dff555a5
 +        setAccountDataResult = { type, content -> accountData[type] = content },
 +    )
 +
-+    private fun TestScope.aRustRoomAliasStore(
++    private fun TestScope.aRustContactNameStore(
 +        client: Client = FakeFfiClient(),
 +        syncService: SyncService = FakeSyncService(),
 +        dispatchers: CoroutineDispatchers = testCoroutineDispatchers(),
-+    ) = RustRoomAliasStore(
++    ) = RustContactNameStore(
 +        client = client,
 +        syncService = syncService,
 +        sessionCoroutineScope = backgroundScope,
 +        dispatchers = dispatchers,
 +    )
 +}
-\ No newline at end of file
 diff --git a/libraries/matrix/test/src/main/kotlin/io/element/android/libraries/matrix/test/FakeMatrixClient.kt b/libraries/matrix/test/src/main/kotlin/io/element/android/libraries/matrix/test/FakeMatrixClient.kt
-index d3375f7a..3ba7cc13 100644
+index d3375f7a..0ab1af72 100644
 --- a/libraries/matrix/test/src/main/kotlin/io/element/android/libraries/matrix/test/FakeMatrixClient.kt
 +++ b/libraries/matrix/test/src/main/kotlin/io/element/android/libraries/matrix/test/FakeMatrixClient.kt
 @@ -35,6 +35,7 @@ import io.element.android.libraries.matrix.api.room.NotJoinedRoom
  import io.element.android.libraries.matrix.api.room.RoomInfo
  import io.element.android.libraries.matrix.api.room.RoomMembershipObserver
  import io.element.android.libraries.matrix.api.room.alias.ResolvedRoomAlias
-+import io.element.android.libraries.matrix.api.room.alias.RoomAliasStore
++import io.element.android.libraries.matrix.api.room.alias.ContactNameStore
  import io.element.android.libraries.matrix.api.room.location.BeaconInfoUpdate
  import io.element.android.libraries.matrix.api.roomdirectory.RoomDirectoryService
  import io.element.android.libraries.matrix.api.roomlist.RoomListService
@@ -1415,7 +1966,7 @@ index d3375f7a..3ba7cc13 100644
  import io.element.android.libraries.matrix.test.notification.FakeNotificationService
  import io.element.android.libraries.matrix.test.notificationsettings.FakeNotificationSettingsService
  import io.element.android.libraries.matrix.test.pushers.FakePushersService
-+import io.element.android.libraries.matrix.test.room.alias.FakeRoomAliasStore
++import io.element.android.libraries.matrix.test.room.alias.FakeContactNameStore
  import io.element.android.libraries.matrix.test.roomdirectory.FakeRoomDirectoryService
  import io.element.android.libraries.matrix.test.roomlist.FakeRoomListService
  import io.element.android.libraries.matrix.test.search.FakeMessageSearchService
@@ -1423,16 +1974,16 @@ index d3375f7a..3ba7cc13 100644
      override val syncService: SyncService = FakeSyncService(),
      override val encryptionService: EncryptionService = FakeEncryptionService(),
      override val roomDirectoryService: RoomDirectoryService = FakeRoomDirectoryService(),
-+    override val roomAliasStore: RoomAliasStore = FakeRoomAliasStore(),
++    override val contactNameStore: ContactNameStore = FakeContactNameStore(),
      override val isMessageSearchAvailable: Boolean = false,
      override val messageSearchService: MessageSearchService = FakeMessageSearchService(),
      override val mediaPreviewService: MediaPreviewService = FakeMediaPreviewService(),
-diff --git a/libraries/matrix/test/src/main/kotlin/io/element/android/libraries/matrix/test/room/alias/FakeRoomAliasStore.kt b/libraries/matrix/test/src/main/kotlin/io/element/android/libraries/matrix/test/room/alias/FakeRoomAliasStore.kt
+diff --git a/libraries/matrix/test/src/main/kotlin/io/element/android/libraries/matrix/test/room/alias/FakeContactNameStore.kt b/libraries/matrix/test/src/main/kotlin/io/element/android/libraries/matrix/test/room/alias/FakeContactNameStore.kt
 new file mode 100644
-index 00000000..88134d74
+index 00000000..6f287ca4
 --- /dev/null
-+++ b/libraries/matrix/test/src/main/kotlin/io/element/android/libraries/matrix/test/room/alias/FakeRoomAliasStore.kt
-@@ -0,0 +1,51 @@
++++ b/libraries/matrix/test/src/main/kotlin/io/element/android/libraries/matrix/test/room/alias/FakeContactNameStore.kt
+@@ -0,0 +1,61 @@
 +/*
 + * Copyright (c) 2026 Element Creations Ltd.
 + *
@@ -1443,45 +1994,54 @@ index 00000000..88134d74
 +package io.element.android.libraries.matrix.test.room.alias
 +
 +import io.element.android.libraries.matrix.api.core.RoomId
-+import io.element.android.libraries.matrix.api.room.alias.PlotinaRoomAliases
-+import io.element.android.libraries.matrix.api.room.alias.RoomAliasStore
++import io.element.android.libraries.matrix.api.core.UserId
++import io.element.android.libraries.matrix.api.room.alias.ContactNameStore
++import io.element.android.libraries.matrix.api.room.alias.PlotinaContactNames
 +import kotlinx.coroutines.flow.MutableStateFlow
 +import kotlinx.coroutines.flow.StateFlow
 +import kotlinx.coroutines.flow.asStateFlow
 +import kotlinx.coroutines.flow.update
 +
-+class FakeRoomAliasStore(
-+    initialAliases: Map<RoomId, String> = emptyMap(),
-+    var setAliasResult: Result<Unit> = Result.success(Unit),
++class FakeContactNameStore(
++    initialNames: Map<UserId, String> = emptyMap(),
++    initialDirectRooms: Map<RoomId, UserId> = emptyMap(),
++    var setNameResult: Result<Unit> = Result.success(Unit),
 +    var refreshResult: Result<Unit> = Result.success(Unit),
-+) : RoomAliasStore {
-+    private val state = MutableStateFlow(initialAliases)
-+    override val aliases: StateFlow<Map<RoomId, String>> = state.asStateFlow()
++) : ContactNameStore {
++    private val namesState = MutableStateFlow(initialNames)
++    override val names: StateFlow<Map<UserId, String>> = namesState.asStateFlow()
 +
-+    /** The writes this fake received, as (roomId, name) pairs, name null for a reset. */
-+    val setAliasCalls = mutableListOf<Pair<RoomId, String?>>()
++    private val directRoomsState = MutableStateFlow(initialDirectRooms)
++    override val directRooms: StateFlow<Map<RoomId, UserId>> = directRoomsState.asStateFlow()
 +
-+    override fun nameFor(roomId: RoomId): String? = state.value[roomId]
++    /** The writes this fake received, as (userId, name) pairs, name null for a reset. */
++    val setNameCalls = mutableListOf<Pair<UserId, String?>>()
++
++    override fun nameFor(userId: UserId): String? = namesState.value[userId]
 +
 +    override suspend fun refresh(): Result<Unit> = refreshResult
 +
-+    override suspend fun setAlias(roomId: RoomId, name: String?): Result<Unit> {
-+        setAliasCalls.add(roomId to name)
-+        setAliasResult.onSuccess {
-+            state.update { current ->
++    override suspend fun setName(userId: UserId, name: String?): Result<Unit> {
++        setNameCalls.add(userId to name)
++        setNameResult.onSuccess {
++            namesState.update { current ->
 +                val trimmed = name?.trim()
-+                if (trimmed.isNullOrEmpty()) current - roomId else current + (roomId to trimmed)
++                if (trimmed.isNullOrEmpty()) current - userId else current + (userId to trimmed)
 +            }
 +        }
-+        return setAliasResult
++        return setNameResult
 +    }
 +
-+    /** Replaces the published map, as if the account data had been changed elsewhere. */
-+    fun givenAliases(aliases: Map<RoomId, String>) {
-+        state.value = aliases
++    /** Replaces the published names, as if the account data had been changed elsewhere. */
++    fun givenNames(names: Map<UserId, String>) {
++        namesState.value = names
++    }
++
++    /** Replaces the published `m.direct` map, as if a dialogue had been created elsewhere. */
++    fun givenDirectRooms(rooms: Map<RoomId, UserId>) {
++        directRoomsState.value = rooms
 +    }
 +
 +    /** The account data content this fake would have written, for assertions on the payload shape. */
-+    fun content(): String = PlotinaRoomAliases.serialize(state.value)
++    fun content(): String = PlotinaContactNames.serialize(namesState.value)
 +}
-\ No newline at end of file
