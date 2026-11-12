@@ -22,11 +22,13 @@ The upstream widget is the negative control: every marker check must fail on
 it, and verify_frame() must exit non-zero.
 """
 import json
+import sys
 import tarfile
 import tempfile
 import unittest
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "mount-element-call.py"
 
@@ -247,6 +249,62 @@ class InstallTest(unittest.TestCase):
             with self.assertRaises(SystemExit) as ctx:
                 tool.install(tarball, dist)
             self.assertNotEqual(ctx.exception.code, 0)
+
+
+class LockTest(unittest.TestCase):
+    """The way CI and build.sh install: --lock, not --archive.
+
+    Worth its own class because the two paths diverge exactly where CI broke:
+    --archive hands install() a file, --lock has to read the pin, download (or
+    reuse) the archive and check its digest first. Unit-testing install() alone
+    leaves that half unexecuted, and a signature slip there is invisible until
+    a tag run dies 40 seconds in.
+    """
+
+    def test_lock_path_installs_the_pinned_archive(self) -> None:
+        tool = load_tool()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dist = make_dist(root)
+            tarball = make_archive(root)
+            digest = tool.hashlib.sha256(tarball.read_bytes()).hexdigest()
+            lock = root / "element-call.lock.json"
+            lock.write_text(json.dumps({
+                "tag": "v0.26.1-plotina-call.test",
+                "url": tarball.as_uri(),
+                "sha256": digest,
+            }), encoding="utf-8")
+
+            argv = ["mount-element-call.py", "--dist", str(dist),
+                    "--lock", str(lock), "--work", str(root / "cache")]
+            with mock.patch.object(sys, "argv", argv):
+                tool.main()
+
+            self.assertEqual(tool.check_frame(dist / tool.MOUNT), [])
+            self.assertTrue((dist / tool.MOUNT / "assets" / "index-OURS.js").is_file())
+
+    def test_lock_with_a_wrong_digest_refuses_to_install(self) -> None:
+        tool = load_tool()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dist = make_dist(root)
+            tarball = make_archive(root)
+            lock = root / "element-call.lock.json"
+            lock.write_text(json.dumps({
+                "tag": "v0.26.1-plotina-call.test",
+                "url": tarball.as_uri(),
+                "sha256": "0" * 64,
+            }), encoding="utf-8")
+
+            argv = ["mount-element-call.py", "--dist", str(dist),
+                    "--lock", str(lock), "--work", str(root / "cache")]
+            with mock.patch.object(sys, "argv", argv):
+                with self.assertRaises(SystemExit) as ctx:
+                    tool.main()
+            self.assertNotEqual(ctx.exception.code, 0)
+            # The dist must be untouched: still the upstream widget.
+            self.assertIn("Element Call",
+                          (dist / tool.MOUNT / "index.html").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
