@@ -102,7 +102,9 @@ room is with, so saving it from one dialog updates every dialogue with that pers
 - `libraries/matrix/api` — `PlotinaContactNamesTest`: applying by mxid, one person in two DMs, a
   group untouched, a room with its own `m.room.name` untouched, the `m.direct` fallback, reset,
   broken/foreign payloads (the old room-keyed event included), stable and round-tripping
-  serialisation, the event type is `cc.plotina.contact_names`.
+  serialisation, the event type is `cc.plotina.contact_names`. `PlotinaContactNamesV12Test` covers the
+  v12 opaque room ids the room-keyed model used to test: such an id is read as an `m.direct` value and
+  resolves to its contact, and is rejected as a names key.
 - `libraries/matrix/impl` — `RustContactNameStoreTest`: the write touches only the account data
   event, trimming, reset removes the key and writes `{}`, other names of the account are preserved,
   a name written by another client is read on refresh, the old room-keyed event is not read, broken

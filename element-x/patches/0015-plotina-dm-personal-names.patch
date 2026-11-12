@@ -1332,6 +1332,74 @@ index 00000000..8e455c02
 +        assertThat(info.withPlotinaContactName(mapOf(A_USER_ID to "Я")).name).isEqualTo("Notes")
 +    }
 +}
+diff --git a/libraries/matrix/api/src/test/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaContactNamesV12Test.kt b/libraries/matrix/api/src/test/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaContactNamesV12Test.kt
+new file mode 100644
+index 00000000..c762c094
+--- /dev/null
++++ b/libraries/matrix/api/src/test/kotlin/io/element/android/libraries/matrix/api/room/alias/PlotinaContactNamesV12Test.kt
+@@ -0,0 +1,62 @@
++/*
++ * Copyright (c) 2026 Element Creations Ltd.
++ *
++ * SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial.
++ * Please see LICENSE files in the repository root for full details.
++ */
++
++package io.element.android.libraries.matrix.api.room.alias
++
++import com.google.common.truth.Truth.assertThat
++import io.element.android.libraries.matrix.api.core.RoomId
++import io.element.android.libraries.matrix.api.core.UserId
++import io.element.android.libraries.matrix.api.user.MatrixUser
++import io.element.android.libraries.matrix.test.room.aRoomInfo
++import org.junit.Test
++
++/**
++ * v12 rooms: since MSC4291 a room id is an opaque base64url string with no `:domain` part. The
++ * room-keyed model covered this with "a v12 opaque room id is accepted"; the contact model has to
++ * cover the same ground where a room id now shows up - as a value of the account's `m.direct` map,
++ * read backwards to answer "who is this DM with" when the room has no single hero.
++ */
++class PlotinaContactNamesV12Test {
++    private val bob = UserId("@bob:plotina.cc")
++    // A real v12 room id: `!` plus base64url, no domain.
++    private val v12Dm = RoomId("!T8BPsYkGZ1uAhCqWv3n")
++
++    @Test
++    fun `a v12 room id is read from the m direct event`() {
++        val rooms = PlotinaDirectRooms.parse("""{"@bob:plotina.cc":["!T8BPsYkGZ1uAhCqWv3n"]}""")
++
++        assertThat(rooms).containsExactly(v12Dm, bob)
++    }
++
++    @Test
++    fun `a contact name resolves for a v12 direct room without a hero`() {
++        val info = aRoomInfo(
++            id = v12Dm,
++            name = "bob",
++            rawName = null,
++            isDm = false,
++            isDirect = true,
++            heroes = emptyList(),
++        )
++
++        val result = info.withPlotinaContactName(
++            names = mapOf(bob to "Денчик"),
++            directRooms = PlotinaDirectRooms.parse("""{"@bob:plotina.cc":["!T8BPsYkGZ1uAhCqWv3n"]}"""),
++        )
++
++        assertThat(result.name).isEqualTo("Денчик")
++    }
++
++    @Test
++    fun `a v12 room id is not a contact key`() {
++        // The contact key is an mxid. A payload written by the old, room-keyed client has room ids in
++        // the keys - v12 ones included - and all of them must fall out as junk.
++        val names = PlotinaContactNames.parse("""{"!T8BPsYkGZ1uAhCqWv3n":"Денчик"}""")
++
++        assertThat(names).isEmpty()
++    }
++}
 diff --git a/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/RustMatrixClient.kt b/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/RustMatrixClient.kt
 index 9e63a790..7c421dfa 100644
 --- a/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/RustMatrixClient.kt
