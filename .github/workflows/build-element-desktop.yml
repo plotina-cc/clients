@@ -88,10 +88,43 @@ jobs:
         # stable-direct-feed.test.mjs guards the direct /dl stable feed.
         run: node --test tests/linux-updater.test.mjs tests/update-feed.test.mjs tests/update-channel.test.mjs tests/stable-direct-feed.test.mjs tests/update-restart.test.mjs tests/windows-restart-args.test.mjs tests/protocol-schemes.test.mjs
 
+  # A dev tag (-dev.M) is a preview built on top of an already published stable
+  # base: the Dev channel's updater compares against that base's metadata and
+  # users fall back to it. A dev tag on a base with no release ships a build
+  # nobody can update from, and it did happen: `v1.12.32-plotina-desktop.49` had
+  # its tag for hours before any release existed, so a "the tag exists" check
+  # (git ls-remote --exit-code --tags returned 0) would have waved the dev build
+  # through. The gate therefore asks the releases API for the base's RELEASE and
+  # then for `latest-linux.yml` / `latest.yml` among its assets.
+  #
+  # It runs first and the whole build hangs off it: a tag that must not be built
+  # has to cost seconds, not a webapp assembly plus two matrix legs. Stable tags
+  # are not gated (element-desktop/scripts/guard-dev-base.sh: the first release
+  # of a new base has no published base to point at). The guard has its own
+  # suite here so a broken gate fails at the gate, not at the first dev tag.
+  dev-base-guard:
+    name: dev base guard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard tests (published base, missing release, missing assets)
+        run: python3 -m unittest discover -s element-desktop/tests -p 'test_guard_dev_base.py' -v
+
+      - name: A dev tag must sit on a published base release
+        env:
+          # Read-only: the releases of a public repo are readable with the
+          # default token; nothing here writes.
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: bash element-desktop/scripts/guard-dev-base.sh "$TAG"
+
   # One webapp for both platforms: the desktop shell embeds a fixed asar, so the
   # overlay has to be applied once and handed to the packaging jobs.
   webapp:
     name: webapp
+    needs: [dev-base-guard]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
