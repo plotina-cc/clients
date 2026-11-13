@@ -181,8 +181,10 @@ One run of `tests/live/stream_video_toggle_proof.mjs` covers both halves of this
 patch on one build, because they are one behaviour now. The stand is the upstream
 `docker-compose-dev.yml` one — Synapse + `lk-jwt-service` + LiveKit SFU behind its
 nginx (`synapse.m.localhost`, `matrix-rtc.m.localhost`) — with a `vite build` of
-the pinned tag plus patches `0001`–`0006` served by `tests/live/serve_bundle.mjs`
-on `https://localhost:3443`. Three browser contexts join one call: a **sharer**
+the pinned tag plus patches `0001`–`0005` served by `tests/live/serve_bundle.mjs`
+on `https://localhost:3443` (`0006` is a widget-only patch: this standalone page
+never goes through the widget bridge, and the account-data write here goes to
+Synapse directly). Three browser contexts join one call: a **sharer**
 that publishes a synthetic share (canvas 640x360 @ 10 fps + 440 Hz audio), a
 **viewer** that is the subject, and a **control** viewer that asks for the stream
 once and is then left alone.
