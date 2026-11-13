@@ -411,6 +411,20 @@ jobs:
           echo "signed with alias ${KEY_ALIAS:-plotina}"
           echo "variant=release" >> "$GITHUB_OUTPUT"
 
+      # The notification path is Dart, so it is checked on the host instead of on
+      # a phone, and before the 30-minute Gradle build rather than by the owner.
+      # patches/0025 cancels a room's notification when our own sync reports the
+      # room read; the test ships inside the patch as test/plotina_*_test.dart,
+      # so this runs the same code the APK is built from. The model asset the
+      # asset bundle wants is already fetched by this point.
+      - name: Run the Plotina Dart tests
+        working-directory: fluffychat/upstream
+        run: |
+          set -euo pipefail
+          flutter pub get
+          flutter gen-l10n
+          flutter test test/plotina_*_test.dart
+
       - name: Build APK
         working-directory: fluffychat/upstream
         env:
