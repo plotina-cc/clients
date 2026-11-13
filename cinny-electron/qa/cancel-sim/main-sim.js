@@ -62,7 +62,7 @@ app.whenReady().then(() => {
       };
       try {
         await handler(params, cb);
-        if (!done) say(`[dm] handler RETURNED WITHOUT CALLING callback (${Date.now() - enter}ms) — request left pending`);
+        if (!done) say(`[dm] handler returned, callback still to come (${Date.now() - enter}ms)`);
       } catch (e) {
         say(`[dm] handler THREW after ${Date.now() - enter}ms: ${e && e.name}: ${e && e.message}; callbackCalled=${done}`);
         throw e;
@@ -73,4 +73,4 @@ app.whenReady().then(() => {
   setTimeout(() => say('[dm] session hook in place (late check):', typeof ds.setDisplayMediaRequestHandler), 1500);
 });
 
-require('/home/hermes/work/lite-share-stuck/cinny-electron/src/main.js');
+require(process.env.LITE_MAIN || '/home/hermes/work/lite-share-stuck/cinny-electron/src/main.js');

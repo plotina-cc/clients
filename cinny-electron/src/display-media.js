@@ -75,9 +75,12 @@ function createDisplayMediaRequestHandler({ getSources, isOriginAllowed, log = (
         finish({ video: sources[0] }, 'granted');
       },
       (e) => {
-        // Cancelled portal picker (AbortError), portal failure, or anything
-        // else: deny, but never leave the request pending.
-        finish({}, `sources-failed:${(e && e.name) || 'Error'}`);
+        // Cancelled portal picker (AbortError / kUserCancelled), portal
+        // failure, or anything else: deny, but never leave the request pending.
+        // A user cancelling is a normal outcome, not an error — log it as such.
+        const name = (e && e.name) || 'Error';
+        const kind = name === 'AbortError' ? 'cancel' : 'error';
+        finish({}, `sources-${kind}:${name}`);
       },
     );
   };

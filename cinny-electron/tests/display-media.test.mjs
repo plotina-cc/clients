@@ -121,8 +121,25 @@ await t('D6 a source list arriving after the timeout does not call back twice', 
   assert.strictEqual(rec.calls.length, 1, 'late resolution must not invoke the callback again');
 });
 
-// ------------------------------------------------------ D7 origin allowlist
-await t('D7 a foreign origin is denied without touching desktopCapturer', async () => {
+// ------------------------------------------------ D8 cancel is logged as cancel
+await t('D8 a cancelled picker is logged as a cancel, not as an error', async () => {
+  const rec = recorder();
+  const lines = [];
+  const handler = createDisplayMediaRequestHandler({
+    getSources: async () => { const e = new Error('Failed to get sources.'); e.name = 'AbortError'; throw e; },
+    isOriginAllowed: allowAll,
+    log: (m) => lines.push(m),
+  });
+  await handler({ securityOrigin: 'https://app.example' }, rec.callback);
+  await tick(0);
+  assert.strictEqual(rec.calls.length, 1);
+  const line = lines.join('\n');
+  assert.match(line, /sources-cancel:AbortError/, 'cancel must be distinguishable from a real failure');
+  assert.match(line, /deny/, 'the outcome is a deny');
+});
+
+// ---------------------------------------------------------- D9 origin allowlist
+await t('D9 a foreign origin is denied without touching desktopCapturer', async () => {
   const rec = recorder();
   let asked = 0;
   const handler = createDisplayMediaRequestHandler({
