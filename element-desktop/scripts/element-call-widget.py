@@ -59,12 +59,16 @@ ARCHIVE_ROOT = "element-call-plotina"
 # Features that only exist in our Element Call. The upstream build contains none
 # of them, which is what makes these checks fail on the wrong widget.
 BUNDLE_MARKERS = (
-    "video_tile.hide_stream",
+    "video_tile.stream_paused",
     "video_tile.screen_share_visibility",
     "cc.plotina.voice_volumes",
 )
+# Keys the previous build carried and this one must not. Build .16 replaced the
+# hide_stream submenu with the paused tile and the eye button, so a bundle that
+# still ships the key is the superseded build, not the one the lock pins.
+SUPERSEDED_MARKERS = ("video_tile.hide_stream",)
 # Patch 0005's label as the user sees it; proves the ru locale of *our* bundle.
-RU_LABEL = "Не показывать этот стрим"
+RU_LABEL = "Стрим приостановлен"
 # Markers that only the Plotina build carries.
 PLOTINA_MARKERS = ("window.__plotinaEc",)
 PLOTINA_FILES = ("plotina-icon.svg",)
@@ -201,6 +205,12 @@ def check_widget(widget: Path) -> list[str]:
     for marker in BUNDLE_MARKERS:
         if marker not in blob:
             failures.append(f"bundle is missing {marker} (upstream Element Call, not ours)")
+    for marker in SUPERSEDED_MARKERS:
+        if marker in blob:
+            failures.append(
+                f"bundle still carries {marker} (superseded build: streams are hidden "
+                "by default and the paused tile replaced the submenu)"
+            )
 
     locales = sorted(assets.glob("*ru-app-*.json"))
     if not locales:
@@ -208,7 +218,7 @@ def check_widget(widget: Path) -> list[str]:
     else:
         ru = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in locales)
         if RU_LABEL not in ru:
-            failures.append(f"ru locale is missing {RU_LABEL!r} (hide-stream control absent)")
+            failures.append(f"ru locale is missing {RU_LABEL!r} (paused-stream control absent)")
 
     for marker in PLOTINA_MARKERS:
         if marker not in html:

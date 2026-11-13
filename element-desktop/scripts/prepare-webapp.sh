@@ -159,10 +159,14 @@ grep -q 'noise/logic.js' "$DEST/index.html"
 # Direct evidence in the final bytes, independent of the helper: the two
 # features from the wish list, the per-person volume store, and the locale the
 # user reads them in.
-grep -rqs 'video_tile.hide_stream' "$DEST/widgets/element-call/assets/"
+grep -rqs 'video_tile.stream_paused' "$DEST/widgets/element-call/assets/"
 grep -rqs 'video_tile.screen_share_visibility' "$DEST/widgets/element-call/assets/"
 grep -rqs 'cc.plotina.voice_volumes' "$DEST/widgets/element-call/assets/"
-grep -qs 'Не показывать этот стрим' "$DEST"/widgets/element-call/assets/*ru-app-*.json
+grep -qs 'Стрим приостановлен' "$DEST"/widgets/element-call/assets/*ru-app-*.json
+# And the superseded submenu must be gone: it is what .16 replaced.
+if grep -rqs 'video_tile.hide_stream' "$DEST/widgets/element-call/assets/"; then
+  echo "prepare-webapp: the superseded hide_stream menu is still in the widget" >&2; exit 1
+fi
 # Upstream's widget is the negative control: it must not be here at all.
 if [ -d "$DEST/widgets/element-call/noise" ]; then
   echo "prepare-webapp: the widget carries its own noise/ tree; the webapp root owns it" >&2; exit 1

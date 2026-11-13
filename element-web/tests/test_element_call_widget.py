@@ -61,9 +61,16 @@ OUR_INDEX = (
     "<title>Plotina Call</title></head><body><div id=\"root\"></div></body></html>"
 )
 OUR_BUNDLE = (
+    "var a=\"video_tile.stream_paused\",b=\"video_tile.watch_stream\","
+    "c=\"video_tile.screen_share_visibility\",d=\"cc.plotina.voice_volumes\","
+    "e=this.setSubscribed.bind(this),g=\"/assets/ringtone-OURS.mp3\";"
+    "const m={f:[\"assets/spa-OURS.js\"]};"
+)
+# The build .16 replaces. It looks like ours but hides streams through a submenu
+# keyed video_tile.hide_stream, which the card says must be gone.
+SUPERSEDED_BUNDLE = (
     "var a=\"video_tile.hide_stream\",b=\"video_tile.screen_share_visibility\","
-    "c=\"cc.plotina.voice_volumes\",d=this.setSubscribed.bind(this),"
-    "e=\"/assets/ringtone-OURS.mp3\";const m={f:[\"assets/spa-OURS.js\"]};"
+    "c=\"cc.plotina.voice_volumes\",d=this.setSubscribed.bind(this);"
 )
 # The stock widget as the pinned upstream image ships it (index-Bz16m3ir.js and
 # ./assets/ are literal: that is what /app/widgets/element-call/ contains in
@@ -105,7 +112,7 @@ def make_archive(root: Path, *, ours: bool = True, with_noise: bool = True,
         "body{background:url(/assets/bg.png)}", encoding="utf-8"
     )
     (stage / "assets" / "ru-app-CTBNJ8GR.json").write_text(
-        json.dumps({"video_tile": {"hide_stream": "Не показывать этот стрим"}} if ru_label else {"a": "b"},
+        json.dumps({"video_tile": {"stream_paused": "Стрим приостановлен"}} if ru_label else {"a": "b"},
                    ensure_ascii=False),
         encoding="utf-8",
     )
@@ -176,9 +183,26 @@ class UpstreamWidgetIsTheNegativeControlTest(unittest.TestCase):
             proc = run_adapter("--check", "--webapp", str(app))
             self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
             self.assertIn("cc.plotina.voice_volumes", proc.stderr)
-            self.assertIn("video_tile.hide_stream", proc.stderr)
-            self.assertIn("Не показывать этот стрим", proc.stderr)
+            self.assertIn("video_tile.stream_paused", proc.stderr)
+            self.assertIn("Стрим приостановлен", proc.stderr)
             self.assertIn("plotina-icon.svg", proc.stderr)
+
+    def test_check_rejects_the_superseded_widget(self) -> None:
+        """The build .16 replaces still carries the hide_stream menu: refuse it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            app = make_base_image_app(root)
+            tarball = make_archive(root)
+            lock = write_lock(root, tarball.as_uri(), sha256_of(tarball))
+            proc = run_adapter("--lock", str(lock), "--work", str(root / "work"),
+                               "--webapp", str(app))
+            self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+            (app / MOUNT / "assets" / "index-OURS.js").write_text(
+                SUPERSEDED_BUNDLE, encoding="utf-8")
+            check = run_adapter("--check", "--webapp", str(app))
+            self.assertNotEqual(check.returncode, 0)
+            self.assertIn("hide_stream", check.stderr)
+            self.assertIn("superseded", check.stderr)
 
     def test_check_accepts_the_upstream_widget_only_after_the_swap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -469,6 +493,14 @@ class DockerfileWiringTest(unittest.TestCase):
     def test_build_asserts_both_features_in_the_image(self) -> None:
         self.assertIn("cc.plotina.voice_volumes", self.dockerfile)
         self.assertIn("setSubscribed", self.dockerfile)
+
+    def test_build_asserts_the_paused_stream_and_rejects_the_old_menu(self) -> None:
+        """.16 hides other streams by default and the hide_stream submenu is gone,
+        so the image layer must demand the new key and refuse the old one."""
+        self.assertIn("video_tile.stream_paused", self.dockerfile)
+        self.assertIn("Стрим приостановлен", self.dockerfile)
+        self.assertIn('test "$(grep -o video_tile.hide_stream "$bundle" | wc -l)" -eq 0',
+                      self.dockerfile)
 
     def test_widget_noise_tags_resolve_inside_the_image(self) -> None:
         """../../noise/ from /widgets/element-call/ is /app/noise/, so the two
