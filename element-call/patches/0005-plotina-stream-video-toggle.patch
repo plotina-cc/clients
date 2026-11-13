@@ -1,33 +1,29 @@
 diff --git a/locales/en/app.json b/locales/en/app.json
-index f3d568b..f2a81d3 100644
+index f3d568b..0267992 100644
 --- a/locales/en/app.json
 +++ b/locales/en/app.json
-@@ -270,9 +270,12 @@
-     "camera_starting": "Video loading...",
-     "collapse": "Collapse",
+@@ -272,7 +272,10 @@
      "expand": "Expand",
-+    "hide_stream": "Don't show this stream",
      "mute_for_me": "Mute for me",
      "muted_for_me": "Muted for me",
 +    "screen_share_visibility": "Screen share visibility",
      "screen_share_volume": "Screen share volume",
++    "show_stream": "Show screen share",
 +    "stream_hidden": "Stream hidden",
      "volume": "Volume",
      "waiting_for_media": "Waiting for media..."
    }
 diff --git a/locales/ru/app.json b/locales/ru/app.json
-index ec68fd7..8600bd9 100644
+index ec68fd7..9453caa 100644
 --- a/locales/ru/app.json
 +++ b/locales/ru/app.json
-@@ -250,9 +250,12 @@
-     "camera_starting": "Загрузка видео...",
-     "collapse": "Свернуть",
+@@ -252,7 +252,10 @@
      "expand": "Развернуть",
-+    "hide_stream": "Не показывать этот стрим",
      "mute_for_me": "Заглушить звук для меня",
      "muted_for_me": "Приглушить для меня",
 +    "screen_share_visibility": "Показ демонстрации экрана",
      "screen_share_volume": "Громкость демонстрации экрана",
++    "show_stream": "Показать демонстрацию экрана",
 +    "stream_hidden": "Стрим скрыт",
      "volume": "Громкость",
      "waiting_for_media": "В ожидании медиа..."
@@ -861,10 +857,22 @@ index bf5fb24..492c049 100644
        inputs.participant$.pipe(
          switchMap((p) =>
 diff --git a/src/tile/SpotlightTile.test.tsx b/src/tile/SpotlightTile.test.tsx
-index 854d853..b793a4a 100644
+index 854d853..34c15e7 100644
 --- a/src/tile/SpotlightTile.test.tsx
 +++ b/src/tile/SpotlightTile.test.tsx
-@@ -11,6 +11,7 @@ import { axe } from "vitest-axe";
+@@ -6,11 +6,18 @@ Please see LICENSE in the repository root for full details.
+ */
+ 
+ import { test, expect, vi } from "vitest";
+-import { act, isInaccessible, render, screen } from "@testing-library/react";
++import {
++  act,
++  cleanup,
++  isInaccessible,
++  render,
++  screen,
++} from "@testing-library/react";
+ import { axe } from "vitest-axe";
  import userEvent from "@testing-library/user-event";
  import { TooltipProvider } from "@vector-im/compound-web";
  import { BehaviorSubject } from "rxjs";
@@ -872,11 +880,73 @@ index 854d853..b793a4a 100644
  
  import { SpotlightTile } from "./SpotlightTile";
  import {
-@@ -171,6 +172,62 @@ test("Screen share volume UI is hidden when screen share has no audio", async ()
+@@ -28,6 +35,11 @@ import {
+   createRingingMedia,
+   type RingingMediaViewModel,
+ } from "../state/media/RingingMediaViewModel";
++import {
++  persistentVolumeStore,
++  streamVideoKey,
++} from "../state/PersistentVolume";
++import { type RemoteScreenShareViewModel } from "../state/media/RemoteScreenShareViewModel";
+ 
+ global.IntersectionObserver = class MockIntersectionObserver {
+   public observe(): void {}
+@@ -35,6 +47,49 @@ global.IntersectionObserver = class MockIntersectionObserver {
+   public disconnect(): void {}
+ } as unknown as typeof IntersectionObserver;
+ 
++const ALICE = "@alice:example.org";
++
++/** Remembers a visibility choice for `mxid`, as a previous call or device would. */
++function seedStoredChoice(mxid: string, visible: boolean): void {
++  // The store only reads or writes while an account is signed in; this is the
++  // smallest client it accepts.
++  (window as unknown as { matrixclient: unknown }).matrixclient = {
++    getUserId: (): string => "@viewer:example.org",
++    getAccountData: (): undefined => undefined,
++    setAccountData: (): Promise<object> => Promise.resolve({}),
++    on: (): void => {},
++    off: (): void => {},
++  };
++  persistentVolumeStore().dispose();
++  window.localStorage.clear();
++  const store = persistentVolumeStore();
++  store.setStreamVisible(streamVideoKey(mxid), visible);
++  store.dispose();
++}
++
++/** Renders one screen share in the spotlight, the way a call would. */
++function renderTile(vm: RemoteScreenShareViewModel): HTMLElement {
++  return render(
++    <SpotlightTile
++      vm={
++        new SpotlightTileViewModel(
++          constant([vm]),
++          constant(false),
++          constant("solid"),
++        )
++      }
++      targetWidth={300}
++      targetHeight={200}
++      expanded={false}
++      onToggleExpanded={vi.fn()}
++      showIndicators
++      showNameTags
++      showRingingStatus
++      focusable
++    />,
++  ).container as HTMLElement;
++}
++
+ test("SpotlightTile is accessible", async () => {
+   const vm1 = mockRemoteMedia(
+     mockRtcMembership("@alice:example.org", "AAAA"),
+@@ -171,6 +226,94 @@ test("Screen share volume UI is hidden when screen share has no audio", async ()
    ).not.toBeInTheDocument();
  });
  
-+test("Screen share can be hidden and shown again from its menu", async () => {
++test("The eye button toggles the stream on the first click, without a menu", async () => {
 +  const setSubscribed = vi.fn();
 +  const vm = mockRemoteScreenShare(
 +    mockRtcMembership("@alice:example.org", "AAAA"),
@@ -910,33 +980,65 @@ index 854d853..b793a4a 100644
 +
 +  expect(await axe(container)).toHaveNoViolations();
 +
-+  // The toggle lives next to the volume button, so it is available for a
-+  // stream with no audio too.
-+  await user.click(
-+    screen.getByRole("button", { name: "Screen share visibility" }),
-+  );
-+  const hideItem = screen.getByRole("menuitemcheckbox", {
-+    name: "Don't show this stream",
-+  });
-+  expect(hideItem).toHaveAttribute("aria-checked", "false");
-+  await user.click(hideItem);
++  // A visible stream: the button says what it shows, and it is not pressed.
++  const eye = screen.getByRole("button", { name: "Screen share visibility" });
++  expect(eye).toHaveAttribute("aria-pressed", "false");
 +
++  // One click is the whole interaction: no menu in between, and the stream is
++  // gone by the time the click returns.
++  await user.click(eye);
++  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 +  expect(vm.videoVisible$.value).toBe(false);
 +  expect(setSubscribed).toHaveBeenLastCalledWith(false);
 +  // The tile stays in place so the stream can be shown again from here.
 +  screen.getByText("Stream hidden");
 +
-+  await user.click(hideItem);
++  // The same button now reads as the way back, and it is pressed.
++  const show = screen.getByRole("button", { name: "Show screen share" });
++  expect(show).toHaveAttribute("aria-pressed", "true");
++  await user.click(show);
++  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 +  expect(vm.videoVisible$.value).toBe(true);
 +  expect(setSubscribed).toHaveBeenLastCalledWith(true);
 +  expect(screen.queryByText("Stream hidden")).not.toBeInTheDocument();
++});
++
++test("The eye shows a stream the store has hidden as already hidden", async () => {
++  // A choice made earlier (another call, another device, a previous page load)
++  // is the initial state of the button: it is read from the store, not from
++  // anything this component remembers about clicks.
++  seedStoredChoice(ALICE, false);
++
++  const setSubscribed = vi.fn();
++  const vm = mockRemoteScreenShare(
++    mockRtcMembership(ALICE, "AAAA"),
++    {},
++    mockRemoteParticipant({
++      getTrackPublication: () =>
++        ({ setSubscribed }) as unknown as RemoteTrackPublication,
++    }),
++  );
++
++  renderTile(vm);
++
++  const show = screen.getByRole("button", { name: "Show screen share" });
++  expect(show).toHaveAttribute("aria-pressed", "true");
++  expect(setSubscribed).toHaveBeenLastCalledWith(false);
++  screen.getByText("Stream hidden");
++
++  // Re-rendering the tile does not lose the state: it comes back from the VM.
++  cleanup();
++  renderTile(vm);
++  expect(
++    screen.getByRole("button", { name: "Show screen share" }),
++  ).toHaveAttribute("aria-pressed", "true");
 +});
 +
  test("SpotlightTile displays ringing media", async () => {
    const pickupState$ = new BehaviorSubject<
      RingingMediaViewModel["pickupState$"]["value"]
 diff --git a/src/tile/SpotlightTile.tsx b/src/tile/SpotlightTile.tsx
-index 97e1f4a..3548f20 100644
+index 97e1f4a..bcb6c24 100644
 --- a/src/tile/SpotlightTile.tsx
 +++ b/src/tile/SpotlightTile.tsx
 @@ -8,6 +8,7 @@ Please see LICENSE in the repository root for full details.
@@ -956,15 +1058,6 @@ index 97e1f4a..3548f20 100644
    VolumeOffIcon,
    VolumeOnIcon,
    VolumeOffSolidIcon,
-@@ -31,7 +34,7 @@ import { useObservableRef } from "observable-hooks";
- import { useTranslation } from "react-i18next";
- import classNames from "classnames";
- import { type TrackReferenceOrPlaceholder } from "@livekit/components-core";
--import { Menu, MenuItem, Text } from "@vector-im/compound-web";
-+import { Menu, MenuItem, Text, ToggleMenuItem } from "@vector-im/compound-web";
- 
- import FullScreenMaximiseIcon from "../icons/FullScreenMaximise.svg?react";
- import FullScreenMinimiseIcon from "../icons/FullScreenMinimise.svg?react";
 @@ -146,6 +149,8 @@ SpotlightUserMediaItem.displayName = "SpotlightUserMediaItem";
  interface SpotlightScreenShareItemProps extends SpotlightMemberMediaItemBaseProps {
    vm: ScreenShareViewModel;
@@ -995,7 +1088,7 @@ index 97e1f4a..3548f20 100644
    );
  };
  
-@@ -380,6 +395,60 @@ const ScreenShareVolumeButton: FC<ScreenShareVolumeButtonProps> = ({ vm }) => {
+@@ -380,6 +395,46 @@ const ScreenShareVolumeButton: FC<ScreenShareVolumeButtonProps> = ({ vm }) => {
    );
  };
  
@@ -1007,56 +1100,42 @@ index 97e1f4a..3548f20 100644
 + * Plotina: lets this viewer stop receiving and showing one participant's
 + * screen share. The publisher, the other streams and all audio are untouched;
 + * the choice is remembered per MXID and source.
++ *
++ * It is a plain toggle, not a menu: the owner asked for one click, and a menu
++ * with a single item made a two-step job out of a one-step one. The icon and
++ * the label carry the state, so the outcome is readable without hovering.
 + */
 +const ScreenShareVisibilityButton: FC<ScreenShareVisibilityButtonProps> = ({
 +  vm,
 +}) => {
 +  const { t } = useTranslation();
 +  const videoVisible = useBehavior(vm.videoVisible$);
-+  const latestVideoVisible = useLatest(videoVisible);
-+  const [visibilityMenuOpen, setVisibilityMenuOpen] = useState(false);
-+  const onSelectVisibility = useCallback(
-+    (e: Event) => {
-+      // Keep the menu open: the item is a toggle, and its checked state is the
-+      // feedback that the choice was applied.
-+      e.preventDefault();
-+      vm.setVideoVisible(!latestVideoVisible.current);
-+    },
-+    [vm, latestVideoVisible],
-+  );
++  const onToggle = useCallback(() => {
++    vm.setVideoVisible(!vm.videoVisible$.value);
++  }, [vm]);
 +
-+  const label = t("video_tile.screen_share_visibility");
++  // A hidden stream gets the "off" eye and the label that offers to bring it
++  // back; a shown one gets the opposite pair.
++  const Icon = videoVisible ? VisibilityOnIcon : VisibilityOffIcon;
++  const label = videoVisible
++    ? t("video_tile.screen_share_visibility")
++    : t("video_tile.show_stream");
 +  return (
-+    <Menu
-+      open={visibilityMenuOpen}
-+      onOpenChange={setVisibilityMenuOpen}
-+      title={label}
-+      side="top"
-+      align="end"
-+      trigger={
-+        <button className={styles.expand} aria-label={label}>
-+          {videoVisible ? (
-+            <VisibilityOnIcon aria-hidden width={20} height={20} />
-+          ) : (
-+            <VisibilityOffIcon aria-hidden width={20} height={20} />
-+          )}
-+        </button>
-+      }
++    <button
++      className={styles.expand}
++      aria-label={label}
++      aria-pressed={!videoVisible}
++      onClick={onToggle}
 +    >
-+      <ToggleMenuItem
-+        Icon={videoVisible ? VisibilityOnIcon : VisibilityOffIcon}
-+        label={t("video_tile.hide_stream")}
-+        checked={!videoVisible}
-+        onSelect={onSelectVisibility}
-+      />
-+    </Menu>
++      <Icon aria-hidden width={20} height={20} />
++    </button>
 +  );
 +};
 +
  interface Props {
    ref?: Ref<HTMLDivElement>;
    vm: SpotlightTileViewModel;
-@@ -536,6 +605,9 @@ export const SpotlightTile: FC<Props> = ({
+@@ -536,6 +591,9 @@ export const SpotlightTile: FC<Props> = ({
        </div>
  
        <div className={styles.bottomRightButtons}>

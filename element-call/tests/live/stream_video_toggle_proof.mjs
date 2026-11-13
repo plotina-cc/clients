@@ -304,20 +304,23 @@ try {
 
   await viewer.page.screenshot({ path: join(OUT, "01-viewer-receiving.png") });
 
-  // Hide it: tile corner menu -> "Don't show this stream".
+  // Hide it: one click on the eye in the tile's corner. No menu in between.
   await viewer.page.mouse.move(640, 360);
   await viewer.page.mouse.move(660, 380);
-  await viewer.page
-    .getByRole("button", { name: "Screen share visibility" })
-    .click();
-  const hideItem = viewer.page.getByRole("menuitemcheckbox", {
-    name: "Don't show this stream",
+  // The accessible name changes with the state, so each look-up happens while
+  // the stream is in the state that name describes.
+  const showingEye = viewer.page.getByRole("button", {
+    name: "Screen share visibility",
   });
-  await hideItem.waitFor({ state: "visible", timeout: 20_000 });
-  say("menu open", { ariaChecked: await hideItem.getAttribute("aria-checked") });
-  await viewer.page.screenshot({ path: join(OUT, "02-viewer-menu.png") });
-  await hideItem.click();
+  const pressedBefore = await showingEye.getAttribute("aria-pressed");
+  await showingEye.click();
   await viewer.page.waitForTimeout(3000);
+  const hiddenEye = viewer.page.getByRole("button", {
+    name: "Show screen share",
+  });
+  const pressedAfter = await hiddenEye.getAttribute("aria-pressed");
+  const menusAfterClick = await viewer.page.getByRole("menu").count();
+  say("eye after the click", { pressedBefore, pressedAfter, menus: menusAfterClick });
 
   const hiddenText = await viewer.page
     .getByText("Stream hidden")
@@ -343,25 +346,32 @@ try {
   if (audioBytesTotal(afterHideViewer) <= 0)
     throw new Error("viewer lost audio along with the video");
 
-  // The menu is a checkbox menu: it stays open after a click, so a second toggle
-  // is the same item again; when it is closed, the corner button opens it.
-  const setVisibility = async (wantHidden, label) => {
-    const item = viewer.page.getByRole("menuitemcheckbox", {
-      name: "Don't show this stream",
-    });
-    if (!(await item.isVisible().catch(() => false))) {
-      await viewer.page.mouse.move(640, 360);
-      await viewer.page.mouse.move(660, 380);
-      await viewer.page
-        .getByRole("button", { name: "Screen share visibility" })
-        .click();
-      await item.waitFor({ state: "visible", timeout: 20_000 });
+  // The eye is a plain toggle now: the same button flips, and its label says
+  // which direction the click goes. Read the state before and after, looking
+  // the button up afresh each time because the name changes with the state.
+  const eyeState = async () => {
+    for (const name of ["Screen share visibility", "Show screen share"]) {
+      const button = viewer.page.getByRole("button", { name });
+      if ((await button.count()) > 0)
+        return (await button.getAttribute("aria-pressed")) === "true";
     }
-    const checked = (await item.getAttribute("aria-checked")) === "true";
-    say(`${label}: menu opened`, { checked });
-    if (checked !== wantHidden) await item.click();
-    await viewer.page.keyboard.press("Escape");
-    await viewer.page.waitForTimeout(1000);
+    return null;
+  };
+  const setVisibility = async (wantHidden, label) => {
+    const before = await eyeState();
+    say(`${label}: eye before the click`, { pressed: before });
+    if (before !== wantHidden) {
+      await viewer.page
+        .getByRole("button", {
+          name: wantHidden ? "Screen share visibility" : "Show screen share",
+        })
+        .click();
+      await viewer.page.waitForTimeout(1000);
+    }
+    say(`${label}: eye after the click`, {
+      pressed: await eyeState(),
+      menus: await viewer.page.getByRole("menu").count(),
+    });
   };
 
   // Show it again, in the same call.
@@ -379,8 +389,10 @@ try {
   await viewer.page.reload();
   await viewer.page.getByTestId("lobby_joinCall").waitFor({ timeout: 90_000 });
   await viewer.page.getByTestId("lobby_joinCall").click({ timeout: 60_000 });
+  // The stream was hidden before the reload, so the button comes back as the
+  // one that offers to show it.
   await viewer.page
-    .getByRole("button", { name: "Screen share visibility" })
+    .getByRole("button", { name: "Show screen share" })
     .waitFor({ state: "attached", timeout: 90_000 });
   await viewer.page.waitForTimeout(5000);
   const afterReloadHidden = await viewer.page
@@ -414,6 +426,7 @@ try {
     ui: {
       hiddenTextAfterToggle: hiddenText,
       hiddenTextAfterReload: afterReloadHidden,
+      menusOpenedByTheEye: menusAfterClick,
     },
     stored,
     livekitLogs,
@@ -441,6 +454,8 @@ try {
       livekitLoggedResubscribe: livekitLogs.some((l) =>
         /Subscribed: video screen_share/.test(l),
       ),
+      // The eye toggles on the first click: it opens nothing.
+      eyeOpensNoMenu: menusAfterClick === 0,
       accountDataWrite: livekitLogs.some((l) =>
         /account_data\/cc\.plotina/.test(l),
       ),
