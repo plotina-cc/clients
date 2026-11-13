@@ -36,6 +36,12 @@ name: Build Plotina Mobile
 on:
   workflow_dispatch:
   push:
+    # A cache entry is scoped to the ref that saved it, and only the default
+    # branch's entries are readable from every other ref — tags included. The
+    # rust, pub and Gradle caches a release restores therefore have to be
+    # written by a run on main; see the "cache-inputs" job, which keeps that
+    # run from firing for a change that cannot invalidate a cache.
+    branches: [main]
     tags: ["v*-plotina-mobile.*"]
 
 permissions:
@@ -64,8 +70,69 @@ env:
   SENTRY_CLI_VERSION: 2.42.2
 
 jobs:
+  # GitHub scopes a cache entry to the ref that saved it, and only entries
+  # written on the default branch are readable from every other ref — tags
+  # included (gradle/actions docs/setup-gradle.md, "Branch scope"; the same
+  # rule governs Swatinem/rust-cache and the pub cache flutter-action saves
+  # through actions/cache). Mobile saved its rust and pub caches from tag runs
+  # only, so every release started from an empty cargo registry: the .35 run
+  # printed "No cache found" while a 634 MB cache with the same key sat under
+  # refs/heads/refs/tags/v2.11.3-plotina-mobile.34-dev.7, and
+  # "Build native denoiser" cost 8.0 of the job's 25.8 minutes.
+  #
+  # Writing those caches on main is the fix, and this job decides whether a
+  # push to main is worth a 20-30 minute build: only the files that feed a
+  # cache count. A patch or a client source change leaves the caches valid, so
+  # it must not start a build that cannot change them.
+  cache-inputs:
+    name: Do the caches need a rebuild
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.changed.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The push event names the commit it replaced; a multi-commit push
+          # needs the full history for that commit to be reachable.
+          fetch-depth: 0
+
+      - name: Which cache inputs changed
+        id: changed
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          base="$BEFORE"
+          if [ -z "$base" ] || ! git rev-parse --verify --quiet "$base^{commit}" > /dev/null; then
+            # A forced push (or the first push of a branch) has no usable
+            # before-commit; fall back to the merged commit's parent.
+            base="$(git rev-parse HEAD^)"
+          fi
+          echo "range: $base..HEAD"
+          files="$(git diff --name-only "$base" HEAD)"
+          printf '%s\n' "$files"
+          # rust crate (Cargo.lock) · upstream pin (pubspec.lock, Gradle
+          # dependencies) · this file (which caches, where, with which keys).
+          if printf '%s\n' "$files" |
+            grep -qE '^fluffychat/plotina_dfn/|^fluffychat/UPSTREAM_TAG$|^\.github/workflows/build-fluffychat\.yml$'; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no cache input changed in this push; main does not rebuild the APK"
+          fi
+
   apk:
     name: Android APK
+    # cache-inputs exists only for a push to main, where it decides whether the
+    # build can change a cache. A tag (the release path) and a manual dispatch
+    # have no such job, and `always()` is what keeps them building — without it
+    # a skipped dependency would skip the release build as well.
+    needs: [cache-inputs]
+    if: >-
+      always()
+      && (github.event_name != 'push' || github.ref != 'refs/heads/main'
+          || needs.cache-inputs.outputs.build == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 120
 
@@ -242,6 +309,14 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # The Gradle User Home is what makes `assembleRelease` cheap: a cold
+      # runner downloads the plugin/dependency set and re-runs the jar
+      # transforms for every release. setup-gradle only *writes* on the default
+      # branch and reads on every other ref, which is exactly the split this
+      # workflow needs — main primes it via the cache-inputs gate above, tags
+      # restore it (gradle/actions docs/setup-gradle.md, "Branch scope").
+      - uses: gradle/actions/setup-gradle@v4
+
       # Firebase Cloud Messaging. Upstream ships the switch as a script: it adds
       # fcm_shared_isolate (which pulls in firebase_core and firebase-messaging)
       # and uncomments the FCM code paths. google-services.json has to be in
@@ -327,6 +402,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: fluffychat/plotina_dfn/rust -> target
+          # A tag that saves its own copy writes 634 MB that no other ref can
+          # read (only the default branch's entries are visible everywhere).
+          # Save on main only — the cache-inputs job decides when that run
+          # happens — and restore on every ref, which needs no permission.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # cargo-binstall (behind install-action) runs `cargo metadata` in the
       # repository root, which has no Cargo.toml. Plain `cargo install` does not.
