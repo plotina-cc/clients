@@ -336,12 +336,14 @@ const waitAttached = async (frame, timeoutMs = 120_000) => {
  */
 const ensureBridge = async (frame) => {
   let state = await waitAttached(frame, 45_000);
-  for (let attempt = 0; attempt < 2 && state.status === "idle"; attempt++) {
+  for (let attempt = 0; attempt < 2 && state.status !== "attached" && state.status !== "error"; attempt++) {
     const mute = frame.getByTestId("incall_mute").first();
+    say("microphone toggle", { attempt: attempt + 1, before: state.status });
     if (await mute.count()) {
       await mute.click();
-      await frame.page().waitForTimeout(1_000);
+      await frame.page().waitForTimeout(1_200);
       await mute.click();
+      await frame.page().waitForTimeout(1_200);
     }
     state = await waitAttached(frame, 45_000);
   }
@@ -373,7 +375,14 @@ try {
   const frame = page.mainFrame();
   say("joined", { url: await enterRoom(page, roomUrl) });
 
-  const attached = await ensureBridge(frame);
+  let attached = await ensureBridge(frame);
+  if (attached.status !== "attached" && attached.status !== "error") {
+    // A headless join that never publishes the microphone: go again once, from
+    // a clean navigation, before saying the bridge is unavailable.
+    say("rejoining to get a microphone track");
+    await enterRoom(page, roomUrl);
+    attached = await ensureBridge(frame);
+  }
   say("bridge", attached);
   check(
     "the DeepFilterNet3 bridge attached to the microphone",
@@ -409,6 +418,20 @@ try {
   });
   await page.screenshot({ path: join(OUT, "02-settings-audio.png") });
   await row.screenshot({ path: join(OUT, "02b-row.png") });
+
+  // The row pushed the speaker and volume sections down; the tab scrolls, and
+  // the proof has to show they are still there (not clipped away).
+  const speaker = frame.getByText("Speaker", { exact: true }).first();
+  await speaker.scrollIntoViewIfNeeded();
+  const volume = frame.getByText(/sound effect volume/i).first();
+  await volume.scrollIntoViewIfNeeded();
+  check(
+    "the rest of the Audio tab is still reachable below the row",
+    await speaker.isVisible(),
+    { speakerVisible: await speaker.isVisible(), volumeVisible: await volume.isVisible() },
+  );
+  await page.screenshot({ path: join(OUT, "02c-audio-below.png") });
+  await row.scrollIntoViewIfNeeded();
 
   await nudge(frame, row, 5);
   const moved = await rowFacts(row);
