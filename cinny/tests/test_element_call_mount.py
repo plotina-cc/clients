@@ -40,7 +40,6 @@ OUR_INDEX = (
     '<script src="/noise/logic.js"></script>'
     '<script src="/noise/plotina-dfn.js"></script>'
     '<script src="/noise/boot.js"></script>'
-    '<script src="/noise/plotina-panel.js"></script>'
     '<script src="/noise/source-link.js" defer></script>'
     '<meta charset="UTF-8"><link rel="icon" type="image/svg+xml" href="/plotina-icon.svg">'
     '<link rel="preload" href="/config.json" as="fetch">'
@@ -121,7 +120,7 @@ def make_archive(root: Path, *, ours: bool = True, with_noise: bool = True,
         # its own any more, so these must travel inside the mount.
         (stage / "noise" / "dfn" / "v3" / "pkg").mkdir(parents=True)
         (stage / "noise" / "dfn" / "v3" / "models").mkdir(parents=True)
-        for name in ("logic.js", "boot.js", "plotina-panel.js", "source-link.js"):
+        for name in ("logic.js", "boot.js", "source-link.js"):
             (stage / "noise" / name).write_text("/*noise*/", encoding="utf-8")
         (stage / "noise" / "plotina-dfn.js").write_text(DFN_JS, encoding="utf-8")
         (stage / "noise" / "dfn" / "v3" / "pkg" / "df_bg.wasm").write_text("wasm", encoding="utf-8")

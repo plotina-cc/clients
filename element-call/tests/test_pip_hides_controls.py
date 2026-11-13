@@ -10,7 +10,10 @@ each one decided on its own.
 
 The fix is one rule, keyed on the viewport rather than the platform: below
 ``PIP_MAX`` on *both* sides, both controls are ``display: none``. This module is
-what keeps them together:
+what keeps them together. (The floating capsule has since been removed — noise
+suppression lives in the call's «…» → Audio settings, ``0007`` — so the capsule
+half of every check below is guarded by ``HAS_PANEL`` and skips instead of
+failing; the eye half still runs.)
 
 * ``RuleTests`` reads the two shipped artifacts and asserts they carry the same
   query, that it hides exactly the two controls, and that nothing else about

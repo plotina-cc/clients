@@ -38,7 +38,7 @@ Output: `dist/plotina-element-call.tar.gz`, one top-level directory:
 
 ```
 element-call-plotina/
-├── index.html                 # upstream, plus two <script> tags after <head>
+├── index.html                 # upstream, plus the noise tags after <head>
 ├── favicon.png                # branding/icons/png/green-48.png
 ├── plotina-icon.svg           # the brand mark, linked from index.html
 ├── plotina-512.png            # the og:/twitter: social card
@@ -49,7 +49,6 @@ element-call-plotina/
 └── noise/
     ├── logic.js  boot.js      # the shared wrapper
     ├── plotina-dfn.js         # the LiveKit track processor (level, live setter)
-    ├── plotina-panel.js       # the in-call level control
     ├── source-link.js         # "Исходный код" in the sign-in footer
     ├── vendor/dfn.esm.js      # + its two licences
     └── dfn/v3/pkg/df_bg.wasm  # 16.4 MB, sha256 from pins.env
@@ -189,13 +188,23 @@ replace the client this module set up.
 ## Noise level in the call
 
 Element Call v0.26.1 has no level control of its own — only the boolean
-`noiseSuppression` in the developer tab, which is not ours. `noise/plotina-panel.js`
-adds a pill in the bottom-right corner of the room view («Шумодав · 40 дБ», or
-"Noise · 40 dB" in a non-Russian browser) that opens a 0–100 dB slider. 0 is off:
-the worklet passes the microphone through; 100 is full suppression. The value is
-stored in `localStorage["plotina.noise.level"]` and applied to the running LiveKit
-track processor through `window.__plotinaSetLevel()` → `setSuppressionLevel()`,
-so moving the slider never restarts the call or re-negotiates the track.
+`noiseSuppression` in the developer tab, which is not ours. The control is a row
+in the call's own **«…» → Audio** settings tab, drawn by
+`patches/0007-plotina-noise-settings.patch`: an icon, «Шумоподавление» / "Noise
+suppression", the current value in dB and a 0–100 slider. 0 is off: the worklet
+passes the microphone through; 100 is full suppression. The value is stored in
+`localStorage["plotina.noise.level"]` and applied to the running LiveKit track
+processor through `window.__plotinaSetLevel()` → `setSuppressionLevel()`, so
+moving the slider never restarts the call or re-negotiates the track.
+
+There is no floating control in the room view any more: the old
+`noise/plotina-panel.js` pill is gone, its `<script>` tag is not injected, and
+`inject-noise.py --check` fails on a bundle that still advertises it. Nothing of
+it is left in a DOM at call time, in PiP or otherwise.
+
+Where the processor did not load (`/noise/plotina-dfn.js` missing, so
+`window.__plotinaSetLevel` is not a function) the row says so and the slider is
+disabled, rather than offering a control that changes nothing.
 
 `?plotina-level=30` presets the value for one call; the widget API's fragment
 (`#?widgetId=…&plotina-level=30`) works the same way, because the Matrix widget
@@ -203,19 +212,10 @@ parameters arrive there. Until the slider is moved, the URL wins over storage;
 after that the user's choice wins, so re-attaching a track (device change, mic
 toggled off and on) keeps it.
 
-The panel is drawn only in the room view, and only when the page is embedded
-(`window.self !== window.top`) or the user agent is Element X's WebView, which
-sets its own UA (`Element X/<version> (…; Android …)`) instead of a Mozilla one.
-An Android WebView that reports the stock UA still counts, because the widget
-parameters in the fragment (`#?widgetId=…`) identify an app host. A top-level
-desktop tab at `call.plotina.cc` stays clean. `?plotina-panel=1` and
-`?plotina-panel=0` override the decision for support and for tests.
-
-Element Web and Cinny embed Element Call in an iframe, so they do get the panel;
-their own sliders live in their settings screens and write their own origin's
-storage, so the two never appear on the same screen. What the settings sliders
-cannot do is reach a call running in this iframe — the panel is the control that
-does.
+The row is in the settings modal, so it reaches the call running in this bundle
+whether that bundle is a top-level tab at `call.plotina.cc` or the iframe
+Element Web, Plotina Lite and Plotina X open. Their own settings screens write
+their own origin's storage, so the two never contradict each other on screen.
 
 ## Deploy
 

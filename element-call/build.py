@@ -386,7 +386,9 @@ def _install_as(src: Path, dst: Path) -> None:
 
 def copy_noise(dist: Path, noise: Path, source_link: Path) -> None:
     (dist / "noise" / "vendor").mkdir(parents=True, exist_ok=True)
-    for name in ("logic.js", "boot.js", "plotina-dfn.js", "plotina-panel.js"):
+    # No level panel: the control is the Settings -> Audio row in the patched
+    # Element Call bundle. A plotina-panel.js left in noise/ is not shipped.
+    for name in ("logic.js", "boot.js", "plotina-dfn.js"):
         _install(noise / name, dist / "noise")
     _install(source_link, dist / "noise")
     _install(noise / "vendor" / "dfn.esm.js", dist / "noise" / "vendor")
@@ -439,7 +441,7 @@ def install_config(src: Path, dst: Path) -> None:
 
 def check_inputs(noise: Path, config: Path, icons: Path) -> None:
     for f in (noise / "logic.js", noise / "boot.js", noise / "plotina-dfn.js",
-              noise / "plotina-panel.js", noise / "vendor" / "dfn.esm.js",
+              noise / "vendor" / "dfn.esm.js",
               config, icons / "plotina-green.svg", icons / "png" / "green-48.png",
               icons / "png" / "green-512.png"):
         if not f.is_file():
@@ -462,14 +464,14 @@ def check_bundle(dist: Path, icons: Path, *, say=print,
     index = _read(dist / "index.html")
     if "/noise/logic.js" not in index:
         raise BuildError("logic.js tag missing from index.html")
-    if "/noise/plotina-panel.js" not in index:
-        raise BuildError("plotina-panel.js tag missing from index.html")
+    if "/noise/plotina-panel.js" in index:
+        raise BuildError("index.html still loads the floating noise panel")
     if "/noise/source-link.js" not in index:
         raise BuildError("source-link.js tag missing from index.html")
     if not _nonempty(dist / "noise" / "source-link.js"):
         raise BuildError("source-link.js is missing from the bundle")
-    if not _nonempty(dist / "noise" / "plotina-panel.js"):
-        raise BuildError("plotina-panel.js is missing from the bundle")
+    if (dist / "noise" / "plotina-panel.js").exists():
+        raise BuildError("plotina-panel.js is still in the bundle")
     if "assets/" not in index:
         raise BuildError("no asset references in index.html; wrong tarball?")
     if not sorted((dist / "assets").glob("index-*.js")):

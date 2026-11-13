@@ -71,10 +71,12 @@ to hold, which is what keeps a full-screen call on a phone — ≥ ~360 CSS px w
 upright, ~700+ wide and ~360 tall sideways — and any desktop window outside the rule. Nothing sniffs
 a UA string and nothing measures the window in JS.
 
-The noise capsule (`noise/plotina-panel.js`, injected into the same document) carries the identical
-query for the same reason, so the two overlays cannot disagree about when they are in a PiP window —
-which is how they behaved before: shrinking the window lost the capsule and kept the eye. The capsule
-keeps its usual place in a full-screen call; moving it is a separate decision.
+The noise capsule that used to sit in the same document is gone — noise suppression moved into the
+call's «…» → Audio settings (`0007`), so the eye is the only overlay left with a corner button. While
+the capsule existed it carried the identical query, so the two could not disagree about when they
+were in a PiP window; `tests/test_pip_hides_controls.py` still checks that half of the rule when
+`noise/plotina-panel.js` is present (`HAS_PANEL`) and skips it once the capsule is not there, rather
+than silently dropping the assertion.
 
 `tests/test_pip_hides_controls.py` keeps the two together and proves the rule does something: the
 class and the query are asserted in both artifacts, and both pages are rendered in headless chromium

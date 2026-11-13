@@ -1,0 +1,629 @@
+# Plotina-Patch: noise suppression level in Settings -> Audio instead of a floating panel
+# Plotina-Marker: settings.noise_suppression_description
+
+diff --git a/locales/en/app.json b/locales/en/app.json
+index 8b765c5..27cdb26 100644
+--- a/locales/en/app.json
++++ b/locales/en/app.json
+@@ -233,7 +233,11 @@
+     "feedback_tab_thank_you": "Thanks, we received your feedback!",
+     "feedback_tab_title": "Feedback",
+     "framerate_label": "Framerate",
++    "noise_suppression_description": "Cuts the background noise out of your microphone before it is sent. 0 turns it off, 100 is the maximum.",
+     "noise_suppression_label": "Noise suppression",
++    "noise_suppression_off": "off",
++    "noise_suppression_unavailable": "Noise suppression is not available here: the audio processor did not load.",
++    "noise_suppression_unit": "dB",
+     "opt_in_description": "<0></0><1></1>You may withdraw consent by unchecking this box. If you are currently in a call, this setting will take effect at the end of the call.",
+     "preferences_tab": {
+       "developer_mode_label": "Developer mode",
+diff --git a/locales/ru/app.json b/locales/ru/app.json
+index 6e2e583..20a60c3 100644
+--- a/locales/ru/app.json
++++ b/locales/ru/app.json
+@@ -216,6 +216,11 @@
+     "feedback_tab_send_logs_label": "Приложить журнал отладки",
+     "feedback_tab_thank_you": "Спасибо. Мы получили ваш отзыв!",
+     "feedback_tab_title": "Отзыв",
++    "noise_suppression_description": "Убирает фоновый шум с вашего микрофона перед отправкой. 0 — выключено, 100 — максимум.",
++    "noise_suppression_label": "Шумоподавление",
++    "noise_suppression_off": "выкл",
++    "noise_suppression_unavailable": "Шумоподавление здесь недоступно: аудиопроцессор не загрузился.",
++    "noise_suppression_unit": "дБ",
+     "opt_in_description": "<0></0><1></1>Вы можете отозвать согласие, сняв этот флажок. Если вы в данный момент находитесь в разговоре, эта настройка вступит в силу по окончании разговора.",
+     "preferences_tab": {
+       "developer_mode_label": "Режим разработчика",
+diff --git a/src/plotina/NoiseSuppressionSetting.module.css b/src/plotina/NoiseSuppressionSetting.module.css
+new file mode 100644
+index 0000000..9775bd2
+--- /dev/null
++++ b/src/plotina/NoiseSuppressionSetting.module.css
+@@ -0,0 +1,38 @@
++/*
++Copyright 2026 Element Creations Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE in the repository root for full details.
++*/
++
++/* The row sits under the microphone picker and reads like the sound effect
++   volume slider below it: a label, a line of description, the slider. */
++.noiseSuppression {
++  margin-top: var(--cpd-space-2x);
++}
++
++.label {
++  display: flex;
++  align-items: center;
++  gap: var(--cpd-space-1x);
++  margin-bottom: var(--cpd-space-1x);
++}
++
++/* Compound icons are drawn on a 24×24 box and sized in em; 20px is the size
++   Element Call uses for icons standing next to text. */
++.icon {
++  inline-size: 20px;
++  block-size: 20px;
++  flex: 0 0 auto;
++  color: var(--cpd-color-icon-secondary);
++}
++
++.value {
++  font-weight: normal;
++  color: var(--cpd-color-text-secondary);
++  font-variant-numeric: tabular-nums;
++}
++
++.noiseSuppression > p {
++  color: var(--cpd-color-text-secondary);
++}
+diff --git a/src/plotina/NoiseSuppressionSetting.test.tsx b/src/plotina/NoiseSuppressionSetting.test.tsx
+new file mode 100644
+index 0000000..8f70314
+--- /dev/null
++++ b/src/plotina/NoiseSuppressionSetting.test.tsx
+@@ -0,0 +1,138 @@
++/*
++Copyright 2026 Element Creations Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE in the repository root for full details.
++*/
++
++import { beforeEach, describe, expect, it, vi } from "vitest";
++import { fireEvent, render, screen, within } from "@testing-library/react";
++import { TooltipProvider } from "@vector-im/compound-web";
++import { type MatrixClient } from "matrix-js-sdk";
++
++import { NoiseSuppressionSetting } from "./NoiseSuppressionSetting";
++import { NOISE_LEVEL_STORAGE_KEY } from "./noiseLevel";
++import { SettingsModal } from "../settings/SettingsModal";
++import { MediaDevicesContext } from "../MediaDevicesContext";
++import { mockMediaDevices } from "../utils/test";
++
++// The audio tab also renders the background-blur checkbox, which wants the
++// processor context; our row does not depend on it.
++vi.mock("../livekit/TrackProcessorContext", () => ({
++  useTrackProcessor: (): { supported: boolean; processor: undefined } => ({
++    supported: false,
++    processor: undefined,
++  }),
++  useTrackProcessorSync: (): void => {},
++}));
++
++function renderSetting(): HTMLElement {
++  render(
++    <TooltipProvider>
++      <NoiseSuppressionSetting />
++    </TooltipProvider>,
++  );
++  return noiseRow();
++}
++
++/* The compound tooltip names our slider after its own value, so the row is
++   found by its test id and the slider is queried inside it. */
++function noiseRow(): HTMLElement {
++  return screen.getByTestId("plotina-noise-suppression");
++}
++
++function withBridge(): ReturnType<typeof vi.fn> {
++  const bridge = vi.fn((value: number): number => value);
++  window.__plotinaSetLevel = bridge;
++  return bridge;
++}
++
++const mockClient = {
++  getUserId: (): string => "@user:example.org",
++  getDeviceId: (): string => "DEVICE",
++  getUser: (): null => null,
++  getCrypto: (): undefined => undefined,
++  credentials: { userId: "@user:example.org" },
++} as Partial<MatrixClient> as MatrixClient;
++
++describe("NoiseSuppressionSetting", () => {
++  beforeEach(() => {
++    localStorage.clear();
++    delete window.__plotinaDfn;
++    delete window.__plotinaSetLevel;
++  });
++
++  it("shows the stored level next to the slider", () => {
++    localStorage.setItem(NOISE_LEVEL_STORAGE_KEY, "60");
++    withBridge();
++
++    const row = renderSetting();
++
++    expect(within(row).getByText("60 dB")).toBeInTheDocument();
++    // One space after the colon, none before it: the label and the value are
++    // siblings in a flex row, and a gap would push them apart.
++    expect(row).toHaveTextContent(/^Noise suppression: 60 dB/);
++    expect(within(row).getByRole("slider")).toHaveAttribute(
++      "aria-valuenow",
++      "60",
++    );
++  });
++
++  it("sends a moved slider to the noise bridge and to localStorage", () => {
++    const bridge = withBridge();
++    const row = renderSetting();
++
++    const slider = within(row).getByRole("slider");
++    expect(slider).toHaveAttribute("aria-valuenow", "40");
++
++    fireEvent.keyDown(slider, { key: "ArrowRight" });
++
++    expect(bridge).toHaveBeenCalledWith(41, { persist: true, report: true });
++    expect(localStorage.getItem(NOISE_LEVEL_STORAGE_KEY)).toBe("41");
++    expect(slider).toHaveAttribute("aria-valuenow", "41");
++    expect(within(row).getByText("41 dB")).toBeInTheDocument();
++  });
++
++  it("says so instead of offering an empty slider when the bridge is missing", () => {
++    const row = renderSetting();
++
++    expect(within(row).getByRole("slider")).toHaveAttribute("data-disabled");
++    expect(
++      within(row).getByText(/noise suppression is not available/i),
++    ).toBeInTheDocument();
++  });
++});
++
++describe("the audio tab of the settings modal", () => {
++  beforeEach(() => {
++    localStorage.clear();
++    delete window.__plotinaSetLevel;
++  });
++
++  it("carries the noise suppression row", () => {
++    withBridge();
++
++    render(
++      <TooltipProvider>
++        <MediaDevicesContext
++          value={mockMediaDevices({ requestDeviceNames: (): void => {} })}
++        >
++          <SettingsModal
++            open
++            onDismiss={vi.fn()}
++            tab="audio"
++            onTabChange={vi.fn()}
++            client={mockClient}
++          />
++        </MediaDevicesContext>
++      </TooltipProvider>,
++    );
++
++    const row = noiseRow();
++    expect(within(row).getByRole("slider")).toHaveAttribute(
++      "aria-valuenow",
++      "40",
++    );
++    expect(within(row).getByText("40 dB")).toBeInTheDocument();
++  });
++});
+diff --git a/src/plotina/NoiseSuppressionSetting.tsx b/src/plotina/NoiseSuppressionSetting.tsx
+new file mode 100644
+index 0000000..db0df69
+--- /dev/null
++++ b/src/plotina/NoiseSuppressionSetting.tsx
+@@ -0,0 +1,114 @@
++/*
++Copyright 2026 Element Creations Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE in the repository root for full details.
++*/
++
++import { type FC, useCallback, useEffect, useRef, useState } from "react";
++import { useTranslation } from "react-i18next";
++import { AudioIcon } from "@vector-im/compound-design-tokens/assets/web/icons";
++
++import styles from "./NoiseSuppressionSetting.module.css";
++import { Slider } from "../Slider";
++import {
++  isNoiseSuppressionAvailable,
++  readNoiseLevel,
++  setNoiseLevel,
++} from "./noiseLevel";
++
++/** A drag asks for a value per pixel; the processor gets one every 60 ms. */
++const APPLY_INTERVAL_MS = 60;
++
++/**
++ * Plotina: the noise-suppression row in Settings → Audio.
++ *
++ * A slider and the level it produces, next to the microphone picker. The
++ * value goes to the DeepFilterNet3 worklet through window.__plotinaSetLevel and
++ * is stored under the same key the other clients use, so it survives the call
++ * and applies to the next one.
++ */
++export const NoiseSuppressionSetting: FC = () => {
++  const { t } = useTranslation();
++  // Read once per mount: the settings modal mounts when it opens, and the
++  // bridge is a plain script that is either there for the whole session or not
++  // at all.
++  const [available] = useState(isNoiseSuppressionAvailable);
++  const [level, setLevel] = useState(readNoiseLevel);
++  const [sliderValue, setSliderValue] = useState(level);
++  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
++
++  const stopTimer = useCallback(() => {
++    if (timer.current !== null) {
++      clearTimeout(timer.current);
++      timer.current = null;
++    }
++  }, []);
++
++  useEffect(() => stopTimer, [stopTimer]);
++
++  const onValueChange = useCallback(
++    (next: number) => {
++      setSliderValue(next);
++      // Live during the drag: the processor is cheap to talk to, the log and
++      // the stored value are not, so the commit below is what persists.
++      stopTimer();
++      timer.current = setTimeout(() => {
++        timer.current = null;
++        setNoiseLevel(next, false);
++      }, APPLY_INTERVAL_MS);
++    },
++    [stopTimer],
++  );
++
++  const onValueCommit = useCallback(
++    (next: number) => {
++      stopTimer();
++      setLevel(next);
++      setSliderValue(next);
++      setNoiseLevel(next, true);
++    },
++    [stopTimer],
++  );
++
++  const label = t("settings.noise_suppression_label");
++  const unit = t("settings.noise_suppression_unit");
++  const format = useCallback(
++    (value: number): string =>
++      value === 0 ? t("settings.noise_suppression_off") : `${value} ${unit}`,
++    [t, unit],
++  );
++
++  return (
++    <div
++      className={styles.noiseSuppression}
++      data-testid="plotina-noise-suppression"
++    >
++      <label className={styles.label}>
++        <AudioIcon className={styles.icon} aria-hidden />
++        {/* One text run, not siblings: the flex gap would otherwise render as
++            "Noise suppression : 40 dB". */}
++        <span className={styles.name}>
++          {`${label}: `}
++          <span className={styles.value}>{format(level)}</span>
++        </span>
++      </label>
++      <p>
++        {available
++          ? t("settings.noise_suppression_description")
++          : t("settings.noise_suppression_unavailable")}
++      </p>
++      <Slider
++        label={label}
++        value={sliderValue}
++        onValueChange={onValueChange}
++        onValueCommit={onValueCommit}
++        min={0}
++        max={100}
++        step={1}
++        disabled={!available}
++        tooltipFormatter={format}
++      />
++    </div>
++  );
++};
+diff --git a/src/plotina/noiseLevel.test.ts b/src/plotina/noiseLevel.test.ts
+new file mode 100644
+index 0000000..123cfb8
+--- /dev/null
++++ b/src/plotina/noiseLevel.test.ts
+@@ -0,0 +1,120 @@
++/*
++Copyright 2026 Element Creations Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE in the repository root for full details.
++*/
++
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++import {
++  DEFAULT_NOISE_LEVEL,
++  NOISE_LEVEL_STORAGE_KEY,
++  clampNoiseLevel,
++  isNoiseSuppressionAvailable,
++  readNoiseLevel,
++  setNoiseLevel,
++} from "./noiseLevel";
++
++// The level is ours, not Element Call's: it lives in localStorage and in the
++// DeepFilterNet3 bridge (/noise/plotina-dfn.js), which is a plain script and so
++// only visible as a window global.
++
++describe("clampNoiseLevel", () => {
++  it("keeps a level inside 0–100 and rounds it", () => {
++    expect(clampNoiseLevel(150)).toBe(100);
++    expect(clampNoiseLevel(-5)).toBe(0);
++    expect(clampNoiseLevel(41.6)).toBe(42);
++    expect(clampNoiseLevel("70")).toBe(70);
++  });
++
++  it("falls back to the default for a value that is not a number", () => {
++    expect(clampNoiseLevel("loud")).toBe(DEFAULT_NOISE_LEVEL);
++    expect(clampNoiseLevel(NaN)).toBe(DEFAULT_NOISE_LEVEL);
++    expect(clampNoiseLevel(undefined)).toBe(DEFAULT_NOISE_LEVEL);
++  });
++});
++
++describe("isNoiseSuppressionAvailable", () => {
++  it("is true only once the noise bridge is on the page", () => {
++    expect(isNoiseSuppressionAvailable()).toBe(false);
++    window.__plotinaSetLevel = (value: number): number => value;
++    expect(isNoiseSuppressionAvailable()).toBe(true);
++  });
++});
++
++describe("readNoiseLevel", () => {
++  beforeEach(() => {
++    localStorage.clear();
++    window.history.replaceState({}, "", "/");
++  });
++
++  it("prefers the value the bridge is running with", () => {
++    localStorage.setItem(NOISE_LEVEL_STORAGE_KEY, "20");
++    window.__plotinaDfn = { status: "attached", level: 65 };
++    expect(readNoiseLevel()).toBe(65);
++  });
++
++  it("uses the level from the URL before the stored one", () => {
++    localStorage.setItem(NOISE_LEVEL_STORAGE_KEY, "20");
++    window.history.replaceState(
++      {},
++      "",
++      "/room/!call:example.org?plotina-level=30",
++    );
++    expect(readNoiseLevel()).toBe(30);
++  });
++
++  it("falls back to the stored level, then to the default", () => {
++    expect(readNoiseLevel()).toBe(DEFAULT_NOISE_LEVEL);
++    localStorage.setItem(NOISE_LEVEL_STORAGE_KEY, "55");
++    expect(readNoiseLevel()).toBe(55);
++  });
++});
++
++describe("setNoiseLevel", () => {
++  beforeEach(() => {
++    localStorage.clear();
++  });
++
++  it("hands the value to the bridge and persists it on commit", () => {
++    const bridge = vi.fn((value: number): number => value);
++    window.__plotinaSetLevel = bridge;
++
++    expect(setNoiseLevel(70, true)).toBe(70);
++
++    expect(bridge).toHaveBeenCalledWith(70, { persist: true, report: true });
++    expect(localStorage.getItem(NOISE_LEVEL_STORAGE_KEY)).toBe("70");
++  });
++
++  it("does not write storage or report while the slider is still moving", () => {
++    const bridge = vi.fn((value: number): number => value);
++    window.__plotinaSetLevel = bridge;
++
++    setNoiseLevel(55, false);
++
++    expect(bridge).toHaveBeenCalledWith(55, { persist: false, report: false });
++    expect(localStorage.getItem(NOISE_LEVEL_STORAGE_KEY)).toBeNull();
++  });
++
++  it("still stores the committed value when the bridge is not loaded", () => {
++    expect(setNoiseLevel(35, true)).toBe(35);
++    expect(localStorage.getItem(NOISE_LEVEL_STORAGE_KEY)).toBe("35");
++  });
++
++  it("clamps what the slider can hand it", () => {
++    const bridge = vi.fn((value: number): number => value);
++    window.__plotinaSetLevel = bridge;
++
++    setNoiseLevel(180, true);
++
++    expect(bridge).toHaveBeenCalledWith(100, { persist: true, report: true });
++    expect(localStorage.getItem(NOISE_LEVEL_STORAGE_KEY)).toBe("100");
++  });
++});
++
++afterEach(() => {
++  delete window.__plotinaSetLevel;
++  delete window.__plotinaDfn;
++  localStorage.clear();
++});
+diff --git a/src/plotina/noiseLevel.ts b/src/plotina/noiseLevel.ts
+new file mode 100644
+index 0000000..893d2b2
+--- /dev/null
++++ b/src/plotina/noiseLevel.ts
+@@ -0,0 +1,134 @@
++/*
++Copyright 2026 Element Creations Ltd.
++
++SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
++Please see LICENSE in the repository root for full details.
++*/
++
++/**
++ * Plotina: the noise-suppression level, as the UI sees it.
++ *
++ * Element Call has no level of its own. DeepFilterNet3 is attached by
++ * /noise/plotina-dfn.js, a plain script served next to this bundle, which
++ * publishes the setter as window.__plotinaSetLevel and its state as
++ * window.__plotinaDfn. This module is the only place in the bundle that reads
++ * or calls either of them, so every control agrees on one storage key and on
++ * the order values are taken in.
++ *
++ * The key is shared with the other clients' sliders: what "level 60" means must
++ * not depend on which one wrote it.
++ */
++
++export const NOISE_LEVEL_STORAGE_KEY = "plotina.noise.level";
++export const DEFAULT_NOISE_LEVEL = 40;
++
++interface NoiseBridgeState {
++  status?: string;
++  level?: number;
++  applied?: number;
++  bypass?: boolean;
++}
++
++type NoiseLevelSetter = (
++  value: number,
++  options?: { persist?: boolean; report?: boolean },
++) => number;
++
++declare global {
++  interface Window {
++    /** Defined by /noise/plotina-dfn.js, absent when that script did not load. */
++    __plotinaSetLevel?: NoiseLevelSetter;
++    __plotinaDfn?: NoiseBridgeState;
++  }
++}
++
++/** A level the bridge and the slider both accept: an integer in 0–100. */
++export function clampNoiseLevel(value: unknown): number {
++  const n = Math.round(Number(value));
++  if (!isFinite(n)) return DEFAULT_NOISE_LEVEL;
++  return Math.max(0, Math.min(100, n));
++}
++
++/** Whether the noise bridge is on the page at all. */
++export function isNoiseSuppressionAvailable(): boolean {
++  return typeof window.__plotinaSetLevel === "function";
++}
++
++/* The bridge is the authority once it has a value: it is what the microphone
++   track is actually running with, including a ?plotina-level= the call was
++   opened with. Same order as storedLevel() in the old floating panel, minus
++   the panel: bridge state, URL, storage, default. */
++function levelFromUrl(): number | null {
++  try {
++    const search = new URLSearchParams(window.location.search).get(
++      "plotina-level",
++    );
++    if (search !== null && search !== "") return clampNoiseLevel(search);
++    const hash = window.location.hash ?? "";
++    const mark = hash.indexOf("?");
++    if (mark !== -1) {
++      const fromHash = new URLSearchParams(hash.slice(mark + 1)).get(
++        "plotina-level",
++      );
++      if (fromHash !== null && fromHash !== "")
++        return clampNoiseLevel(fromHash);
++    }
++  } catch {
++    /* a malformed URL is not a reason to lose the setting */
++  }
++  return null;
++}
++
++export function readNoiseLevel(): number {
++  const state = window.__plotinaDfn;
++  if (state && typeof state.level === "number")
++    return clampNoiseLevel(state.level);
++
++  const fromUrl = levelFromUrl();
++  if (fromUrl !== null) return fromUrl;
++
++  try {
++    const stored = localStorage.getItem(NOISE_LEVEL_STORAGE_KEY);
++    if (stored !== null && stored !== "") return clampNoiseLevel(stored);
++  } catch {
++    /* private mode blocks storage; the default still works */
++  }
++  return DEFAULT_NOISE_LEVEL;
++}
++
++function storeLevel(level: number): void {
++  try {
++    localStorage.setItem(NOISE_LEVEL_STORAGE_KEY, String(level));
++  } catch {
++    /* private mode */
++  }
++}
++
++/**
++ * Apply a level: to the processor that is attached right now, and to storage.
++ *
++ * `commit: false` is a slider still moving — the level reaches the processor
++ * and nothing else, exactly like the old panel's drag. `commit: true` is the
++ * value the user settled on: it is persisted, and the bridge reports it.
++ *
++ * The bridge persists on commit itself; the key is written here as well because
++ * it is the contract with the other clients' sliders, and a write that happens
++ * twice is a write that cannot be missed.
++ */
++export function setNoiseLevel(value: number, commit = true): number {
++  const level = clampNoiseLevel(value);
++  const bridge = window.__plotinaSetLevel;
++
++  if (typeof bridge === "function") {
++    bridge(level, { persist: commit, report: commit });
++  }
++  if (commit) storeLevel(level);
++  if (typeof bridge !== "function") {
++    // Nothing applied it, so tell whoever else draws this setting (Plotina Lite
++    // keeps its own selector) that it changed.
++    document.dispatchEvent(
++      new CustomEvent("plotina-noise-level", { detail: level }),
++    );
++  }
++  return level;
++}
+diff --git a/src/settings/SettingsModal.tsx b/src/settings/SettingsModal.tsx
+index 933ac66..45bdf39 100644
+--- a/src/settings/SettingsModal.tsx
++++ b/src/settings/SettingsModal.tsx
+@@ -28,6 +28,7 @@ import {
+ import { PreferencesSettingsTab } from "./PreferencesSettingsTab";
+ import { Slider } from "../Slider";
+ import { DeviceSelection } from "./DeviceSelection";
++import { NoiseSuppressionSetting } from "../plotina/NoiseSuppressionSetting";
+ import { useTrackProcessor } from "../livekit/TrackProcessorContext";
+ import {
+   DeveloperSettingsTab,
+@@ -154,6 +155,7 @@ export const SettingsModal: FC<Props> = ({
+               {t("settings.devices.change_device_button")}
+             </Button>
+           )}
++          <NoiseSuppressionSetting />
+           <DeviceSelection
+             device={devices.audioOutput}
+             title={t("settings.devices.speaker")}

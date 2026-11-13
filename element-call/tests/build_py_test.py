@@ -457,10 +457,13 @@ class CopyNoiseTests(unittest.TestCase):
 
     def test_files_modes_and_vendor(self):
         ecbuild.copy_noise(self.dist, self.noise, self.src_link)
-        for name in ("logic.js", "boot.js", "plotina-dfn.js", "plotina-panel.js", "source-link.js"):
+        for name in ("logic.js", "boot.js", "plotina-dfn.js", "source-link.js"):
             p = self.dist / "noise" / name
             self.assertTrue(p.is_file(), name)
             self.assertEqual(p.stat().st_mode & 0o777, 0o644, name)
+        # The level lives in the settings modal now: the floating panel must not
+        # travel in the bundle, even if an old copy is still sitting in noise/.
+        self.assertFalse((self.dist / "noise" / "plotina-panel.js").exists())
         self.assertEqual((self.dist / "noise" / "vendor" / "dfn.esm.js").read_bytes(), b"//v")
         self.assertEqual((self.dist / "noise" / "vendor" / "LICENSE-APACHE").read_bytes(), b"A")
         self.assertEqual((self.dist / "noise" / "vendor" / "LICENSE-MIT").read_bytes(), b"M")
@@ -517,7 +520,6 @@ class CheckBundleTests(unittest.TestCase):
         self.index.write_text(
             '<!doctype html><html><head>'
             '<script src="/noise/logic.js"></script>'
-            '<script src="/noise/plotina-panel.js"></script>'
             '<script src="/noise/source-link.js" defer></script>'
             '<title>Plotina Call</title>'
             '<link rel="icon" href="/plotina-icon.svg">'
@@ -530,7 +532,6 @@ class CheckBundleTests(unittest.TestCase):
         noise = self.dist / "noise"
         noise.mkdir()
         (noise / "source-link.js").write_bytes(b"//sl")
-        (noise / "plotina-panel.js").write_bytes(b"//panel")
         (self.dist / "config.json").write_text('{"a":1}', encoding="utf-8")
         (self.dist / "NOTICE").write_text("notice", encoding="utf-8")
         (self.dist / "plotina-icon.svg").write_bytes(b"<svg/>")
@@ -607,6 +608,24 @@ class CheckBundleTests(unittest.TestCase):
         with self.assertRaises(ecbuild.BuildError) as cm:
             self._run()
         self.assertEqual(str(cm.exception), "index.html has no Plotina Call title")
+
+    def test_floating_panel_tag_back_in_index(self):
+        """The panel is gone: a shell that still loads it is the old build."""
+        self.index.write_text(self.index.read_text().replace(
+            '<script src="/noise/logic.js"></script>',
+            '<script src="/noise/logic.js"></script>'
+            '<script src="/noise/plotina-panel.js"></script>'), encoding="utf-8")
+        with self.assertRaises(ecbuild.BuildError) as cm:
+            self._run()
+        self.assertEqual(str(cm.exception),
+                         "index.html still loads the floating noise panel")
+
+    def test_floating_panel_file_back_in_bundle(self):
+        (self.dist / "noise" / "plotina-panel.js").write_bytes(b"//panel")
+        with self.assertRaises(ecbuild.BuildError) as cm:
+            self._run()
+        self.assertEqual(str(cm.exception),
+                         "plotina-panel.js is still in the bundle")
 
 
 class PackTests(unittest.TestCase):
