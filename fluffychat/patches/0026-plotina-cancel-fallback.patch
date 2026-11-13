@@ -131,7 +131,7 @@ index 751b4aa..61bfdd5 100644
    final String? clientName, roomId, eventId;
  
 diff --git a/test/plotina_push_cancel_test.dart b/test/plotina_push_cancel_test.dart
-index 62a3249..87b95ff 100644
+index 62a3249..65e9ea3 100644
 --- a/test/plotina_push_cancel_test.dart
 +++ b/test/plotina_push_cancel_test.dart
 @@ -33,6 +33,12 @@
@@ -147,7 +147,23 @@ index 62a3249..87b95ff 100644
  //  * a room that is still unread is never cancelled;
  //  * the same state arriving again cancels nothing and rebuilds nothing
  //    (idempotent, one `getActiveNotifications` walk, no repeat of the work);
-@@ -89,8 +95,12 @@ class _QuietHttpClient extends http.BaseClient {
+@@ -55,6 +61,7 @@ import 'dart:async';
+ import 'dart:convert';
+ import 'dart:io';
+ 
++import 'package:fluffychat/config/setting_keys.dart';
+ import 'package:fluffychat/l10n/l10n.dart';
+ import 'package:fluffychat/utils/push_helper.dart';
+ import 'package:flutter/foundation.dart';
+@@ -63,6 +70,7 @@ import 'package:flutter_test/flutter_test.dart';
+ import 'package:http/http.dart' as http;
+ import 'package:material_ui/material_ui.dart';
+ import 'package:matrix/matrix.dart';
++import 'package:shared_preferences/shared_preferences.dart';
+ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+ 
+ /// The account's `clientName`: what a payload carrying `devices` puts in
+@@ -89,8 +97,12 @@ class _QuietHttpClient extends http.BaseClient {
  }
  
  /// Stands in for the Android notifications plugin: `show` puts the notification
@@ -162,7 +178,7 @@ index 62a3249..87b95ff 100644
  class _FakeNotifications extends AndroidFlutterLocalNotificationsPlugin {
    final active = <ActiveNotification>[];
    final cancelled = <int>[];
-@@ -127,7 +137,7 @@ class _FakeNotifications extends AndroidFlutterLocalNotificationsPlugin {
+@@ -127,7 +139,7 @@ class _FakeNotifications extends AndroidFlutterLocalNotificationsPlugin {
      active.add(
        ActiveNotification(
          id: id,
@@ -171,7 +187,7 @@ index 62a3249..87b95ff 100644
          title: title,
          body: body,
        ),
-@@ -237,13 +247,40 @@ void main() {
+@@ -237,13 +249,40 @@ void main() {
      clientName: clientName,
      roomId: roomId,
      notificationDetails: NotificationDetails(
@@ -213,7 +229,20 @@ index 62a3249..87b95ff 100644
    setUp(() async {
      // Android is the only platform we ship; it also makes the plugin dispatch
      // `show`/`cancel` to the Android implementation, which the fake is.
-@@ -356,6 +393,70 @@ void main() {
+@@ -252,6 +291,12 @@ void main() {
+     FlutterLocalNotificationsPlatform.instance = platform;
+     plugin = FlutterLocalNotificationsPlugin();
+     l10n = await L10n.delegate.load(const Locale('en'));
++    // The fallback notification reads the application name out of the settings
++    // store to build its ticker text, exactly as it does on a device. Without a
++    // store that getter logs an error and falls back to the default, which
++    // turns a passing run into a noisy one.
++    SharedPreferences.setMockInitialValues({});
++    await AppSettings.init();
+     client = await _prepareClient();
+   });
+ 
+@@ -356,6 +401,70 @@ void main() {
      expect(platform.shadeRoomIds, isEmpty);
    });
  

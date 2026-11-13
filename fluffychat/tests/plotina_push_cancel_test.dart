@@ -61,6 +61,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:fluffychat/config/setting_keys.dart';
 import 'package:fluffychat/l10n/l10n.dart';
 import 'package:fluffychat/utils/push_helper.dart';
 import 'package:flutter/foundation.dart';
@@ -69,6 +70,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 /// The account's `clientName`: what a payload carrying `devices` puts in
@@ -289,6 +291,12 @@ void main() {
     FlutterLocalNotificationsPlatform.instance = platform;
     plugin = FlutterLocalNotificationsPlugin();
     l10n = await L10n.delegate.load(const Locale('en'));
+    // The fallback notification reads the application name out of the settings
+    // store to build its ticker text, exactly as it does on a device. Without a
+    // store that getter logs an error and falls back to the default, which
+    // turns a passing run into a noisy one.
+    SharedPreferences.setMockInitialValues({});
+    await AppSettings.init();
     client = await _prepareClient();
   });
 
