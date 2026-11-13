@@ -19,6 +19,13 @@
 # and the release job only runs on tags, so a branch or dispatch build can
 # never overwrite a release.
 #
+# The first job, `dev-base-guard`, is the dev-base gate: a dev tag is only built
+# when its base v<semver>-plotina-lite-desktop.<N> is a PUBLISHED stable release
+# carrying the updater manifests. A tag ref alone is not evidence — a build can
+# die after the tag was cut — so the check looks at the release, not at the tag,
+# and it runs before web/linux/windows so a bad tag costs seconds, not a runner.
+# Stable tags are never gated: the first release of a new base has no release yet.
+#
 # Layout follows the internal Lite migration doc §6.7 minus the Tauri
 # cross-grade jobs (the old installed base is negligible; clean installs
 # only): web -> linux/windows packaging -> smoke -> release.
@@ -59,8 +66,177 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Early gate, before anything is built: a dev tag may only exist on a base
+  # that was really published. The `release` job parses the tag at the very end
+  # of the run, so a check there would only speak after web/linux/windows spent
+  # ~40 runner minutes — and it never looked at the base anyway.
+  dev-base-guard:
+    name: dev base guard
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Guard — a dev tag sits on a published base release
+        # A dev build sorts ABOVE the stable of the same base
+        # (4.12.8-plotina.27-dev.8 > 4.12.8-plotina.27), so a dev tag cut on a
+        # base nobody ever installed leaves the dev channel with no stable to
+        # return to and no feed to descend from. A tag ref is not evidence of a
+        # release: .49 carried a tag while its release never existed. What is
+        # required here is the release plus the updater manifests the release
+        # job always writes (verify-release-assets.mjs renames dist/latest-linux.yml
+        # and dist/latest.yml to the two latest-lite* names below).
+        #
+        # Stable tags are deliberately NOT checked: the first release of a new
+        # base number is cut from a tag that has no release yet.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          ref="${GITHUB_REF_NAME:-}"
+          repo="${GITHUB_REPOSITORY:-plotina-cc/clients}"
+          work="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/dev-base-guard"
+          rm -f "$work"/*.txt "$work"/*.log 2>/dev/null || true
+          mkdir -p "$work"
+
+          if [[ ! "$ref" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-plotina-lite-desktop\.([0-9]+)-dev\.([0-9]+)$ ]]; then
+            echo "ref '$ref' is not a <semver>-plotina-lite-desktop.<N>-dev.<M> tag."
+            echo "Stable tags are deliberately not checked here — otherwise the first release of a base could never be built."
+            exit 0
+          fi
+          semver="${BASH_REMATCH[1]}"
+          base_rev="${BASH_REMATCH[2]}"
+          dev_counter="${BASH_REMATCH[3]}"
+          base_tag="v${semver}-plotina-lite-desktop.${base_rev}"
+          base_version="${semver}-plotina.${base_rev}"
+          manifests=(latest-lite-linux.yml latest-lite.yml)
+
+          echo "dev tag       : $ref (dev build $dev_counter)"
+          echo "requires base : $base_tag -> $base_version"
+          echo "                published, with ${manifests[*]} inside"
+          echo
+
+          problems=()
+          why=()
+          manifests_missing=()
+          tag_state=absent
+          release_state=absent
+          lookup_error=0
+
+          if gh api "repos/${repo}/git/ref/tags/${base_tag}" --template '{{.ref}}' >"$work/tag.txt" 2>"$work/tag.err"; then
+            tag_state=present
+          fi
+
+          if gh release view "$base_tag" --json isDraft,isPrerelease \
+               --template '{{.isDraft}} {{.isPrerelease}}' >"$work/flags.txt" 2>"$work/flags.err"; then
+            release_state=present
+            is_draft=unknown
+            is_prerelease=unknown
+            read -r is_draft is_prerelease <"$work/flags.txt" || true
+            if [ "$is_draft" = true ]; then
+              problems+=("release $base_tag is a DRAFT")
+            fi
+            if [ "$is_prerelease" = true ]; then
+              problems+=("release $base_tag is a prerelease, not a published stable")
+            fi
+            if gh release view "$base_tag" --json assets \
+                 --template '{{range .assets}}{{.name}}{{"\n"}}{{end}}' >"$work/assets.txt" 2>"$work/assets.err"; then
+              for m in "${manifests[@]}"; do
+                if ! grep -qxF "$m" "$work/assets.txt"; then
+                  manifests_missing+=("$m")
+                fi
+              done
+            else
+              manifests_missing=("${manifests[@]}")
+            fi
+            if [ "${#manifests_missing[@]}" -eq 0 ]; then
+              mkdir -p "$work/manifests"
+              if gh release download "$base_tag" --pattern 'latest-lite*.yml' --dir "$work/manifests" >"$work/download.log" 2>&1; then
+                for m in "${manifests[@]}"; do
+                  if [ ! -s "$work/manifests/$m" ]; then
+                    problems+=("$m was not downloadable from $base_tag")
+                    continue
+                  fi
+                  declared="$(awk '/^version:/ { sub(/^version:[ \t]*/, ""); print; exit }' "$work/manifests/$m" | tr -d "\"' \t\r")"
+                  if [ "$declared" != "$base_version" ]; then
+                    problems+=("$m declares version '${declared:-<none>}', expected '$base_version'")
+                  fi
+                done
+              else
+                problems+=("gh release download $base_tag failed: $(tr '\n' ' ' <"$work/download.log")")
+              fi
+            fi
+          else
+            if grep -qi 'not found' "$work/flags.err"; then
+              problems+=("no release exists for $base_tag")
+            else
+              lookup_error=1
+              problems+=("release lookup for $base_tag failed: $(tr '\n' ' ' <"$work/flags.err")")
+            fi
+          fi
+
+          if [[ "${#problems[@]}" -eq 0 && "${#manifests_missing[@]}" -eq 0 ]]; then
+            echo "OK: $ref sits on the published base release $base_tag ($base_version) with ${manifests[*]} inside."
+            exit 0
+          fi
+
+          # ---- diagnose ------------------------------------------------------
+          if [ "$release_state" = present ]; then
+            why+=("the release $base_tag exists, but it is not a published stable release")
+          elif [ "$lookup_error" = 1 ]; then
+            why+=("the base release of $base_tag could not be looked up (see the error above)")
+          elif [ "$tag_state" = present ]; then
+            why+=("the tag $base_tag exists, but no release was ever published for it — a build that died after the tag was cut")
+          else
+            why+=("neither the tag $base_tag nor its release exists — the base number in $ref was never cut")
+          fi
+          if [ "${#manifests_missing[@]}" -gt 0 ]; then
+            why+=("its assets carry no updater manifest: ${manifests_missing[*]}")
+          fi
+
+          # Newest published Lite base, for the one line of advice. Advisory only:
+          # a failing call here never changes the verdict.
+          last_stable="$(gh release list --limit 100 --exclude-drafts \
+            --template '{{range .}}{{.TagName}}{{"\n"}}{{end}}' 2>/dev/null \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-plotina-lite-desktop\.[0-9]+$' \
+            | sed -E 's/.*\.([0-9]+)$/\1/' | sort -n | tail -n1)" || last_stable=""
+
+          {
+            echo "::error::dev tag ${ref} refused: base ${base_tag} is not a published stable release"
+            echo
+            echo "FATAL: refusing dev tag ${ref} — its base is not a published release."
+            echo
+            echo "  base tag       : ${tag_state}"
+            echo "  base release   : ${release_state}"
+            echo "  required inside: ${manifests[*]}"
+            echo
+            printf '  - %s\n' "${why[@]}"
+            if [ "${#problems[@]}" -gt 0 ]; then
+              printf '  - %s\n' "${problems[@]}"
+            fi
+            echo
+            echo "Why this is fatal: a dev build sorts ABOVE the stable of the same base"
+            echo "(4.12.8-plotina.27-dev.8 > 4.12.8-plotina.27), so a dev tag on a base that was"
+            echo "never published leaves the dev channel with no stable to return to, and the"
+            echo "updater feed it descends from does not exist."
+            echo
+            if [ -n "$last_stable" ]; then
+              echo "Last published Lite base: v${semver}-plotina-lite-desktop.${last_stable}"
+              echo "Cut the dev build on it instead:"
+              echo "  git tag v${semver}-plotina-lite-desktop.${last_stable}-dev.<M> <sha>   # then push only the tag"
+              echo "…or publish ${base_tag} first: stable tags are not gated, so that release can still be built."
+            else
+              echo "No published Lite base found at all — publish ${base_tag} first (stable tags are not gated)."
+            fi
+            echo
+            echo "Refused here in seconds, instead of after web/linux/windows (~40 runner minutes)."
+          } >&2
+          exit 1
+
   web:
     name: web dist
+    # Nothing is built until the tag is known to sit on a published base.
+    needs: dev-base-guard
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
