@@ -460,6 +460,135 @@ test("channel switch forgets a pending downloaded update", async () => {
     }
 });
 
+// =========================================================================
+// 6. Dev channel on the published base of the same N: .N-dev.M is reachable
+//    from stable .N (the tester runs the published base and opts into dev).
+// =========================================================================
+
+/** dev-latest metadata + artifact stub (the edge mirror 404s, GitHub serves). */
+function devFeedStub(version, payload) {
+    const sha = sha512B64(payload);
+    const fileName = `Plotina-Desktop-${version}.AppImage`;
+    const ymlText = builderYml({ version, fileName, sha512: sha, size: payload.length });
+    return stubFetch([
+        { has: "dev-latest/latest-linux-dev.yml", respond: () => ymlResponse(ymlText) },
+        {
+            has: `dev-latest/${fileName}`,
+            respond: () =>
+                new Response(Buffer.from(payload), {
+                    status: 200,
+                    headers: { "content-length": String(payload.length) },
+                }),
+        },
+        {
+            has: "api.github.com",
+            respond: (u) => {
+                throw new Error(`dev path must never list releases through the API (${u})`);
+            },
+        },
+    ]);
+}
+
+async function runDevCheck(layout, { current, candidate, payload }) {
+    resetStubs(layout);
+    state.version = current;
+    await fs.writeFile(path.join(layout.userData, "plotina-update-channel.json"), JSON.stringify({ channel: "dev" }));
+    const stub = devFeedStub(candidate, payload);
+    try {
+        await updater.checkForUpdates(true);
+        return stub;
+    } finally {
+        stub.restore();
+    }
+}
+
+test("dev channel accepts .N-dev.M over the app's own stable base .N", async () => {
+    const layout = await makeLayout();
+    const payload = Buffer.from("SAME-BASE-DEV-IMAGE".repeat(2000));
+    const stub = await runDevCheck(layout, {
+        current: "1.12.32-plotina.49",
+        candidate: "1.12.32-plotina.49-dev.4",
+        payload,
+    });
+    assert.ok(
+        stub.calls.some((u) => u.includes("dev-latest/latest-linux-dev.yml")),
+        `dev feed queried: ${stub.calls}`,
+    );
+    const dl = state.sent.find((s) => s.channel === "update-downloaded");
+    assert.ok(dl, `the same-base dev build is offered, sent: ${JSON.stringify(state.sent)}`);
+    assert.equal(dl.payload.releaseName, "1.12.32-plotina.49-dev.4");
+    assert.equal(
+        sha512B64(await fs.readFile(layout.current)),
+        sha512B64(payload),
+        "the same-base dev image is swapped in",
+    );
+});
+
+test("dev channel still refuses a dev build of an older base", async () => {
+    const layout = await makeLayout();
+    const payload = Buffer.from("OLDER-BASE-DEV-IMAGE".repeat(2000));
+    const stub = await runDevCheck(layout, {
+        current: "1.12.32-plotina.49",
+        candidate: "1.12.32-plotina.48-dev.1",
+        payload,
+    });
+    assert.ok(stub.calls.some((u) => u.includes("dev-latest/latest-linux-dev.yml")), "dev feed queried");
+    assert.ok(
+        state.sent.some((s) => s.channel === "check_updates" && s.payload === false),
+        `older base -> no update, sent: ${JSON.stringify(state.sent)}`,
+    );
+    assert.equal(state.sent.filter((s) => s.channel === "update-downloaded").length, 0);
+    assert.equal(await fs.readFile(layout.current, "utf8"), "OLD-IMAGE-CONTENT");
+});
+
+test("dev channel accepts a newer base's dev build as before", async () => {
+    const layout = await makeLayout();
+    const payload = Buffer.from("NEWER-BASE-DEV-IMAGE".repeat(2000));
+    const stub = await runDevCheck(layout, {
+        current: "1.12.32-plotina.49-dev.3",
+        candidate: "1.12.32-plotina.50-dev.1",
+        payload,
+    });
+    assert.ok(stub.calls.some((u) => u.includes("dev-latest/latest-linux-dev.yml")), "dev feed queried");
+    const dl = state.sent.find((s) => s.channel === "update-downloaded");
+    assert.ok(dl, `a newer dev base is still accepted, sent: ${JSON.stringify(state.sent)}`);
+    assert.equal(dl.payload.releaseName, "1.12.32-plotina.50-dev.1");
+});
+
+test("dev channel never walks a dev build back within its own base", async () => {
+    // Negative control for the same-base permission above: .N-dev.2 must not
+    // be installed over .N-dev.3 — that would be a silent downgrade.
+    const layout = await makeLayout();
+    const payload = Buffer.from("OLD-DEV-IMAGE".repeat(2000));
+    await runDevCheck(layout, {
+        current: "1.12.32-plotina.49-dev.3",
+        candidate: "1.12.32-plotina.49-dev.2",
+        payload,
+    });
+    assert.ok(
+        state.sent.some((s) => s.channel === "check_updates" && s.payload === false),
+        `dev downgrade inside one base -> no update, sent: ${JSON.stringify(state.sent)}`,
+    );
+    assert.equal(state.sent.filter((s) => s.channel === "update-downloaded").length, 0);
+    assert.equal(await fs.readFile(layout.current, "utf8"), "OLD-IMAGE-CONTENT");
+});
+
+test("stable branch still accepts the release of the base the app runs as dev", async () => {
+    const layout = await makeLayout();
+    resetStubs(layout);
+    state.version = "1.12.32-plotina.49-dev.3";
+    const payload = Buffer.from("SAME-BASE-STABLE-IMAGE".repeat(2000));
+    const stub = stableFeedStub(layout, "1.12.32-plotina.49", payload);
+    try {
+        await updater.checkForUpdates(true);
+        const dl = state.sent.find((s) => s.channel === "update-downloaded");
+        assert.ok(dl, `stable .N over .N-dev.M is not a downgrade, sent: ${JSON.stringify(state.sent)}`);
+        assert.equal(dl.payload.releaseName, "1.12.32-plotina.49");
+    } finally {
+        stub.restore();
+    }
+});
+
 // --- stable direct-feed stub: /dl metadata + /dl alias artifact ------------
 function stableFeedStub(layout, version, payload, { wrongSize = false } = {}) {
     const sha = sha512B64(payload);
