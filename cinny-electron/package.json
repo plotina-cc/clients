@@ -17,7 +17,7 @@
     "icons": "bash scripts/build-icons.sh",
     "stage-web": "bash scripts/stage-web.sh",
     "build:packages": "bash scripts/build-packages.sh",
-    "test": "node scripts/test-updater.mjs && node tests/dev-channel.test.mjs && node tests/updater-channel-flow.test.mjs",
+    "test": "node scripts/test-updater.mjs && node tests/display-media.test.mjs && node tests/dev-channel.test.mjs && node tests/updater-channel-flow.test.mjs",
     "typecheck": "node scripts/typecheck.mjs"
   },
   "devDependencies": {

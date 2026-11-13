@@ -6,6 +6,7 @@ const { app, BrowserWindow, session, shell, screen, Tray, Menu, ipcMain, desktop
 const path = require('node:path');
 const fs = require('node:fs');
 const { createAppServer } = require('./app-server');
+const { createDisplayMediaRequestHandler } = require('./display-media');
 const updater = require('./updater');
 const { UI_TEXT } = require('./update-channel');
 
@@ -458,21 +459,27 @@ function configurePermissions(session) {
 
   // Screen sharing: Chromium asks Electron for a source; we feed it the
   // desktopCapturer list (whole screen) for allowlisted origins only.
-  session.setDisplayMediaRequestHandler(async (params, callback) => {
-    const origin = originOf(params.securityOrigin || params.frame?.url || '');
-    if (!allowsMediaOrigin(origin)) return callback({});
-    const sources = await desktopCapturer.getSources({
-      types: ['screen'],
-      window: BrowserWindow.getAllWindows()[0],
-    });
-    if (!sources.length) return callback({});
-    // Do not return a screen source as `audio`: Electron rejects
-    // getDisplayMedia({video:true, audio:{...}}) with AbortError "Invalid
-    // capture constraints". Element Call always requests screen audio, so
-    // passing the screen source there broke screen sharing on Linux and
-    // Windows. Video-only screen capture is accepted for the same request.
-    callback({ video: sources[0] });
-  }, { useSystemPicker: false });
+  //
+  // The handler must answer every request exactly once: a cancelled system /
+  // portal picker (or any desktopCapturer failure) used to leave Chromium's
+  // request pending, and while one request is pending every later
+  // getDisplayMedia() in the app silently waits behind it — "Share screen does
+  // nothing, no picker" until restart. See src/display-media.js.
+  //
+  // Do not return a screen source as `audio`: Electron rejects
+  // getDisplayMedia({video:true, audio:{...}}) with AbortError "Invalid capture
+  // constraints" and Element Call always requests screen audio, so passing the
+  // screen source there broke screen sharing on Linux and Windows. Video-only
+  // screen capture is accepted for the same request.
+  session.setDisplayMediaRequestHandler(
+    createDisplayMediaRequestHandler({
+      // `window` keeps HiDPI scaling consistent with the window we render in.
+      getSources: (opts) => desktopCapturer.getSources({ ...opts, window: BrowserWindow.getAllWindows()[0] }),
+      isOriginAllowed: allowsMediaOrigin,
+      log: (msg) => console.log(msg),
+    }),
+    { useSystemPicker: false },
+  );
 }
 
 // ------------------------------------------------------------------- boot
