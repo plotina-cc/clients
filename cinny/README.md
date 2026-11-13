@@ -33,8 +33,9 @@ UPSTREAM_TAG         the cinny-desktop tag we build against
 element-call.lock.json  tag + URL + sha256 of OUR Element Call archive (same pin as Desktop)
 apply-noise.py       finishes the dist: removes any stale noise/ copy, adds licences, gates the call frame
 branding.py          applies Plotina icons, HTML metadata and manifest to the dist
-tests/               unit tests for branding.py (python3 -m unittest discover -s cinny/tests)
-                     and for the DM-name patch (scripts/test-dm-aliases.sh)
+tests/               unit tests for branding.py (python3 -m unittest discover -s cinny/tests),
+                     for the DM-name patch (scripts/test-dm-aliases.sh) and for the
+                     Sentry noise filter (scripts/test-sentry-filter.sh)
 tauri.plotina.json   build override: no beforeBuildCommand, updater disabled
 noise.lock.json      URL and sha256 of the two model binaries (wasm and .tar.gz)
 scripts/build.sh     local Linux build (AppImage + deb)
@@ -223,6 +224,41 @@ Do **not** also inject a shell-level Sentry script (such as a vendored
 `/noise/vendor/sentry-global.js`) into `index.html`: the bundle reports for
 itself, and a second `Sentry.init` would replace this client and lose the
 release and the source-map pairing.
+
+### What is not sent
+
+The same patch carries a `beforeSend` filter (`src/plotina/sentryFilter.ts`)
+that drops one class of events: the promises upstream Cinny v4.12.8 and
+`matrix-widget-api` abandon, which nobody awaits and whose rejections only
+exist because this layer listens. Six GlitchTip alerts (#70-#75) were triaged
+and all six are upstream — a widget-transport timeout, a widget that answers
+after `dispose()`, a spec-versions fetch that fails at startup, and a URL
+preview the server refuses with 403 because previews are off in
+`homeserver.yaml`. Four signatures, each with its own evidence:
+
+| dropped when | why it is not ours |
+|---|---|
+| `Request timed out` | `matrix-widget-api` `PostmessageTransport`, 10-second deadline in `sendComplete` |
+| `Not ready or unknown widget ID` | the same transport, called after the call widget was stopped |
+| value contains `URL Previews are disabled` | Synapse's answer to `preview_url` with `url_preview_enabled: false` |
+| `Failed to fetch` **and** the failed request went to `/_matrix/client/versions` | `specVersions()` at startup, whose error the loader already shows on screen |
+
+Every rule also requires the SDK's `onunhandledrejection` mechanism, and the
+last one requires the request URL the fetch probe recorded — plain `Failed to
+fetch` is the text of every network failure in a web client, so filtering it by
+text alone would hide a login that cannot reach the homeserver. `beforeSend`
+rather than `ignoreErrors` for exactly that reason: it sees the exception type,
+the mechanism and the `hint.originalException`, not just a message. A render
+crash, a network failure at login, an exception with one of the texts above that
+somebody actually threw, and any event the filter does not recognise are sent as
+before — the filter fails open.
+
+`scripts/test-sentry-filter.sh [UPSTREAM_SRC]` pins both halves: it exports the
+pinned tag, applies `patches/`, bundles `src/plotina/sentry.ts` with
+`@sentry/browser` aliased to a stub that records the options, and requires the
+noise signatures to be dropped *and* a render crash, a login failure, an
+unannotated `Failed to fetch` and a handled exception with the same texts to
+survive (`node --test`). Both Cinny workflows run it after `npm ci`.
 
 ## Cinny Desktop
 

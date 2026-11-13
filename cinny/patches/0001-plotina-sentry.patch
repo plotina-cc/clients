@@ -1,10 +1,19 @@
 # Plotina-Patch: plotina sentry.
 # Plotina-Marker: plotina-patch-0001-sentry
-# Plotina-Note: this patch ships no runtime string of its own, so it writes its marker into
-#   public/res/plotina-patches/0001-sentry.txt. The same patch teaches vite to copy that directory
-#   into the dist (publicDir is off in this config), which is what makes the stamp reach the
-#   artifact; the other build-level patches drop their files there too.
+# Plotina-Note: the marker is a stamp file, public/res/plotina-patches/0001-sentry.txt, not a runtime
+#   string: this patch's own strings are upstream's (the filter matches the noise by the messages
+#   Cinny and matrix-widget-api throw), so a grep for one of them in the dist would prove nothing.
+#   The same patch teaches vite to copy that directory into the dist (publicDir is off in this
+#   config), which is what makes the stamp reach the artifact; the other build-level patches drop
+#   their files there too.
 
+diff --git a/public/res/plotina-patches/0001-sentry.txt b/public/res/plotina-patches/0001-sentry.txt
+new file mode 100644
+index 0000000..8e6aee8
+--- /dev/null
++++ b/public/res/plotina-patches/0001-sentry.txt
+@@ -0,0 +1 @@
++plotina-patch-0001-sentry
 diff --git a/src/index.tsx b/src/index.tsx
 index 6cc0ca3..d933380 100644
 --- a/src/index.tsx
@@ -27,11 +36,12 @@ index 6cc0ca3..d933380 100644
    const swUrl =
 diff --git a/src/plotina/sentry.ts b/src/plotina/sentry.ts
 new file mode 100644
-index 0000000..2d81f73
+index 0000000..36e1e06
 --- /dev/null
 +++ b/src/plotina/sentry.ts
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,50 @@
 +import * as Sentry from '@sentry/browser';
++import { installPlotinaFetchProbe, plotinaBeforeSend } from './sentryFilter';
 +
 +/**
 + * Plotina: error reporting for the Cinny bundle served at cinny.plotina.cc and
@@ -49,11 +59,22 @@ index 0000000..2d81f73
 + * Errors only: no tracing, no PII, and no breadcrumbs or HTTP context. A
 + * Matrix client's console output and URLs carry room, user and event ids, so
 + * the two default integrations that collect them are removed deliberately.
++ *
++ * Noise: beforeSend drops the upstream class triaged in #70-#75 -- the rules
++ * and the reason a filter beats ignoreErrors are in sentryFilter.ts. A
++ * reporting layer nobody reads is worth nothing, so the class leaves at the
++ * source; everything the user can actually hit (a render crash, a network
++ * failure at login, our own code) still goes out.
 + */
 +const dsn = String(import.meta.env.VITE_SENTRY_DSN ?? '').trim();
 +
 +export function initPlotinaSentry(): void {
 +  if (dsn === '') return;
++
++  // Before Sentry.init: this way any fetch instrumentation the SDK installs
++  // wraps our probe, not the other way round, and a request that fails while
++  // the SDK is coming up is attributed like every other one.
++  installPlotinaFetchProbe();
 +
 +  Sentry.init({
 +    dsn,
@@ -61,12 +82,197 @@ index 0000000..2d81f73
 +    environment: 'production',
 +    tracesSampleRate: 0,
 +    sendDefaultPii: false,
++    beforeSend: plotinaBeforeSend,
 +    integrations: (defaults) =>
 +      defaults.filter(({ name }) => name !== 'Breadcrumbs' && name !== 'HttpContext'),
 +    initialScope: {
 +      tags: { client: 'cinny' },
 +    },
 +  });
++}
+diff --git a/src/plotina/sentryFilter.ts b/src/plotina/sentryFilter.ts
+new file mode 100644
+index 0000000..2f37fce
+--- /dev/null
++++ b/src/plotina/sentryFilter.ts
+@@ -0,0 +1,178 @@
++/**
++ * Plotina: the filter that keeps upstream noise out of GlitchTip.
++ *
++ * Six GlitchTip alerts (#70-#75) were triaged and every one of them is
++ * upstream: Cinny v4.12.8 and matrix-widget-api abandon promises that nobody
++ * awaits, and our Sentry layer is the only reason they are visible at all --
++ * upstream Cinny has no telemetry of its own. None of them changes what the
++ * user sees, and each one buries a real failure next to it.
++ *
++ * Why beforeSend and not ignoreErrors: ignoreErrors matches a regular
++ * expression against the event's text, and "Failed to fetch" is the text of
++ * every network failure in a web client -- a login that cannot reach the
++ * homeserver would disappear with it. beforeSend sees the structure: the
++ * exception type and message, the mechanism the SDK attached (a dead promise
++ * versus an exception somebody caught) and the hint's originalException, which
++ * is the object to ask about the request that failed. So each rule below needs
++ * its own evidence, and an event that carries none is sent.
++ *
++ * The rules are deliberately few and narrow. Nothing here is a pattern match
++ * on a fragment of a message except the Synapse 403, whose text only that
++ * endpoint produces.
++ */
++
++/** What was recognised, for the tests and for anyone reading a debug log. */
++export type PlotinaNoiseSignature =
++  | 'widget-transport-timeout'
++  | 'widget-transport-not-ready'
++  | 'url-preview-disabled'
++  | 'spec-versions-fetch';
++
++/** A host that carries `fetch`: globalThis in the app, a stub in the tests. */
++export type FetchHost = { fetch?: unknown };
++
++type Fetch = (input: unknown, init?: unknown) => Promise<unknown>;
++type PlotinaProbedFetch = Fetch & { __plotinaProbed?: boolean };
++
++/** `specVersions()` in src/app/cs-api.ts: the client's first request. */
++const SPEC_VERSIONS_PATH = '/_matrix/client/versions';
++/** What the SDK's global handler stamps on a promise nobody awaited. */
++const UNHANDLED_REJECTION = 'onunhandledrejection';
++/** Synapse's PreviewURLServlet with url_preview_enabled: false. */
++const URL_PREVIEW_DISABLED = 'URL Previews are disabled';
++/** matrix-widget-api PostmessageTransport.sendComplete / .transfer */
++const WIDGET_TIMEOUT = 'Request timed out';
++/** matrix-widget-api PostmessageTransport after the widget was stopped. */
++const WIDGET_NOT_READY = 'Not ready or unknown widget ID';
++/** The Fetch standard's only network-failure text -- ambiguous on purpose. */
++const FETCH_FAILED = 'Failed to fetch';
++
++/**
++ * error object -> the URL fetch was asking for.
++ *
++ * Weak, so a rejected request leaves nothing behind, and keyed by the error
++ * itself, which is the same object beforeSend receives as
++ * `hint.originalException`.
++ */
++const failedFetches = new WeakMap<object, string>();
++
++function asRecord(value: unknown): Record<string, unknown> | undefined {
++  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined;
++}
++
++function requestUrl(input: unknown): string {
++  if (typeof input === 'string') return input;
++  const fromRequest = asRecord(input);
++  if (fromRequest !== undefined && typeof fromRequest.url === 'string') return fromRequest.url;
++  if (input === undefined || input === null) return '';
++  try {
++    return String(input);
++  } catch {
++    return '';
++  }
++}
++
++/** The path of a request, so a homeserver behind a path prefix still matches. */
++function requestPath(url: string): string {
++  const path = url.split(/[?#]/)[0].replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, '');
++  return path.replace(/\/+$/, '') || '/';
++}
++
++/**
++ * Notes the URL of every fetch that fails, so beforeSend can tell the
++ * spec-versions request from any other network failure with the same text.
++ *
++ * The wrapper returns the original promise: the SDK still sees exactly the
++ * dead promise upstream created (that is the event we filter on), and the
++ * mirror of the rejection is handled here, so the probe adds no rejection of
++ * its own. It is installed once and never throws.
++ */
++export function installPlotinaFetchProbe(host: FetchHost = globalThis as FetchHost): void {
++  const original = host.fetch;
++  if (typeof original !== 'function') return;
++  if ((original as PlotinaProbedFetch).__plotinaProbed === true) return;
++
++  const probe: PlotinaProbedFetch = (input, init) => {
++    const request = (original as Fetch).call(host, input, init);
++    if (request !== null && typeof request === 'object' && typeof request.then === 'function') {
++      request.then(undefined, (error: unknown) => {
++        try {
++          const rejected = asRecord(error);
++          if (rejected !== undefined) failedFetches.set(rejected, requestUrl(input));
++        } catch {
++          /* a probe must never break a request */
++        }
++      });
++    }
++    return request;
++  };
++  probe.__plotinaProbed = true;
++  host.fetch = probe;
++}
++
++function exceptionOf(event: unknown): Record<string, unknown> | undefined {
++  const record = asRecord(event);
++  const exception = record === undefined ? undefined : asRecord(record.exception);
++  const values = exception === undefined ? undefined : exception.values;
++  if (!Array.isArray(values) || values.length === 0) return undefined;
++  return asRecord(values[0]);
++}
++
++/**
++ * The exception's own text. The SDK keeps type and value apart ("Error",
++ * "Request timed out"); GlitchTip's metadata joins them ("Error: Request timed
++ * out"), so both shapes are accepted.
++ */
++function messageOf(exception: Record<string, unknown>): string {
++  const value = typeof exception.value === 'string' ? exception.value.trim() : '';
++  const type = typeof exception.type === 'string' ? exception.type.trim() : '';
++  if (type !== '' && value.indexOf(type + ':') === 0) return value.slice(type.length + 1).trim();
++  return value;
++}
++
++function isSpecVersionsFetch(hint: unknown): boolean {
++  const hintRecord = asRecord(hint);
++  const original = hintRecord === undefined ? undefined : hintRecord.originalException;
++  const rejected = asRecord(original);
++  if (rejected === undefined) return false;
++  const url = failedFetches.get(rejected);
++  return url !== undefined && requestPath(url) === SPEC_VERSIONS_PATH;
++}
++
++/** The name of the rule that drops this event, or null when it is ours to see. */
++export function plotinaNoiseSignature(event: unknown, hint?: unknown): PlotinaNoiseSignature | null {
++  const exception = exceptionOf(event);
++  if (exception === undefined) return null;
++
++  const mechanism = asRecord(exception.mechanism);
++  if (mechanism === undefined) return null;
++  const mechanismType = typeof mechanism.type === 'string' ? mechanism.type : '';
++  // Only a promise nobody awaited. The same text thrown from code is a real
++  // failure -- and the loader screens the user sees are still there for the
++  // rest of the class -- so an exception stays reported.
++  if (mechanismType.indexOf(UNHANDLED_REJECTION) === -1) return null;
++
++  const message = messageOf(exception);
++  if (message === WIDGET_TIMEOUT) return 'widget-transport-timeout';
++  if (message === WIDGET_NOT_READY) return 'widget-transport-not-ready';
++  if (message.indexOf(URL_PREVIEW_DISABLED) !== -1) return 'url-preview-disabled';
++  // The one ambiguous text: only dropped when the probe saw the request that
++  // failed go to the spec-versions endpoint. Anything else keeps its event.
++  if (message === FETCH_FAILED && isSpecVersionsFetch(hint)) return 'spec-versions-fetch';
++  return null;
++}
++
++/**
++ * Sentry's beforeSend: returns the event to send it, or null to drop it.
++ *
++ * Fails open on purpose: a filter that throws inside the SDK's pipeline would
++ * take the whole reporting layer with it, so anything unrecognised -- including
++ * an event shape from a future SDK -- is sent unchanged.
++ */
++export function plotinaBeforeSend<T>(event: T, hint?: unknown): T | null {
++  try {
++    return plotinaNoiseSignature(event, hint) === null ? event : null;
++  } catch {
++    return event;
++  }
 +}
 diff --git a/vite.config.js b/vite.config.js
 index a5af94d..a29ac65 100644
@@ -98,10 +304,3 @@ index a5af94d..a29ac65 100644
      copyPublicDir: false,
      rollupOptions: {
        plugins: [inject({ Buffer: ['buffer', 'Buffer'] })],
-diff --git a/public/res/plotina-patches/0001-sentry.txt b/public/res/plotina-patches/0001-sentry.txt
-new file mode 100644
-index 0000000000000000000000000000000000000000..1111111111111111111111111111111111111111
---- /dev/null
-+++ b/public/res/plotina-patches/0001-sentry.txt
-@@ -0,0 +1 @@
-+plotina-patch-0001-sentry
