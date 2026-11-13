@@ -494,6 +494,14 @@ class DockerfileWiringTest(unittest.TestCase):
         self.assertIn("cc.plotina.voice_volumes", self.dockerfile)
         self.assertIn("setSubscribed", self.dockerfile)
 
+    def test_build_asserts_the_paused_stream_and_rejects_the_old_menu(self) -> None:
+        """.16 hides other streams by default and the hide_stream submenu is gone,
+        so the image layer must demand the new key and refuse the old one."""
+        self.assertIn("video_tile.stream_paused", self.dockerfile)
+        self.assertIn("Стрим приостановлен", self.dockerfile)
+        self.assertIn('test "$(grep -o video_tile.hide_stream "$bundle" | wc -l)" -eq 0',
+                      self.dockerfile)
+
     def test_widget_noise_tags_resolve_inside_the_image(self) -> None:
         """../../noise/ from /widgets/element-call/ is /app/noise/, so the two
         files the widget's own index loads have to be in the image."""

@@ -279,12 +279,13 @@ Desktop does.
   initialize the denoiser twice.
 - **The build fails if ours did not land.** The widget layer runs the same
   `--check` the desktop build runs (bundle markers, the Russian label for the
-  hide-stream control, the Plotina markers, no root-absolute asset URL, no
+  paused-stream tile, the Plotina markers, no root-absolute asset URL, no
   widget-local `noise/`), then greps the final bytes for
-  `cc.plotina.voice_volumes`, `setSubscribed` and `video_tile.hide_stream` and
-  prints the counts. `scripts/smoke-image.sh` re-checks the same three markers
-  over HTTP on the running container, so a publish cannot ship a widget without
-  them.
+  `cc.plotina.voice_volumes`, `setSubscribed` and `video_tile.stream_paused`,
+  requires `video_tile.hide_stream` to be **absent** (it is the superseded
+  submenu) and prints the counts. `scripts/smoke-image.sh` re-checks the same
+  markers over HTTP on the running container, so a publish cannot ship a widget
+  without them.
 
 ```bash
 # the swap against an unpacked /app, exactly as the Dockerfile runs it
