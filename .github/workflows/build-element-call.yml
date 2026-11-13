@@ -216,6 +216,14 @@ jobs:
           # Human-facing title only: never the tag, which carries the upstream
           # client name and the plotina release counter.
           name: ${{ steps.release_title.outputs.name }}
+          # Every EC tag is an intermediate archive of our own call frontend,
+          # never a stable client release, and GitHub points releases/latest at
+          # the newest *full* release: without this flag the archive takes the
+          # "latest" badge away from the stable client (t_ce39efd5). A literal
+          # true, not X's contains(ref_name, '-dev.'): EC has no dev series, so
+          # a tag condition would be false for every tag we push.
+          # element-call/tests/test_release_prerelease.py keeps it here.
+          prerelease: true
           files: dist/plotina-element-call.tar.gz
           generate_release_notes: true
           body: |
