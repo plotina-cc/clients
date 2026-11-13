@@ -199,8 +199,9 @@ The evidence file and screenshots from the run are attached to the task
   next to the volume button and is present even when the share has no audio (the
   volume button is not, because it is gated on `audioEnabled`).
 - The toggle menu stays open after a click — it is a `ToggleMenuItem`, and the
-  checked state is the feedback. Hiding keeps the tile in place with the avatar
-  and "Stream hidden", so the same menu is always reachable to bring it back.
+  checked state is the feedback. Hiding keeps the tile in place, now as the paused
+  state with the avatar, «Стрим приостановлен» and the **Watch** button, so the way
+  back is in the middle of the tile and not only in the corner menu.
 - In the grid layout the control is not shown: the tile chrome in grid is not the
   spotlight tile. Upstream's own per-share volume button is grid-less for the same
   reason, and this patch follows it rather than inventing a second control there.

@@ -318,6 +318,11 @@ try {
   await viewer.page.screenshot({ path: join(OUT, "02-viewer-menu.png") });
   await hideItem.click();
   await viewer.page.waitForTimeout(3000);
+  // The toggle keeps its menu open (the checked state is the feedback). Close it
+  // first: an open Radix menu marks the rest of the page aria-hidden, and the
+  // point of this state is that it reads without a menu at all.
+  await viewer.page.keyboard.press("Escape");
+  await viewer.page.waitForTimeout(1000);
 
   // What the viewer sees: not a participant who happens to be present, but a
   // paused stream that owns the tile.
@@ -332,10 +337,16 @@ try {
     const watchOpacity = await watch
       .evaluate((el) => getComputedStyle(el).opacity)
       .catch(() => null);
-    // The participant's own avatar is still there, under the scrim.
-    const avatar = await page
-      .getByRole("img", { name: /^@/ })
-      .isVisible()
+    // The participant's own avatar is still there, under the scrim. Scoped to
+    // this tile: a role query would also match the avatars in the grid sidebar.
+    const avatar = await paused
+      .evaluate((el) => {
+        const tile = el.closest('[data-testid="videoTile"]');
+        const mark = tile?.querySelector('[role="img"][aria-label^="@"]');
+        if (!mark) return false;
+        const r = mark.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      })
       .catch(() => false);
     // ...and a dark backing stands between the two, in any theme.
     const scrim = await paused
@@ -347,6 +358,65 @@ try {
         return null;
       })
       .catch(() => null);
+    // Ground truth about what is actually painted where: the element's own box,
+    // what sits at the middle of that box, and the opacity the ancestor chain
+    // applies (the tile fades during transitions).
+    const geometry = await paused
+      .evaluate((el) => {
+        const rect = el.getBoundingClientRect();
+        const chain = [];
+        for (let n = el; n && n !== document.body; n = n.parentElement) {
+          const s = getComputedStyle(n);
+          chain.push({
+            tag: n.tagName.toLowerCase(),
+            cls: String(n.className).slice(0, 60),
+            opacity: s.opacity,
+            visibility: s.visibility,
+            display: s.display,
+            transform: s.transform,
+          });
+        }
+        const mid = document.elementFromPoint(
+          rect.x + rect.width / 2,
+          rect.y + rect.height / 2,
+        );
+        return {
+          x: Math.round(rect.x),
+          y: Math.round(rect.y),
+          w: Math.round(rect.width),
+          h: Math.round(rect.height),
+          atCentre: mid
+            ? `${mid.tagName.toLowerCase()}.${String(mid.className).slice(0, 40)}`
+            : null,
+          chain,
+        };
+      })
+      .catch((e) => ({ error: String(e) }));
+    await paused
+      .screenshot({ path: join(OUT, "paused-element.png") })
+      .catch(() => {});
+    // Paint order, not just styles: the tile background is a paint container and
+    // paints as a positioned layer, so a static overlay would sit under it and be
+    // invisible while every assertion about boxes and colours still passed.
+    const paint = await paused
+      .evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const stack = document.elementsFromPoint(
+          r.x + r.width / 2,
+          r.y + r.height / 2,
+        );
+        const cls = (n) => String(n.className);
+        return {
+          pausedAboveBackground:
+            stack.indexOf(el) >= 0 &&
+            (stack.findIndex((n) => /_bg_/.test(cls(n))) === -1 ||
+              stack.indexOf(el) <
+                stack.findIndex((n) => /_bg_/.test(cls(n)))),
+          top: stack.slice(0, 3).map(cls),
+        };
+      })
+      .catch((e) => ({ error: String(e) }));
+    // No dead key left behind: the old corner status line is gone.
     const statusLine = await page
       .getByText("Stream hidden")
       .isVisible()
@@ -358,6 +428,8 @@ try {
       watchOpacity,
       avatar,
       scrim,
+      geometry,
+      paint,
       oldStatusLineGone: !statusLine,
     };
   };
@@ -482,6 +554,7 @@ try {
         pausedAfterHide.watchVisible === true &&
         pausedAfterHide.watchOpacity === "1" &&
         pausedAfterHide.avatar === true &&
+        pausedAfterHide.paint?.pausedAboveBackground === true &&
         /^rgba\(0, 0, 0, 0\.5\d\)$/.test(pausedAfterHide.scrim ?? "") &&
         pausedAfterHide.oldStatusLineGone === true,
       watchBroughtItBack: pausedAfterWatch.visible === false,

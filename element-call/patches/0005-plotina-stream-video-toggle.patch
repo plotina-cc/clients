@@ -867,10 +867,10 @@ index bf5fb24..492c049 100644
        inputs.participant$.pipe(
          switchMap((p) =>
 diff --git a/src/tile/MediaView.module.css b/src/tile/MediaView.module.css
-index 35cd63b..d9611a5 100644
+index 35cd63b..4ba7d7b 100644
 --- a/src/tile/MediaView.module.css
 +++ b/src/tile/MediaView.module.css
-@@ -116,6 +116,18 @@ Please see LICENSE in the repository root for full details.
+@@ -116,6 +116,22 @@ Please see LICENSE in the repository root for full details.
    transition: opacity 0.2s;
  }
  
@@ -879,6 +879,10 @@ index 35cd63b..d9611a5 100644
 +   under the foreground chrome so the tile's own controls stay reachable. */
 +.overlay {
 +  grid-area: content;
++  /* Both .bg and .fg are paint containers (contain: strict) and therefore paint
++     in the positioned layer. A static overlay would be painted *under* them and
++     would be invisible even though every box and every style is right. */
++  position: relative;
 +  display: grid;
 +  place-items: center;
 +  border-radius: inherit;
