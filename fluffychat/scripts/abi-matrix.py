@@ -34,12 +34,18 @@ Usage:
 
     MODE=dev
     DART_PLATFORMS=android-arm64                  # --target-platform
-    CARGO_NDK_TARGETS=arm64-v8a                   # cargo ndk -t ...
+    CARGO_NDK_TARGETS=arm64-v8a                   # the ABIs, for checks
+    CARGO_NDK_FLAGS=-t arm64-v8a                  # cargo ndk arguments
     RUST_TARGETS=aarch64-linux-android            # dtolnay/rust-toolchain
     PUBLISHED_ABIS=arm64-v8a                      # an APK is shipped per ABI
     APK_FILES=Plotina-Mobile.apk                  # the asset names, unchanged
     ABI_PAIRS=Plotina-Mobile.apk arm64-v8a        # <apk> <abi> pairs for loops
     MUST_NOT_BUILD_ABIS=armeabi-v7a x86_64        # must not appear in build/
+
+`CARGO_NDK_TARGETS` is the bare list for the checks that look at the output
+directories; `CARGO_NDK_FLAGS` is what goes on the command line, because
+`cargo ndk` takes one `-t <abi>` per target and reads a bare ABI as a
+subcommand (`error: no such command: arm64-v8a` — that cost the first run).
 
 `MUST_NOT_BUILD_ABIS` is emitted so the build can fail loudly when a half-applied
 matrix leaves a stray APK behind: for a dev tag an armeabi-v7a or x86_64 APK
@@ -133,6 +139,9 @@ def matrix(mode: str) -> dict[str, str]:
         "MODE": mode,
         "DART_PLATFORMS": ",".join(DART_PLATFORM[abi] for abi in compiled),
         "CARGO_NDK_TARGETS": " ".join(compiled),
+        # cargo-ndk takes one `-t <abi>` per target; passing the bare list
+        # makes cargo read the first ABI as a subcommand.
+        "CARGO_NDK_FLAGS": " ".join(f"-t {abi}" for abi in compiled),
         "RUST_TARGETS": ",".join(RUST_TARGET[abi] for abi in compiled),
         "PUBLISHED_ABIS": " ".join(published),
         "APK_FILES": " ".join(apk_name(abi) for abi in published),

@@ -133,6 +133,53 @@ class StableKeepsThreeAbis(unittest.TestCase):
                 self.assertIn("armeabi-v7a", out["ABI_PAIRS"])
 
 
+class TheDenoiserCommandIsValidCargoNdk(unittest.TestCase):
+    """`cargo ndk` takes one `-t <abi>` per target, never a bare ABI.
+
+    The first wired version expanded a space-separated ABI list directly after
+    `cargo ndk`, so cargo read the first ABI as a subcommand and the job died in
+    the denoiser step with `error: no such command: arm64-v8a` before any APK
+    existed.  The argv shape therefore gets its own test: every ABI must arrive
+    behind a `-t`, in both modes.
+    """
+
+    def test_every_target_carries_its_own_flag(self):
+        cases = {
+            "v2.11.3-plotina-mobile.35-dev.3": ["arm64-v8a"],
+            "v2.11.3-plotina-mobile.35": ["arm64-v8a", "armeabi-v7a", "x86_64"],
+        }
+        for ref, abis in cases.items():
+            with self.subTest(ref=ref):
+                out = parse(run("--ref", ref).stdout)
+                self.assertEqual(
+                    out["CARGO_NDK_FLAGS"].split(),
+                    [token for abi in abis for token in ("-t", abi)],
+                )
+
+    def test_the_flags_and_the_target_list_agree(self):
+        for ref in ("v2.11.3-plotina-mobile.35-dev.3", "v2.11.3-plotina-mobile.35"):
+            with self.subTest(ref=ref):
+                out = parse(run("--ref", ref).stdout)
+                flagged = [
+                    token
+                    for token in out["CARGO_NDK_FLAGS"].split()
+                    if token != "-t"
+                ]
+                self.assertEqual(flagged, out["CARGO_NDK_TARGETS"].split())
+
+    def test_the_workflow_hands_cargo_the_flagged_list(self):
+        lines = WORKFLOW.read_text(encoding="utf-8").splitlines()
+        index = next(
+            i for i, line in enumerate(lines) if line.strip().startswith("cargo ndk")
+        )
+        first_argument = lines[index + 1].strip().rstrip("\\").strip()
+        self.assertEqual(first_argument, "$CARGO_NDK_FLAGS")
+        # And no step may put the flag-less list on a cargo command line again.
+        self.assertNotIn(
+            "$CARGO_NDK_TARGETS \\", "\n".join(lines[index : index + 6])
+        )
+
+
 class TheListsAgreeWithEachOther(unittest.TestCase):
     """Every ABI that gets an APK must have been compiled, and vice versa."""
 
@@ -191,7 +238,7 @@ class WorkflowConsumesTheMatrix(unittest.TestCase):
         # Negative control: the same predicate must reject the old line, or it
         # would keep passing after a rewrite that reintroduced three ABIs.
         old = self.text.replace(
-            "cargo ndk \\\n            $CARGO_NDK_TARGETS \\",
+            "cargo ndk \\\n            $CARGO_NDK_FLAGS \\",
             "cargo ndk \\\n            -t arm64-v8a -t armeabi-v7a -t x86_64 \\",
         )
         self.assertNotEqual(old, self.text, "the cargo ndk call moved; update this test")

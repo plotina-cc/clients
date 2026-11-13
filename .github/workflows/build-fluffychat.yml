@@ -395,10 +395,13 @@ jobs:
           # (there is no Cargo.toml there). Run it from the crate itself.
           JNI_LIBS="$GITHUB_WORKSPACE/$PLUGIN_DIR/android/src/main/jniLibs"
           cd "$GITHUB_WORKSPACE/$PLUGIN_DIR/rust"
-          # $CARGO_NDK_TARGETS is space separated ("arm64-v8a" or the three);
-          # it is deliberately unquoted so cargo-ndk sees one flag per ABI.
+          # $CARGO_NDK_FLAGS is space separated and already carries the flag
+          # ("-t arm64-v8a" or "-t arm64-v8a -t armeabi-v7a -t x86_64"); it is
+          # deliberately unquoted so cargo-ndk sees one `-t <abi>` pair per ABI.
+          # A bare ABI here is a cargo subcommand: `error: no such command:
+          # arm64-v8a`, which is how the first wired run died.
           cargo ndk \
-            $CARGO_NDK_TARGETS \
+            $CARGO_NDK_FLAGS \
             -o "$JNI_LIBS" \
             build --release 2>&1 | tee /tmp/cargo-ndk.log
           status=${PIPESTATUS[0]}
