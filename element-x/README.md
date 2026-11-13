@@ -17,7 +17,8 @@ patched so calls run on our own Element Call instead of the bundle inside the AP
 ## Source
 
 The APK is built from `element-hq/element-x-android` at `v26.10.1` plus the
-patches in `element-x/patches/`. The upstream tag, the patch order and the
+patches in `element-x/patches/`, applied by `element-x/scripts/apply-patches.sh`.
+What each patch does is in `patches/README.md`; the upstream tag and the
 `./gradlew` command are in `../SOURCE.md`; the release notes repeat the offer.
 Upstream is AGPL-3.0-or-later; the patch layer here is AGPL-3.0.
 

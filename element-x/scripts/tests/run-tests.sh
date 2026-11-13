@@ -213,6 +213,7 @@ case_apply_empty_patch_dir() {
   run_apply
   local name="apply: no patches at all is an error, not a silent success"
   if [ "$apply_rc" -eq 0 ]; then fail "$name (exit 0)"; return; fi
+  case "$apply_out" in *"no *.patch"*) ;; *) fail "$name (no reason given: $apply_out)"; return ;; esac
   pass "$name"
 }
 
@@ -260,6 +261,7 @@ case_gate_not_an_apk() {
   run_gate
   local name="gate: something that is not an APK is refused, not silently passed"
   if [ "$gate_rc" -eq 0 ]; then fail "$name (exit 0)"; return; fi
+  case "$gate_out" in *"could not be read as a zip"*) ;; *) fail "$name (no reason given: $gate_out)"; return ;; esac
   pass "$name"
 }
 
@@ -270,6 +272,7 @@ case_gate_empty_markers() {
   run_gate
   local name="gate: an empty marker list is an error (a gate that checks nothing is not green)"
   if [ "$gate_rc" -eq 0 ]; then fail "$name (exit 0)"; return; fi
+  case "$gate_out" in *"holds no markers"*) ;; *) fail "$name (no reason given: $gate_out)"; return ;; esac
   pass "$name"
 }
 
