@@ -518,7 +518,19 @@ jobs:
             --dart-define=SENTRY_RELEASE="$SENTRY_RELEASE" \
             --dart-define=SENTRY_DIST="$GITHUB_RUN_NUMBER" \
             --split-debug-info=build/app/outputs/symbols
-          # Copy the APKs this build publishes; $ABI_PAIRS is "<file> <abi>".
+          # Prove the other ABIs were not compiled at all before anything is
+          # copied: a leftover armeabi-v7a or x86_64 split means the
+          # target-platform list did not reach Gradle, which would quietly cost
+          # the whole point of this build.
+          for abi in $MUST_NOT_BUILD_ABIS; do
+            stray="build/app/outputs/flutter-apk/app-$abi-$VARIANT.apk"
+            [ ! -f "$stray" ] ||
+              { echo "::error::this build must not compile $abi, but $stray exists"; exit 1; }
+          done
+          # Copy the APKs this build publishes into the workspace, where every
+          # later step reads them; $ABI_PAIRS is "<file> <abi>". The step runs
+          # with working-directory fluffychat/upstream, so anything printed
+          # about the copies has to be read from $GITHUB_WORKSPACE.
           set -- $ABI_PAIRS
           while [ "$#" -gt 0 ]; do
             apk_name="$1"
@@ -528,16 +540,10 @@ jobs:
             [ -f "$built" ] || { echo "::error::no $abi APK ($built)"; ls build/app/outputs/flutter-apk; exit 1; }
             cp "$built" "$GITHUB_WORKSPACE/$apk_name"
           done
-          # And prove the other ABIs were not compiled at all: a leftover
-          # armeabi-v7a or x86_64 split means the target-platform list did not
-          # reach Gradle, which would quietly cost the whole point of this.
-          for abi in $MUST_NOT_BUILD_ABIS; do
-            stray="build/app/outputs/flutter-apk/app-$abi-$VARIANT.apk"
-            [ ! -f "$stray" ] ||
-              { echo "::error::this build must not compile $abi, but $stray exists"; exit 1; }
-          done
-          ls -lh $APK_FILES
-          sha256sum $APK_FILES
+          # Read the copies back from the workspace, which is not this step's
+          # working directory (`ls $APK_FILES` here looked in
+          # fluffychat/upstream and failed a good build — run 43500613426).
+          ( cd "$GITHUB_WORKSPACE" && ls -lh $APK_FILES && sha256sum $APK_FILES )
 
       # The updater compares versionCode values, so a silently wrong one would
       # offer no update ever (or the same one forever). Every APK this build
