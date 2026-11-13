@@ -23,6 +23,14 @@ name: Build Plotina Mobile
 #
 #   https://github.com/plotina-cc/clients/releases/download/dev-latest/update-mobile-dev.json
 #
+# A dev build compiles **android-arm64 only** — one Dart AOT platform, one
+# `cargo ndk` target for the denoiser, one APK — because the dev loop is
+# "fix, build, check on the owner's phone" and three ABIs cost most of a
+# 28-minute job. Stable tags keep all three ABIs (arm64 + armv7 APKs, x86_64
+# native libraries for emulators), so nothing is lost for users. The two lists
+# live in fluffychat/scripts/abi-matrix.py, which the "Work out the ABI set"
+# step prints, checks and hands to every step that needs them.
+#
 # Nothing dev goes to plotina.cc/dl or to a per-tag release, so the stable
 # feed is untouched and users get back to it with the next stable .N+1.
 # Publishing dev-latest assets is by pushing such a tag (on command); the
@@ -205,6 +213,24 @@ jobs:
           python3 fluffychat/scripts/version-code.py \
             --check-dev-base "$GITHUB_REF_NAME" /tmp/published-tags.txt
 
+      # Which Android ABIs this build compiles. A dev tag (-dev.<M>) is built
+      # for the owner's one phone: Dart AOT for android-arm64 only, the Rust
+      # denoiser for arm64-v8a only, one APK. A stable tag keeps the three ABIs
+      # it always had (arm64 + armv7 APKs, x86_64 native libraries for
+      # emulators). The lists live in fluffychat/scripts/abi-matrix.py and every
+      # step below reads them from here, so the two builds cannot drift apart
+      # half-way. Written to both $GITHUB_OUTPUT (for `with:` inputs) and
+      # $GITHUB_ENV (for the shell steps).
+      - name: Work out the ABI set
+        id: abis
+        run: |
+          set -euo pipefail
+          matrix="$(python3 fluffychat/scripts/abi-matrix.py \
+            --dev-build "${{ steps.versioncode.outputs.dev }}")"
+          printf '%s\n' "$matrix" | tee -a "$GITHUB_OUTPUT" | tee -a "$GITHUB_ENV" > /dev/null
+          printf '%s\n' "$matrix"
+          echo "::notice::ABI set: $(printf '%s\n' "$matrix" | tr '\n' ' ')"
+
       # runner.temp is not available in workflow-level env, so the path is
       # decided here and exported for the upload step.
       - name: Fetch sentry-cli
@@ -320,9 +346,11 @@ jobs:
           grep -q 'com.google.gms.google-services' android/settings.gradle.kts
           echo "FCM enabled: fcm_shared_isolate added, background_push.dart and FcmPushService.kt uncommented"
 
+      # Only the targets this build compiles: a dev build installs one rust
+      # target instead of three, which is most of the denoiser step's saving.
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+          targets: ${{ steps.abis.outputs.RUST_TARGETS }}
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -336,9 +364,13 @@ jobs:
       - name: Fetch DeepFilterNet3 model
         run: fluffychat/scripts/fetch-model.sh
 
+      # The denoiser is a Rust crate built with cargo-ndk once per ABI. The
+      # target list comes from the ABI matrix: three targets on a stable tag,
+      # arm64-v8a alone on a dev tag (measured: 8-10 minutes down to under 3).
       - name: Build native denoiser
         run: |
           set -euo pipefail
+          echo "denoiser targets: $CARGO_NDK_TARGETS"
           SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?ANDROID_SDK_ROOT/ANDROID_HOME is not set}}"
           NDK_DIR="$(ls -d "$SDK"/ndk/* 2>/dev/null | sort -V | tail -1 || true)"
           if [ -z "$NDK_DIR" ]; then
@@ -363,8 +395,10 @@ jobs:
           # (there is no Cargo.toml there). Run it from the crate itself.
           JNI_LIBS="$GITHUB_WORKSPACE/$PLUGIN_DIR/android/src/main/jniLibs"
           cd "$GITHUB_WORKSPACE/$PLUGIN_DIR/rust"
+          # $CARGO_NDK_TARGETS is space separated ("arm64-v8a" or the three);
+          # it is deliberately unquoted so cargo-ndk sees one flag per ABI.
           cargo ndk \
-            -t arm64-v8a -t armeabi-v7a -t x86_64 \
+            $CARGO_NDK_TARGETS \
             -o "$JNI_LIBS" \
             build --release 2>&1 | tee /tmp/cargo-ndk.log
           status=${PIPESTATUS[0]}
@@ -375,6 +409,19 @@ jobs:
             exit "$status"
           fi
           ls -l "$JNI_LIBS"/*/libplotina_dfn.so
+          # Both halves of the ABI matrix are checked on the output, not on the
+          # intent: every compiled ABI has its library, and an ABI this build
+          # must not compile has none (a stray armeabi-v7a lib would be packaged
+          # into an arm64-only APK's sibling and make the saving a lie).
+          for abi in $CARGO_NDK_TARGETS; do
+            [ -f "$JNI_LIBS/$abi/libplotina_dfn.so" ] ||
+              { echo "::error::the denoiser was not built for $abi"; exit 1; }
+          done
+          for abi in $MUST_NOT_BUILD_ABIS; do
+            [ ! -e "$JNI_LIBS/$abi/libplotina_dfn.so" ] ||
+              { echo "::error::a $abi denoiser was built, but this build must not compile $abi"; exit 1; }
+          done
+          echo "denoiser built for: $CARGO_NDK_TARGETS (must-not: ${MUST_NOT_BUILD_ABIS:-none})"
 
       # The APK is signed with our key only when the keystore is configured.
       # Without the secrets there is nothing to sign with — upstream's
@@ -432,13 +479,20 @@ jobs:
         run: |
           set -euo pipefail
           VARIANT="${{ steps.signing.outputs.variant }}"
-          echo "building the $VARIANT variant"
+          echo "building the $VARIANT variant for $DART_PLATFORMS"
           flutter pub get
           flutter gen-l10n
           # Per-ABI splits: the universal APK carries four sets of native
           # libraries and is roughly twice the size of the arm64 one, which is
           # what every phone from the last several years needs. x86_64 is left
           # to emulators and is not published.
+          #
+          # --target-platform comes from the ABI matrix and is the whole
+          # difference between the two build types: a dev tag compiles
+          # android-arm64 only (one Dart AOT, one set of native libraries, one
+          # APK), a stable tag the three platforms it always had. Passing the
+          # list explicitly in both cases keeps the stable build's input
+          # identical to what Flutter's default was, so nothing moves for users.
           #
           # --split-debug-info keeps the Dart symbol files that make a release
           # stack trace readable; CI uploads them to GlitchTip with the release.
@@ -454,29 +508,45 @@ jobs:
             name_args+=(--build-name "${{ steps.versioncode.outputs.version_name }}")
           fi
           flutter build apk --split-per-abi "--$VARIANT" \
+            --target-platform "$DART_PLATFORMS" \
             --build-number "${{ steps.versioncode.outputs.version_code }}" \
             "${name_args[@]}" \
             --dart-define=SENTRY_DSN="${SENTRY_DSN:-}" \
             --dart-define=SENTRY_RELEASE="$SENTRY_RELEASE" \
             --dart-define=SENTRY_DIST="$GITHUB_RUN_NUMBER" \
             --split-debug-info=build/app/outputs/symbols
-          arm64="build/app/outputs/flutter-apk/app-arm64-v8a-$VARIANT.apk"
-          armv7="build/app/outputs/flutter-apk/app-armeabi-v7a-$VARIANT.apk"
-          [ -f "$arm64" ] || { echo "::error::no arm64-v8a APK"; ls build/app/outputs/flutter-apk; exit 1; }
-          [ -f "$armv7" ] || { echo "::error::no armeabi-v7a APK"; ls build/app/outputs/flutter-apk; exit 1; }
-          cp "$arm64" "$GITHUB_WORKSPACE/$APK_NAME"
-          cp "$armv7" "$GITHUB_WORKSPACE/$APK_NAME_ARMV7"
-          ls -lh "$GITHUB_WORKSPACE/$APK_NAME" "$GITHUB_WORKSPACE/$APK_NAME_ARMV7"
-          sha256sum "$GITHUB_WORKSPACE/$APK_NAME" "$GITHUB_WORKSPACE/$APK_NAME_ARMV7"
+          # Copy the APKs this build publishes; $ABI_PAIRS is "<file> <abi>".
+          set -- $ABI_PAIRS
+          while [ "$#" -gt 0 ]; do
+            apk_name="$1"
+            abi="$2"
+            shift 2
+            built="build/app/outputs/flutter-apk/app-$abi-$VARIANT.apk"
+            [ -f "$built" ] || { echo "::error::no $abi APK ($built)"; ls build/app/outputs/flutter-apk; exit 1; }
+            cp "$built" "$GITHUB_WORKSPACE/$apk_name"
+          done
+          # And prove the other ABIs were not compiled at all: a leftover
+          # armeabi-v7a or x86_64 split means the target-platform list did not
+          # reach Gradle, which would quietly cost the whole point of this.
+          for abi in $MUST_NOT_BUILD_ABIS; do
+            stray="build/app/outputs/flutter-apk/app-$abi-$VARIANT.apk"
+            [ ! -f "$stray" ] ||
+              { echo "::error::this build must not compile $abi, but $stray exists"; exit 1; }
+          done
+          ls -lh $APK_FILES
+          sha256sum $APK_FILES
 
       # The updater compares versionCode values, so a silently wrong one would
-      # offer no update ever (or the same one forever). Both APKs are read back
-      # and must carry the build number of the tag plus the ABI digit Flutter's
-      # `--split-per-abi` writes into it (arm64 +2000, armv7 +1000; predicted by
-      # fluffychat/scripts/version-code.py and proven on the released .22 APKs,
-      # which report 2032/1032 for build 32). What the arm64 APK really carries
-      # is exported for the manifest step, so update-mobile.json can never
-      # publish a number that no installed app matches.
+      # offer no update ever (or the same one forever). Every APK this build
+      # publishes is read back and must carry the build number of the tag plus
+      # the ABI digit Flutter's `--split-per-abi` writes into it (arm64 +2000,
+      # armv7 +1000; predicted by fluffychat/scripts/version-code.py and proven
+      # on the released .22 APKs, which report 2032/1032 for build 32). A dev
+      # build is arm64-only, so there is one APK to check — and its number is
+      # still the stable base's 2112323-style one, because `--split-per-abi`
+      # stays on. What the arm64 APK really carries is exported for the manifest
+      # step, so update-mobile.json can never publish a number that no installed
+      # app can match.
       - name: Verify the APK versionCode
         id: apkcode
         run: |
@@ -499,28 +569,42 @@ jobs:
             [ -n "$found" ] || { echo "::error::no versionCode found in $apk (and no aapt/apkanalyzer under $SDK)"; exit 1; }
             printf '%s' "$found"
           }
+          expected_for_abi() {
+            case "$1" in
+              arm64-v8a) printf '%s' "${{ steps.versioncode.outputs.arm64_version_code }}" ;;
+              armeabi-v7a) printf '%s' "${{ steps.versioncode.outputs.armv7_version_code }}" ;;
+              *) echo "::error::no expected versionCode for ABI $1"; exit 1 ;;
+            esac
+          }
+          set -- $ABI_PAIRS
+          while [ "$#" -gt 0 ]; do
+            apk="$1"
+            abi="$2"
+            shift 2
+            found="$(read_version_code "$apk")"
+            expected="$(expected_for_abi "$abi")"
+            echo "$abi: $apk carries $found (expected $expected)"
+            [ "$found" = "$expected" ] ||
+              { echo "::error::$apk carries a different versionCode"; exit 1; }
+          done
+          # The manifest always describes the arm64 APK, which every build
+          # publishes; read it once more so the step output is unambiguous.
           arm64_found="$(read_version_code "$APK_NAME")"
-          armv7_found="$(read_version_code "$APK_NAME_ARMV7")"
-          arm64_expected="${{ steps.versioncode.outputs.arm64_version_code }}"
-          armv7_expected="${{ steps.versioncode.outputs.armv7_version_code }}"
-          echo "arm64: $arm64_found (expected $arm64_expected), armv7: $armv7_found (expected $armv7_expected)"
-          [ "$arm64_found" = "$arm64_expected" ] || { echo "::error::$APK_NAME carries a different versionCode"; exit 1; }
-          [ "$armv7_found" = "$armv7_expected" ] || { echo "::error::$APK_NAME_ARMV7 carries a different versionCode"; exit 1; }
           {
             echo "arm64_version_code=$arm64_found"
-            echo "armv7_version_code=$armv7_found"
           } >> "$GITHUB_OUTPUT"
-          echo "::notice::versionCode $arm64_found / $armv7_found verified with $(basename "${AAPT:-$AK}")"
+          echo "::notice::versionCode $arm64_found verified on $PUBLISHED_ABIS with $(basename "${AAPT:-$AK}")"
 
       - name: Gate — every applied patch is in the APK
         # The build is not allowed to be green about a patch that did not reach the APK. The marker
         # list comes from apply-patches.sh, i.e. from the files really applied in this job, so this
         # catches both shapes of the bug: a patch in patches/ that never applied, and a patch that
-        # applied but whose string the Dart AOT compiler or the resource shrinker dropped. Both
-        # splits are checked — they carry the same libapp.so, and both are published.
+        # applied but whose string the Dart AOT compiler or the resource shrinker dropped. Every APK
+        # this build publishes is checked — one on a dev tag (arm64: the markers live in
+        # lib/arm64-v8a/libapp.so), two on a stable tag, which carry the same libapp.so.
         run: |
           set -euo pipefail
-          for apk in "$APK_NAME" "$APK_NAME_ARMV7"; do
+          for apk in $APK_FILES; do
             echo "-- $apk"
             scripts/check-markers.sh "$apk" fluffychat-markers.txt
           done
@@ -616,7 +700,8 @@ jobs:
           fi
           echo "using $APKSIGNER"
           previous_digest=""
-          for apk in "$APK_NAME" "$APK_NAME_ARMV7"; do
+          # $APK_FILES: one APK on a dev tag, two on a stable one.
+          for apk in $APK_FILES; do
             # apksigner writes the verify summary to stdout only with --verbose and
             # has moved cert lines between streams across build-tools versions, so
             # keep both streams and do not depend on the exact wording.
@@ -643,7 +728,7 @@ jobs:
               previous_digest="$digest"
             fi
           done
-          echo "both APKs verify, and neither is debug-signed"
+          echo "$APK_FILES verify, and none is debug-signed"
 
       # A missing libplotina_dfn.so, model asset or Firebase class does not fail
       # the build on its own: the plugin or FCM just stays silent. Fail here.
@@ -654,15 +739,20 @@ jobs:
           # R8 folds those classes into classes*.dex, so it is 0 even when FCM is
           # linked in. Kept as a recorded data point; the real check reads the dex
           # payload further down.
-          for apk in "$APK_NAME" "$APK_NAME_ARMV7"; do
+          for apk in $APK_FILES; do
             count="$(unzip -l "$apk" | grep -c 'com/google/firebase' || true)"
             echo "unzip -l $apk | grep -c 'com/google/firebase' -> ${count:-0}"
           done
-          python3 - "$APK_NAME" arm64-v8a "$APK_NAME_ARMV7" armeabi-v7a <<'PY'
+          # $ABI_PAIRS is "<apk> <abi>" per published APK: one pair on a dev tag,
+          # two on a stable one. Each APK must carry the denoiser for its own
+          # ABI and no lib/ directory of any other ABI — on a dev tag that is
+          # the "arm64-only" claim checked on the artifact itself.
+          python3 - $ABI_PAIRS <<'PY'
           import sys
           import zipfile
 
-          pairs = [(sys.argv[1], sys.argv[2]), (sys.argv[3], sys.argv[4])]
+          args = sys.argv[1:]
+          pairs = list(zip(args[0::2], args[1::2]))
           failures = []
 
           for apk, abi in pairs:
@@ -680,6 +770,17 @@ jobs:
                       if "AndroidManifest.xml" in names
                       else b""
                   )
+
+              lib_dirs = sorted(
+                  {
+                      name.split("/")[1]
+                      for name in names
+                      if name.startswith("lib/") and name.count("/") >= 2
+                  }
+              )
+              print(f"  lib/ ABIs in the APK: {lib_dirs} (expected exactly [{abi!r}])")
+              if lib_dirs != [abi]:
+                  failures.append(f"{apk}: carries lib/ for {lib_dirs}, expected [{abi}]")
 
               wanted = [
                   f"lib/{abi}/libplotina_dfn.so",
@@ -733,7 +834,7 @@ jobs:
           if failures:
               print("FAILED:", *failures, sep="\n  ")
               sys.exit(1)
-          print("both APKs carry the denoiser, the model, firebase classes and the plotina-push project id")
+          print(f"{len(pairs)} APK(s) carry the denoiser for their own ABI, the model, firebase classes and the plotina-push project id")
           PY
 
       # Mapping files and Dart symbols for the release that the APKs report as.
@@ -818,17 +919,23 @@ jobs:
           BASE="${BASE%%-plotina-*}"
           gh release view "$TAG" > /dev/null 2>&1 ||
             gh release create "$TAG" --title "Plotina Mobile ${BASE}" --notes-file "$BODY"
-          gh release upload "$TAG" "$APK_NAME" "$APK_NAME_ARMV7" "$MANIFEST_NAME" --clobber
-          # The release is the deliverable, so prove all three assets are on it.
-          for asset in "$APK_NAME" "$APK_NAME_ARMV7" "$MANIFEST_NAME"; do
+          # A stable build publishes both APKs; $APK_FILES is the same pair the
+          # build produced (it is only ever arm64-only on a dev tag, which never
+          # reaches this step).
+          gh release upload "$TAG" $APK_FILES "$MANIFEST_NAME" --clobber
+          # The release is the deliverable, so prove every asset is on it.
+          for asset in $APK_FILES "$MANIFEST_NAME"; do
             gh release view "$TAG" --json assets \
               -q ".assets[] | select(.name == \"$asset\") | \"\\(.name) \\(.size) bytes\"" \
               | grep -q . || { echo "::error::$asset is not attached to release $TAG"; exit 1; }
           done
 
-      # Dev builds never open a per-tag release: they overwrite the three
-      # assets of the fixed `dev-latest` release, which is the dev feed the
-      # app reads (update-mobile-dev.json + the arm64 APK it points at). The
+      # Dev builds never open a per-tag release: they overwrite the assets of
+      # the fixed `dev-latest` release, which is the dev feed the app reads
+      # (update-mobile-dev.json + the arm64 APK it points at). A dev build is
+      # arm64-only, so it uploads one APK and removes the armv7 asset an older
+      # three-ABI dev build left there: a stale APK on the dev feed would be
+      # downloaded by 32-bit testers as if it were the current build. The
       # first dev run creates the release as a prerelease so GitHub never
       # treats it as "latest"; after that every push of a *-dev.<M> tag
       # replaces its assets atomically enough for the updater, which verifies
@@ -847,10 +954,17 @@ jobs:
               --prerelease \
               --notes "Assets for the in-app Dev update channel (Settings -> Канал обновлений). Overwritten by every v<base>-plotina-mobile.<N>-dev.<M> build; NOT a released version. update-mobile-dev.json is the manifest the app reads."
           gh release upload dev-latest \
-            "$APK_NAME" "$APK_NAME_ARMV7" "$dev_manifest" --clobber
-          # The dev feed is the deliverable; prove all three assets are on it,
+            $APK_FILES "$dev_manifest" --clobber
+          # Drop the armv7 APK an earlier three-ABI dev build published: this
+          # feed now describes an arm64-only build.
+          if gh release view dev-latest --json assets -q '.assets[].name' |
+               grep -qx "$APK_NAME_ARMV7"; then
+            gh release delete-asset dev-latest "$APK_NAME_ARMV7" -y
+            echo "removed the stale $APK_NAME_ARMV7 from dev-latest"
+          fi
+          # The dev feed is the deliverable; prove every asset is on it,
           # and that the manifest really points at the asset on dev-latest.
-          for asset in "$APK_NAME" "$APK_NAME_ARMV7" "$dev_manifest"; do
+          for asset in $APK_FILES "$dev_manifest"; do
             gh release view dev-latest --json assets \
               -q ".assets[] | select(.name == \"$asset\") | \"\\(.name) \\(.size) bytes\"" \
               | grep -q . || { echo "::error::$asset is not attached to release dev-latest"; exit 1; }
