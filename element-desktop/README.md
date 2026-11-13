@@ -118,7 +118,10 @@ fail silently at runtime if missed:
 - **The noise layer.** The archive carries its own copy and the edge's
   `/noise/...` tags. The webapp root already owns the noise layer, and a second
   copy inside the widget would initialize the denoiser twice. The install drops
-  it and points the tags at `../../noise/plotina-dfn.js` + `plotina-panel.js`.
+  it and points the tag at `../../noise/plotina-dfn.js`; the level control is a
+  row in the call's own Settings -> Audio since EC .17, and the old floating
+  panel script (`plotina-panel.js`) no longer exists in the repo, so no tag may
+  name it.
   `boot.js` stays out deliberately: it no-ops on `window.__plotinaEc`, and the
   widget's microphone is processed by `plotina-dfn.js` through the bundle's
   publish hook. `plotina-dfn.js` finds its model from its own `src`
