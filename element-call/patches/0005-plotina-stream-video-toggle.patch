@@ -1003,16 +1003,19 @@ index bf5fb24..170bd6d 100644
        inputs.participant$.pipe(
          switchMap((p) =>
 diff --git a/src/tile/MediaView.module.css b/src/tile/MediaView.module.css
-index 35cd63b..4ba7d7b 100644
+index 35cd63b..e2e73f6 100644
 --- a/src/tile/MediaView.module.css
 +++ b/src/tile/MediaView.module.css
-@@ -116,6 +116,22 @@ Please see LICENSE in the repository root for full details.
+@@ -116,6 +116,25 @@ Please see LICENSE in the repository root for full details.
    transition: opacity 0.2s;
  }
  
 +/* Plotina: a state that owns the whole tile (a stream this viewer paused).
 +   It sits over the avatar and the video, which stay visible underneath, and
-+   under the foreground chrome so the tile's own controls stay reachable. */
++   under the foreground chrome, which keeps the name tag and the tile's own
++   buttons on top. That chrome is pointer-transparent (see the .fg rule below),
++   so a click still reaches this block: otherwise the Watch button underneath
++   could only be tabbed to, never clicked. */
 +.overlay {
 +  grid-area: content;
 +  /* Both .bg and .fg are paint containers (contain: strict) and therefore paint
@@ -1029,6 +1032,38 @@ index 35cd63b..4ba7d7b 100644
  .avatar[data-style="translucent"] {
    opacity: 50%;
  }
+@@ -189,6 +208,20 @@ unconditionally select the container so we can use cqmin units */
+   }
+ }
+ 
++/* Plotina: the foreground layer covers the whole tile, so it is the element a
++   pointer click lands on anywhere in the tile — including over the `overlay`
++   slot painted beneath it (a stream this viewer paused). Its Watch button then
++   never receives a click and nothing happens, while the same button still works
++   from the keyboard. The layer is chrome, not a hit target, so the pointer goes
++   through it; its own controls stay interactive. */
++.fg {
++  pointer-events: none;
++}
++
++.fg > * {
++  pointer-events: auto;
++}
++
+ .nameTag {
+   grid-area: nameTag;
+   place-self: end start;
+@@ -269,7 +302,9 @@ unconditionally select the container so we can use cqmin units */
+ }
+ 
+ @media (hover) {
+-  .fg:hover > button {
++  /* Plotina: the chrome no longer takes pointer events (see .fg above), so it
++     can no longer be the hovered element; the tile it covers is. */
++  .media:hover .fg > button {
+     opacity: 1;
+   }
+ 
 diff --git a/src/tile/MediaView.tsx b/src/tile/MediaView.tsx
 index d574416..4061792 100644
 --- a/src/tile/MediaView.tsx

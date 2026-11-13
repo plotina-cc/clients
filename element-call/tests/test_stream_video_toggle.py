@@ -202,6 +202,28 @@ class PatchTests(unittest.TestCase):
         self.assertIn("videoEnabled && videoVisible", tile)
         self.assertIn("video={videoVisible ? props.video : undefined}", tile)
 
+    def test_the_paused_block_is_reachable_with_a_pointer(self) -> None:
+        """t_1592bb4f: the tile's chrome must not take the click meant for it.
+
+        The paused block is painted under ``_fg_``, which covers the whole tile.
+        While ``_fg_`` took pointer events, a mouse click on Watch landed on the
+        chrome: ``setVideoVisible`` was never called, so the button did nothing
+        on screen even though it was visible, enabled and worked from the
+        keyboard. jsdom has no hit testing, so the guard lives here — no browser
+        needed — and the behaviour is proven live by
+        ``tests/live/stream_watch_click_proof.mjs``.
+        """
+        css = "\n".join(added_lines(sections()[MEDIA_VIEW_CSS]))
+        self.assertIn(".fg {\n  pointer-events: none;\n}", css)
+        self.assertIn(".fg > * {\n  pointer-events: auto;\n}", css)
+        # The hover that reveals the chrome's own buttons moves up to the tile,
+        # because a pointer-transparent layer can no longer be hovered itself.
+        self.assertIn(".media:hover .fg > button", css)
+        self.assertNotIn(".fg:hover > button", css)
+        # The block stays the overlay under that chrome: the fix is about hit
+        # testing, not about painting the paused state over the name tag.
+        self.assertIn("+  position: relative;", sections()[MEDIA_VIEW_CSS])
+
     def test_the_ui_is_a_bare_toggle_not_a_menu(self) -> None:
         tile = "\n".join(added_lines(sections()[TILE]))
         # A plain button: the click itself is the action.
