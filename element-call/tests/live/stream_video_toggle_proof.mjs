@@ -319,12 +319,52 @@ try {
   await hideItem.click();
   await viewer.page.waitForTimeout(3000);
 
-  const hiddenText = await viewer.page
-    .getByText("Stream hidden")
-    .isVisible()
-    .catch(() => false);
-  say("viewer tile says stream hidden", { hiddenText });
-  await viewer.page.screenshot({ path: join(OUT, "03-viewer-hidden.png") });
+  // What the viewer sees: not a participant who happens to be present, but a
+  // paused stream that owns the tile.
+  const readPausedTile = async (page) => {
+    const paused = page.getByTestId("stream-paused");
+    const visible = await paused.isVisible().catch(() => false);
+    if (!visible) return { visible: false };
+    const text = (await paused.innerText().catch(() => "")).replace(/\n+/g, " | ");
+    const watch = page.getByRole("button", { name: "Watch" });
+    const watchVisible = await watch.isVisible().catch(() => false);
+    // Readable without a hover: the tile hides its own buttons until then.
+    const watchOpacity = await watch
+      .evaluate((el) => getComputedStyle(el).opacity)
+      .catch(() => null);
+    // The participant's own avatar is still there, under the scrim.
+    const avatar = await page
+      .getByRole("img", { name: /^@/ })
+      .isVisible()
+      .catch(() => false);
+    // ...and a dark backing stands between the two, in any theme.
+    const scrim = await paused
+      .evaluate((el) => {
+        for (let n = el; n && n !== document.body; n = n.parentElement) {
+          const bg = getComputedStyle(n).backgroundColor;
+          if (bg && bg !== "rgba(0, 0, 0, 0)") return bg;
+        }
+        return null;
+      })
+      .catch(() => null);
+    const statusLine = await page
+      .getByText("Stream hidden")
+      .isVisible()
+      .catch(() => false);
+    return {
+      visible: true,
+      text,
+      watchVisible,
+      watchOpacity,
+      avatar,
+      scrim,
+      oldStatusLineGone: !statusLine,
+    };
+  };
+
+  const pausedAfterHide = await readPausedTile(viewer.page);
+  say("viewer tile is a paused stream", pausedAfterHide);
+  await viewer.page.screenshot({ path: join(OUT, "03-viewer-paused.png") });
 
   const afterHideViewer = await measure(viewer.page, "viewer/after-hide");
   const afterHideControl = await measure(control.page, "control/while-viewer-hid");
@@ -364,10 +404,17 @@ try {
     await viewer.page.waitForTimeout(1000);
   };
 
-  // Show it again, in the same call.
-  await setVisibility(false, "show again");
+  // Show it again, in the same call: the paused block's own button, reached
+  // from the keyboard, is the same action as the corner eye toggle.
+  const watch = viewer.page.getByRole("button", { name: "Watch" });
+  await watch.focus();
+  const watchFocused = await watch.evaluate((el) => el === document.activeElement);
+  say("watch button focused from the keyboard", { watchFocused });
+  await viewer.page.keyboard.press("Enter");
   await viewer.page.waitForTimeout(3000);
   const afterShowViewer = await measure(viewer.page, "viewer/after-show");
+  const pausedAfterWatch = await readPausedTile(viewer.page);
+  say("after Watch", { pausedBlockGone: !pausedAfterWatch.visible });
   await viewer.page.screenshot({ path: join(OUT, "04-viewer-shown-again.png") });
 
   // Restart: hide, reload the page, rejoin, the choice must come back from the
@@ -383,13 +430,10 @@ try {
     .getByRole("button", { name: "Screen share visibility" })
     .waitFor({ state: "attached", timeout: 90_000 });
   await viewer.page.waitForTimeout(5000);
-  const afterReloadHidden = await viewer.page
-    .getByText("Stream hidden")
-    .isVisible()
-    .catch(() => false);
+  const pausedAfterReload = await readPausedTile(viewer.page);
   const reloadMeasure = await measure(viewer.page, "viewer/after-reload");
   await viewer.page.screenshot({ path: join(OUT, "05-viewer-after-reload.png") });
-  say("after reload", { hiddenText: afterReloadHidden });
+  say("after reload", { pausedTile: pausedAfterReload.visible });
 
   // Persisted choice, read back from the page.
   const stored = await viewer.page.evaluate(() => ({
@@ -412,8 +456,9 @@ try {
     viewerAfterShow: afterShowViewer,
     viewerAfterReload: reloadMeasure,
     ui: {
-      hiddenTextAfterToggle: hiddenText,
-      hiddenTextAfterReload: afterReloadHidden,
+      pausedAfterToggle: pausedAfterHide,
+      pausedAfterReload,
+      watchFocusedFromKeyboard: watchFocused,
     },
     stored,
     livekitLogs,
@@ -431,7 +476,17 @@ try {
       sharerUnaffected: totalVideoFrames(afterHideSharer) > 0,
       viewerResumedAfterShow:
         videoCount(afterShowViewer) === videoCount(beforeHideViewer),
-      hiddenAfterReload: afterReloadHidden === true,
+      pausedTileOnHide:
+        pausedAfterHide.visible === true &&
+        /Stream paused/.test(pausedAfterHide.text ?? "") &&
+        pausedAfterHide.watchVisible === true &&
+        pausedAfterHide.watchOpacity === "1" &&
+        pausedAfterHide.avatar === true &&
+        /^rgba\(0, 0, 0, 0\.5\d\)$/.test(pausedAfterHide.scrim ?? "") &&
+        pausedAfterHide.oldStatusLineGone === true,
+      watchBroughtItBack: pausedAfterWatch.visible === false,
+      watchReachableFromKeyboard: watchFocused === true,
+      hiddenAfterReload: pausedAfterReload.visible === true,
       stillHiddenAfterReload:
         videoCount(reloadMeasure) === videoCount(beforeHideViewer) - 1 &&
         totalVideoFrames(reloadMeasure) > 0,
