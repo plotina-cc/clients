@@ -2,6 +2,11 @@
 # at our own Element Call (https://call.plotina.cc/room) by default, so a call opens there without
 # anyone typing a URL into developer settings.
 #
+# The patch set lives in element-x/patches/ and is described in element-x/patches/README.md. It is
+# applied by element-x/scripts/apply-patches.sh — one entry point, no list of patch names in this
+# file — and after the build element-x/scripts/check-markers.sh proves that every applied patch is
+# actually in the APK (a patch that reaches patches/ but not the artifact fails the run).
+#
 # It is also the app behind https://plotina.cc/app: patch 0005 registers that URL as a verified
 # app link, because mobile.element.io's assetlinks.json lists Element's certificates and not the
 # Plotina key this build is signed with, so element.io invitation links cannot reach it.
@@ -91,30 +96,16 @@ jobs:
           # LFS holds screenshot-test blobs worth hundreds of MB; the build never reads them.
           GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 --branch "$tag" \
             https://github.com/element-hq/element-x-android "$RUNNER_TEMP/element-x"
-          cd "$RUNNER_TEMP/element-x"
-          # Sequential, not a stack of --check runs on the pristine tree: a patch generated
-          # against the already-patched tree legitimately fails --check against pristine. Patch
-          # 0014's app/build.gradle.kts hunk carries the "no ndk.abiFilters" comment that 0002
-          # inserts, and the .25 run died on exactly that. So each patch is checked AND applied,
-          # in the build job's order, and every later patch sees the same tree the build makes.
-          for p in \
-            0002-element-x-android-plotina-signing \
-            0004-element-x-android-plotina-call-url \
-            0005-element-x-android-plotina-app-link \
-            0006-element-x-android-plotina-account-provider \
-            0007-element-x-android-plotina-push-gateway \
-            0008-element-x-android-plotina-sentry \
-            0009-plotina-application-id \
-            0010-plotina-visible-strings \
-            0011-plotina-locales \
-            0012-plotina-about-minimal \
-            0013-plotina-analytics-off \
-            0014-plotina-self-updater \
-            0015-plotina-dm-personal-names; do
-            patch="$GITHUB_WORKSPACE/element-x/patches/$p.patch"
-            git apply --check --verbose "$patch"
-            git apply --verbose "$patch"
-          done
+          # One entry point for every patch. The script applies the whole directory in LC_ALL=C
+          # order, checks each patch against the tree the previous ones built (a patch generated on
+          # a patched tree legitimately fails --check against pristine), fails on a .rej or on a
+          # shorter applied count than patches/ holds, and refuses a patch with no marker header.
+          # Nothing here names a patch: a new file in element-x/patches/ is applied on the next run
+          # without editing this workflow, and a patch that is *not* applied cannot pass silently —
+          # which is how 0016 was missing from .32-dev.4 while the run was green. The patch
+          # descriptions live in element-x/patches/README.md and in each patch's header.
+          "$GITHUB_WORKSPACE/element-x/scripts/apply-patches.sh" "$RUNNER_TEMP/element-x" \
+            "$RUNNER_TEMP/plotina-markers.txt"
 
   build:
     needs: patches
@@ -187,54 +178,12 @@ jobs:
         run: |
           GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 --branch "$ELEMENT_X_TAG" \
             https://github.com/element-hq/element-x-android upstream/element-x
-          cd upstream/element-x
-          # 0002: release is signed with our key instead of upstream's debug key, and
-          # `-PplotinaSingleApk` builds one APK instead of four ABI splits.
-          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0002-element-x-android-plotina-signing.patch"
-          # 0004: the call WebView defaults to https://call.plotina.cc/room.
-          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0004-element-x-android-plotina-call-url.patch"
-          # 0005: https://plotina.cc/app is a verified app link of this APK (pathPrefix only, so the
-          # rest of the site stays in the browser).
-          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0005-element-x-android-plotina-app-link.patch"
-          # 0006: the default account provider is plotina.cc instead of matrix.org, so sign-in opens
-          # on our homeserver without anyone typing the address.
-          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0006-element-x-android-plotina-account-provider.patch"
-          # 0007: the Firebase pusher registers against https://push.plotina.cc instead of
-          # matrix.org's gateway, which would reject a token from our Firebase project.
-          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0007-element-x-android-plotina-push-gateway.patch"
-          # 0008: the Sentry release is element-x@<version+tag> (stamped as io.sentry.release in the
-          # manifest, from PLOTINA_SENTRY_RELEASE) and release builds report environment
-          # "production" instead of upstream's "RELEASE". No init code: the app-side SDK is upstream's
-          # services/analyticsproviders/sentry, initialised by its own SentryAnalyticsProvider.
-          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0008-element-x-android-plotina-sentry.patch"
-          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0009-plotina-application-id.patch"
-          # 0010: the onboarding headline is the first full-screen copy a new user sees.
-          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0010-plotina-visible-strings.patch"
-          # 0011: keep only the two maintained UI locales in the APK.
-          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0011-plotina-locales.patch"
-          # 0012: About shows only the open-source licence list, not upstream legal links.
-          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0012-plotina-about-minimal.patch"
-          # 0013: no PostHog analytics and no Sentry reporting.
-          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0013-plotina-analytics-off.patch"
-          # 0014: the in-app updater. The Settings root grows one «Обновления» row right
-          # above About, opening PlotinaUpdatesActivity: «Проверить обновления» as
-          # the top action, the Stable/Dev channel section beneath it. The action starts
-          # PlotinaUpdateActivity, which fetches
-          # https://plotina.cc/dl/update-x.json, downloads the APK with DownloadManager, verifies
-          # sha256 and size, and hands it to the system PackageInstaller; MainActivity's silent
-          # once-a-day check opens that same page. The same patch derives the
-          # versionCode from the release tag: with -PplotinaBuildNumber=N, tag vYY.MM.p-plotina-x.N
-          # gets base (2000+YY)*100000 + MM*1000 + N (26.10.1 .25 -> 202610025). The same patch
-          # carries the dev channel: -PplotinaDevBuild=M only grows the versionName `-dev.M` part
-          # (the base code stays that of the stable M is based on), the «Обновления» page's channel
-          # section lets a dev install opt in, and it reads
-          # update-x-dev.json from the GitHub `dev-latest` release instead of the edge host.
-          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0014-plotina-self-updater.patch"
-          # 0015: personal names for personal dialogues. The name is the account's own: it lives in
-          # the cc.plotina.room_aliases account data event (the same one Element Web writes), is laid
-          # over RoomInfo.name in Kotlin for the room list and the open chat, and m.room.name is
-          # never written. DM only; groups keep their name.
-          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0015-plotina-dm-personal-names.patch"
+          # Every file in element-x/patches/, in order, through one script — see its header for what
+          # it guarantees. The markers of what was applied land in plotina-markers.txt, and the
+          # "Gate" step after the build looks for each one in the APK. What each patch does is in
+          # element-x/patches/README.md and in the patch's own header.
+          element-x/scripts/apply-patches.sh upstream/element-x \
+            "$GITHUB_WORKSPACE/plotina-markers.txt"
 
       - name: Install Pillow for the icon script
         run: python3 -m pip install --quiet pillow
@@ -617,6 +566,19 @@ jobs:
           }
 
           for apk in Plotina-X*.apk; do check_app_link "$apk"; done
+
+      - name: Gate — every applied patch is in the APK
+        # The build is not allowed to be green about a patch that did not reach the artifact. The
+        # marker list comes from apply-patches.sh, i.e. from the files that were really applied in
+        # this job, so this catches the .32-dev.4 shape (a patch in patches/, missing from the APK)
+        # and also the subtler one: applied, but stripped out by R8 or the resource shrinker.
+        # Both splits are checked — they carry the same dex, and the armv7 one is published too.
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          for apk in Plotina-X*.apk; do
+            echo "-- $apk"
+            element-x/scripts/check-markers.sh "$apk" plotina-markers.txt
+          done
 
       - name: Check the APK carries Firebase and our push project
         run: |

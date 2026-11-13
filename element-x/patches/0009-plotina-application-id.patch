@@ -1,3 +1,9 @@
+# Plotina-Patch: application id cc.plotina.x and application name "Plotina X" instead of
+#   io.element.android.x / "Element X".
+# Plotina-Marker: plotina-patch-0009-application-id
+# Plotina-Note: this patch is build-level and ships no runtime string of its own, so it writes
+#   its marker into an asset file of its own; the artifact gate looks for it there.
+
 --- a/plugins/src/main/kotlin/config/BuildTimeConfig.kt
 +++ b/plugins/src/main/kotlin/config/BuildTimeConfig.kt
 @@ -9,7 +9,7 @@
@@ -10,3 +16,10 @@
 +    const val APPLICATION_NAME = "Plotina X"
      val METADATA_HOST_REVERSED: String? = null
      val OAUTH_CLIENT_URL_PATH: String? = "apps/android"
+
+diff --git a/app/src/main/assets/plotina-patches/0009.txt b/app/src/main/assets/plotina-patches/0009.txt
+new file mode 100644
+--- /dev/null
++++ b/app/src/main/assets/plotina-patches/0009.txt
+@@ -0,0 +1 @@
++plotina-patch-0009-application-id

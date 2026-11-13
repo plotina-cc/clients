@@ -1,3 +1,10 @@
+# Plotina-Patch: personal names for personal dialogues: the name belongs to the account, lives in the
+#   cc.plotina.contact_names account data event (the same contract Element Web and Mobile
+#   write), is laid over RoomInfo.name in Kotlin for the room list, the open chat and the
+#   room details header; m.room.name and m.room.member are never written. DM only — a
+#   group keeps its name. See ../PERSONAL-NAMES.md.
+# Plotina-Marker: Plotina: could not read the personal names of this account
+
 diff --git a/features/home/impl/src/main/kotlin/io/element/android/features/home/impl/datasource/RoomListDataSource.kt b/features/home/impl/src/main/kotlin/io/element/android/features/home/impl/datasource/RoomListDataSource.kt
 index 56b2c1ad..68735dfb 100644
 --- a/features/home/impl/src/main/kotlin/io/element/android/features/home/impl/datasource/RoomListDataSource.kt

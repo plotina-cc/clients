@@ -1,3 +1,7 @@
+# Plotina-Patch: the call WebView defaults to https://call.plotina.cc/room — our Element Call, where
+#   the noise suppression runs — instead of the bundle inside the APK.
+# Plotina-Marker: https://call.plotina.cc/room
+
 diff --git a/features/call/impl/src/main/kotlin/io/element/android/features/call/impl/utils/DefaultCallWidgetProvider.kt b/features/call/impl/src/main/kotlin/io/element/android/features/call/impl/utils/DefaultCallWidgetProvider.kt
 index 8de7b81d..ae5459d7 100644
 --- a/features/call/impl/src/main/kotlin/io/element/android/features/call/impl/utils/DefaultCallWidgetProvider.kt

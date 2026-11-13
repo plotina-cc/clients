@@ -1,3 +1,8 @@
+# Plotina-Patch: contact names for people everywhere a person is named: the room list row, the chat
+#   title, the room details header and the notification now show the personal name of the
+#   person on the other side (heroes and the inviter included), not only the room's name.
+# Plotina-Marker: Plotina: could not read the personal names for a notification
+
 diff --git a/features/home/impl/src/main/kotlin/io/element/android/features/home/impl/datasource/RoomListRoomSummaryFactory.kt b/features/home/impl/src/main/kotlin/io/element/android/features/home/impl/datasource/RoomListRoomSummaryFactory.kt
 index fbf55fec..66ec9283 100644
 --- a/features/home/impl/src/main/kotlin/io/element/android/features/home/impl/datasource/RoomListRoomSummaryFactory.kt

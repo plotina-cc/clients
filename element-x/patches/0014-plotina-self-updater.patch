@@ -1,3 +1,17 @@
+# Plotina-Patch: the in-app updater. The Settings root grows one «Обновления» row right above About,
+#   opening PlotinaUpdatesActivity: «Проверить обновления» as the top action, the
+#   Stable/Dev channel section beneath it. The action starts PlotinaUpdateActivity, which
+#   fetches https://plotina.cc/dl/update-x.json, downloads the APK with DownloadManager,
+#   verifies sha256 and size, and hands it to the system PackageInstaller; MainActivity's
+#   silent once-a-day check opens that same page. The same patch derives the versionCode
+#   from the release tag: with -PplotinaBuildNumber=N, tag vYY.MM.p-plotina-x.N gets
+#   (2000+YY)*100000 + MM*1000 + N (26.10.1 .25 -> 202610025). The same patch carries the
+#   dev channel: -PplotinaDevBuild=M only grows the versionName `-dev.M` part (the base
+#   code stays that of the stable M is based on), the «Обновления» page's channel section
+#   lets a dev install opt in, and it reads update-x-dev.json from the GitHub dev-latest
+#   release instead of the edge host.
+# Plotina-Marker: https://plotina.cc/dl/update-x.json
+
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
 index 50847073..f88e15b7 100644
 --- a/app/build.gradle.kts

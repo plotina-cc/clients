@@ -1,3 +1,8 @@
+# Plotina-Patch: no PostHog analytics and no Sentry reporting.
+# Plotina-Marker: plotina-patch-0013-analytics-off
+# Plotina-Note: this patch is build-level and ships no runtime string of its own, so it writes
+#   its marker into an asset file of its own; the artifact gate looks for it there.
+
 diff --git a/plugins/src/main/kotlin/ModulesConfig.kt b/plugins/src/main/kotlin/ModulesConfig.kt
 index b5360b4..efb86eb 100644
 --- a/plugins/src/main/kotlin/ModulesConfig.kt
@@ -17,3 +22,10 @@ index b5360b4..efb86eb 100644
 +        AnalyticsConfig.Disabled
      }
  }
+
+diff --git a/app/src/main/assets/plotina-patches/0013.txt b/app/src/main/assets/plotina-patches/0013.txt
+new file mode 100644
+--- /dev/null
++++ b/app/src/main/assets/plotina-patches/0013.txt
+@@ -0,0 +1 @@
++plotina-patch-0013-analytics-off

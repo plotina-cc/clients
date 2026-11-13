@@ -1,3 +1,10 @@
+# Plotina-Patch: https://plotina.cc/app is a verified app link of this APK (pathPrefix only, so the rest
+#   of the site stays in the browser). mobile.element.io's assetlinks.json lists Element's
+#   certificates, not ours, so element.io invitation links can never reach this build.
+# Plotina-Marker: plotina-patch-0005-app-link
+# Plotina-Note: this patch is build-level and ships no runtime string of its own, so it writes
+#   its marker into an asset file of its own; the artifact gate looks for it there.
+
 diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
 index 9193c6de..15e8dc2f 100644
 --- a/app/src/main/AndroidManifest.xml
@@ -26,3 +33,10 @@ index 9193c6de..15e8dc2f 100644
              <!--
                matrix: links
              -->
+
+diff --git a/app/src/main/assets/plotina-patches/0005.txt b/app/src/main/assets/plotina-patches/0005.txt
+new file mode 100644
+--- /dev/null
++++ b/app/src/main/assets/plotina-patches/0005.txt
+@@ -0,0 +1 @@
++plotina-patch-0005-app-link
