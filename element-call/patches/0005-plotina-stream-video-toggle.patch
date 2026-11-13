@@ -972,7 +972,7 @@ index 22f62a9..cac9be7 100644
 +  opacity: 1;
 +}
 diff --git a/src/tile/SpotlightTile.test.tsx b/src/tile/SpotlightTile.test.tsx
-index 854d853..df17603 100644
+index 854d853..cbe3173 100644
 --- a/src/tile/SpotlightTile.test.tsx
 +++ b/src/tile/SpotlightTile.test.tsx
 @@ -11,6 +11,7 @@ import { axe } from "vitest-axe";
@@ -1096,7 +1096,7 @@ index 854d853..df17603 100644
 +  expect(screen.queryByText("Stream paused")).not.toBeInTheDocument();
 +});
 +
-+test("A visible stream has no paused block", async () => {
++test("A visible stream has no paused block", () => {
 +  const vm = mockRemoteScreenShare(
 +    mockRtcMembership("@alice:example.org", "AAAA"),
 +    { rawDisplayName: "Alice" },
