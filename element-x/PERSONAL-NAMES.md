@@ -92,6 +92,7 @@ inside `matrix-rust-sdk` changes, which is why no fork of it exists.
 | What | Where |
 | --- | --- |
 | Author of a message, forwarder, quote, last reply of a thread, "X invited Y" | `RustTimeline.timelineItems` — the items are mapped from the SDK without names and the names are laid over the mapped list |
+| Author in the reply preview above the composer, and in the quote of a sent reply | `RustTimeline.loadReplyDetails` — both branches (the event already in the timeline, and the one fetched from the SDK) go through one overlay, so the preview and the sent quote name the person the same way |
 | Member list, mention suggestions and pills, typing notice, read receipts and reactions sheets | `RustBaseRoom.membersStateFlow` (`PlotinaMembersStateFlow`) — everything that reads the room's members inherits it |
 | Member profile screen, send-failure identity warnings | `RustBaseRoom.userDisplayName` |
 | Room-list rows: the room's name, its heroes, the inviter and the author of the preview | `RoomListRoomSummaryFactory` (one overlay per row) |
@@ -155,6 +156,9 @@ name both carry `(@mxid)`.
   marker, an empty map changes nothing, every list of a members state is renamed, a sender profile is
   renamed but keeps the SDK's flag when that person has no name, and a group keeps its own name while
   its heroes carry personal names.
+- `libraries/matrix/impl` — `RustTimelineTest`: `loadReplyDetails` for an event already in the timeline
+  names the quoted author with the account's personal name (the reply preview the composer shows), as
+  does the same call for an event the SDK has to fetch (the sent quote).
 - `libraries/matrix/impl` — `RustBaseRoomPersonalNamesTest`: a member of a group is shown under the
   account's personal name, the members it did not name keep theirs, a rename reaches an open member
   list without a re-fetch, the room info names its heroes while the group keeps its own name, and

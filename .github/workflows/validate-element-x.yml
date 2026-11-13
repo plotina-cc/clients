@@ -59,12 +59,23 @@ jobs:
           GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 --branch "$ELEMENT_X_TAG" \
             https://github.com/element-hq/element-x-android upstream/element-x
           cd upstream/element-x
+          # The same list, in the same order, as the `patches` and build jobs of
+          # build-element-x.yml: this check has to configure the tree the release build really
+          # makes. It used to stop at 0008, so 0009..0016 were never seen here at all.
           for p in 0002-element-x-android-plotina-signing \
                    0004-element-x-android-plotina-call-url \
                    0005-element-x-android-plotina-app-link \
                    0006-element-x-android-plotina-account-provider \
                    0007-element-x-android-plotina-push-gateway \
-                   0008-element-x-android-plotina-sentry; do
+                   0008-element-x-android-plotina-sentry \
+                   0009-plotina-application-id \
+                   0010-plotina-visible-strings \
+                   0011-plotina-locales \
+                   0012-plotina-about-minimal \
+                   0013-plotina-analytics-off \
+                   0014-plotina-self-updater \
+                   0015-plotina-dm-personal-names \
+                   0016-plotina-contact-names-for-people; do
             echo "==> $p"
             git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/$p.patch"
           done

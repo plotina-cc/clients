@@ -110,7 +110,8 @@ jobs:
             0012-plotina-about-minimal \
             0013-plotina-analytics-off \
             0014-plotina-self-updater \
-            0015-plotina-dm-personal-names; do
+            0015-plotina-dm-personal-names \
+            0016-plotina-contact-names-for-people; do
             patch="$GITHUB_WORKSPACE/element-x/patches/$p.patch"
             git apply --check --verbose "$patch"
             git apply --verbose "$patch"
@@ -235,6 +236,12 @@ jobs:
           # over RoomInfo.name in Kotlin for the room list and the open chat, and m.room.name is
           # never written. DM only; groups keep their name.
           git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0015-plotina-dm-personal-names.patch"
+          # 0016: personal names for the people of a room, not for the room's title. The same
+          # cc.plotina.contact_names account data event, now keyed by the person's MXID and applied
+          # to the author of a message (quotes and thread previews included) and to the member
+          # list, so a group shows people's names instead of their logins. 0015 stays for the DM
+          # title; neither writes m.room.name or member state.
+          git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/0016-plotina-contact-names-for-people.patch"
 
       - name: Install Pillow for the icon script
         run: python3 -m pip install --quiet pillow
