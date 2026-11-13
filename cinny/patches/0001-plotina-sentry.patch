@@ -1,8 +1,9 @@
 # Plotina-Patch: plotina sentry.
 # Plotina-Marker: plotina-patch-0001-sentry
-# Plotina-Note: this patch is build-level and ships no runtime string of its own, so it
-#   writes its marker into public/res/plotina-patches/0001-sentry.txt, which the artifact carries verbatim; the gate
-#   looks for it there.
+# Plotina-Note: this patch ships no runtime string of its own, so it writes its marker into
+#   public/res/plotina-patches/0001-sentry.txt. The same patch teaches vite to copy that directory
+#   into the dist (publicDir is off in this config), which is what makes the stamp reach the
+#   artifact; the other build-level patches drop their files there too.
 
 diff --git a/src/index.tsx b/src/index.tsx
 index 6cc0ca3..d933380 100644
@@ -68,10 +69,24 @@ index 0000000..2d81f73
 +  });
 +}
 diff --git a/vite.config.js b/vite.config.js
-index a5af94d..e4bf4c3 100644
+index a5af94d..a29ac65 100644
 --- a/vite.config.js
 +++ b/vite.config.js
-@@ -129,7 +129,10 @@ export default defineConfig({
+@@ -42,6 +42,13 @@ const copyFiles = {
+       src: 'public/locales',
+       dest: 'public/',
+     },
++    // Plotina: the marker files of patches that ship no runtime string of their own (see
++    // patches/README.md). vite copies public/ selectively, so the directory is named here; the
++    // post-build gate in build-cinny-*.yml reads each marker out of this directory in the dist.
++    {
++      src: 'public/res/plotina-patches',
++      dest: 'res/',
++    },
+   ],
+ };
+ 
+@@ -129,7 +136,10 @@ export default defineConfig({
    },
    build: {
      outDir: 'dist',
@@ -83,7 +98,6 @@ index a5af94d..e4bf4c3 100644
      copyPublicDir: false,
      rollupOptions: {
        plugins: [inject({ Buffer: ['buffer', 'Buffer'] })],
-
 diff --git a/public/res/plotina-patches/0001-sentry.txt b/public/res/plotina-patches/0001-sentry.txt
 new file mode 100644
 index 0000000000000000000000000000000000000000..1111111111111111111111111111111111111111
