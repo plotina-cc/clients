@@ -273,10 +273,14 @@ Desktop does.
   `scripts/element-call-widget-core.py`, a byte copy of
   `../element-desktop/scripts/element-call-widget.py` guarded by a drift test.
 - **Noise layer is not duplicated.** `/app/noise/` already carries
-  `plotina-dfn.js` and `plotina-panel.js`, and the widget's index loads them
-  through `../../noise/` — which *is* `/noise/` under the site root. The
-  archive's own 24 MB `noise/` tree is dropped at install; a second copy would
-  initialize the denoiser twice.
+  `plotina-dfn.js`, and the widget's index loads it through `../../noise/` —
+  which *is* `/noise/` under the site root. The archive's own 24 MB `noise/`
+  tree is dropped at install; a second copy would initialize the denoiser
+  twice. The level control is Element Call's own (Settings → Audio since .17),
+  so the floating capsule script `plotina-panel.js` is gone: the widget's index
+  must not ask for it, the image layer asserts the file is absent, and
+  `scripts/check-build-context.py` (run by the unit tests) refuses a `COPY` of a
+  file the `noise/` overlay no longer carries.
 - **The build fails if ours did not land.** The widget layer runs the same
   `--check` the desktop build runs (bundle markers, the Russian label for the
   paused-stream tile, the Plotina markers, no root-absolute asset URL, no

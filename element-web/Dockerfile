@@ -49,11 +49,14 @@ RUN set -eux; \
 
 COPY noise/logic.js /app/noise/logic.js
 COPY noise/boot.js /app/noise/boot.js
-# The two files the in-call widget loads from ../../noise/ (see the widget layer
-# below). logic.js and boot.js above serve the app document; these two own the
-# microphone path inside the call.
+# The one file the in-call widget loads from ../../noise/ (see the widget layer
+# below). logic.js and boot.js above serve the app document; this one owns the
+# microphone path inside the call. Element Call .17 moved the level control into
+# Settings -> Audio and deleted the floating capsule script (plotina-panel.js),
+# so only plotina-dfn.js is left; the widget layer below asserts the panel is
+# absent, and scripts/check-build-context.py refuses a COPY of a file the noise/
+# overlay no longer carries.
 COPY noise/plotina-dfn.js /app/noise/plotina-dfn.js
-COPY noise/plotina-panel.js /app/noise/plotina-panel.js
 COPY noise/vendor/ /app/noise/vendor/
 # DPDFNet experimental backend: the two big binaries (ort wasm + model) are
 # gitignored and pinned by SHA-256 in noise/dpdfnet.lock.json — same policy as
@@ -259,7 +262,7 @@ RUN set -eux; \
     ! grep -rqs 'src="/assets/' /app/widgets/element-call/index.html; \
     ! test -e /app/widgets/element-call/noise; \
     test -s /app/noise/plotina-dfn.js; \
-    test -s /app/noise/plotina-panel.js; \
+    ! test -e /app/noise/plotina-panel.js; \
     ! test -e /tmp/element-call-widget.py
 
 USER nginx
