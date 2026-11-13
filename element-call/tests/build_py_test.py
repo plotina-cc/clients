@@ -16,6 +16,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -662,6 +663,61 @@ class ScriptContractTests(unittest.TestCase):
             ecbuild.parse_args(["--help"])
         self.assertIn("--sentry-cli FILE", cm.exception.text)
         self.assertIn("--dfn-dir DIR", cm.exception.text)
+
+
+class ApplyPatchSetTests(unittest.TestCase):
+    """The patch set is applied by the repository script, not by a copy of the loop in build.py.
+
+    The loop that used to live here was blind in the same way the workflows were: it applied what it
+    found and said nothing about how many of them landed, so a patch that stopped applying, or a
+    patch set that quietly shrank, still produced a bundle. The script sorts, checks, counts, refuses
+    a patch without a marker and writes the marker list the artifact gate consumes.
+    """
+
+    def make_fixture(self, root: Path, patch_body: str) -> Path:
+        client = root / "element-call"
+        (client / "patches").mkdir(parents=True)
+        src = root / "src"
+        src.mkdir()
+        (src / "a.txt").write_text("alpha\nbeta\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(src)], check=True)
+        subprocess.run(["git", "-C", str(src), "add", "-A"], check=True)
+        subprocess.run(
+            ["git", "-C", str(src), "-c", "user.email=t@example.invalid", "-c", "user.name=test",
+             "commit", "-qm", "init"], check=True)
+        (client / "patches" / "0002-probe.patch").write_text(
+            "# Plotina-Patch: probe\n# Plotina-Marker: probe-token\n\n"
+            "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n" + patch_body,
+            encoding="utf-8")
+        (root / "scripts").mkdir()
+        shutil.copy(REPO / "scripts" / "apply-patches.sh", root / "scripts" / "apply-patches.sh")
+        return client
+
+    def test_applies_through_the_repository_script(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            client = self.make_fixture(root, "@@ -1,2 +1,3 @@\n alpha\n+probe-token\n beta\n")
+            markers = root / "markers.txt"
+            ecbuild.apply_patch_set(client, root / "src", markers)
+            self.assertIn("probe-token", (root / "src" / "a.txt").read_text(encoding="utf-8"))
+            self.assertEqual(markers.read_text(encoding="utf-8").strip(),
+                             "0002-probe\tprobe-token")
+
+    def test_failed_patch_is_an_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            client = self.make_fixture(root, "@@ -9,2 +9,3 @@\n zeta\n+probe-token\n theta\n")
+            with self.assertRaises(ecbuild.BuildError):
+                ecbuild.apply_patch_set(client, root / "src", root / "markers.txt")
+
+    def test_missing_script_is_an_error(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            client = self.make_fixture(root, "@@ -1,2 +1,3 @@\n alpha\n+probe-token\n beta\n")
+            (root / "scripts" / "apply-patches.sh").unlink()
+            with self.assertRaises(ecbuild.BuildError) as cm:
+                ecbuild.apply_patch_set(client, root / "src", root / "markers.txt")
+            self.assertIn("apply-patches.sh", str(cm.exception))
 
 
 if __name__ == "__main__":
