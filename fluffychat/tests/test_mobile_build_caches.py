@@ -182,5 +182,51 @@ class CacheWritesAreScopedToMain(WorkflowFile):
                             "pub caching was switched off:\n" + short(step))
 
 
+class DevAndStableShareOneRustCache(WorkflowFile):
+    """The cache a release restores has to be the one main wrote.
+
+    A dev tag compiles arm64 only, a stable tag and a main push compile three
+    ABIs, and the matrix exports that difference as `CARGO_NDK_TARGETS`,
+    `CARGO_NDK_FLAGS` and `RUST_TARGETS`. `Swatinem/rust-cache` hashes every
+    variable whose name starts with `CARGO`, `CC`, `CFLAGS`, `CXX`, `CMAKE` or
+    `RUST` into the key, so those three put dev and main in two different
+    scopes: the .35-dev.6 run printed `save-if: false` and `No cache found`
+    while a 634 MB cache from main sat in the repository. The cache holds the
+    cargo registry and the `target` directory, both partitioned per target
+    triple by cargo itself, so the ABI set does not invalidate it — the
+    rust-cache step must not see those variables.
+    """
+
+    ABI_VARS = ("CARGO_NDK_TARGETS", "CARGO_NDK_FLAGS", "RUST_TARGETS")
+
+    def matrix_step(self) -> str:
+        return "\n".join(self.named_step("Work out the ABI set"))
+
+    def test_the_matrix_exports_the_abi_set_to_every_step(self) -> None:
+        matrix = self.matrix_step()
+        self.assertIn("GITHUB_ENV", matrix,
+                      "the matrix no longer exports the ABI set; this test would be "
+                      "vacuous:\n" + short(matrix))
+        self.assertIn("abi-matrix.py", matrix,
+                      "the ABI set no longer comes from abi-matrix.py:\n" + short(matrix))
+        # The variables are real: a later step reads one from the environment
+        # the matrix step just wrote into.
+        denoiser = "\n".join(self.named_step("Build native denoiser"))
+        self.assertIn("$CARGO_NDK_TARGETS", denoiser,
+                      "no step reads the exported ABI list:\n" + short(denoiser))
+
+    def test_abi_set_does_not_reach_the_rust_cache_key(self) -> None:
+        step = "\n".join(self.named_step("Swatinem/rust-cache@v2"))
+        for variable in self.ABI_VARS:
+            # `env:` on the step, with an empty value — rust-cache skips empty
+            # variables when it builds the key hash.
+            self.assertRegex(
+                step,
+                rf"{variable}:\s*(\"\"|'')",
+                f"{variable} reaches the rust-cache key, so a dev tag can never "
+                f"restore what main saved:\n" + short(step),
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
