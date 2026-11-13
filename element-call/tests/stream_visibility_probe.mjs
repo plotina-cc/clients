@@ -106,13 +106,36 @@ test("the stream visibility key is the mxid plus the source", () => {
   assert.equal(isStreamVideoKey(screenShareVolumeKey(ALICE)), false);
 });
 
-test("a stream is shown until the viewer says otherwise", () => {
+test("a stream nobody has chosen for is hidden", () => {
   const store = makeStore({
     storage: new MemoryStorage(),
     client: fakeClient().client,
   });
-  // null means "never chosen", which the ViewModel reads as "show".
-  assert.equal(store.getStreamVisible(streamVideoKey(ALICE)), null);
+  // No entry at all: the stream somebody else shares arrives hidden, and the
+  // viewer turns it on with the tile's button.
+  assert.equal(store.getStreamVisible(streamVideoKey(ALICE)), false);
+});
+
+test("a stored choice to show a stream is honoured", () => {
+  // What an older build wrote when the default was still "show": it still
+  // means "show", so upgrading does not hide a stream the viewer asked for.
+  const store = makeStore({
+    storage: new MemoryStorage(),
+    client: fakeClient({
+      content: { [streamVideoKey(ALICE)]: { visible: true, ts: 2000 } },
+    }).client,
+  });
+  assert.equal(store.getStreamVisible(streamVideoKey(ALICE)), true);
+});
+
+test("a stored choice to hide a stream is still hidden", () => {
+  const store = makeStore({
+    storage: new MemoryStorage(),
+    client: fakeClient({
+      content: { [streamVideoKey(ALICE)]: { visible: false, ts: 2000 } },
+    }).client,
+  });
+  assert.equal(store.getStreamVisible(streamVideoKey(ALICE)), false);
 });
 
 test("hiding a stream is remembered", () => {
@@ -135,6 +158,34 @@ test("showing a stream again is remembered", () => {
   assert.equal(store.getStreamVisible(key), true);
 });
 
+test("showing a stream is not written to the account", async () => {
+  const storage = new MemoryStorage();
+  const client = fakeClient();
+  const store = makeStore({ storage, client: client.client });
+  const key = streamVideoKey(ALICE);
+  store.setStreamVisible(key, true);
+  // makeStore debounces by 0 ms: give a write the chance to happen, then check
+  // it did not. "Watch" applies to what the viewer is watching now, not to
+  // every future share from that person, so hiding is the only synced choice.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(storage.writes, 0);
+  assert.equal(client.writes.length, 0);
+  assert.equal(store.getStreamVisible(key), true);
+});
+
+test("a stream the viewer showed is hidden again at the next start", () => {
+  const storage = new MemoryStorage();
+  const client = fakeClient();
+  const key = streamVideoKey(ALICE);
+  makeStore({ storage, client: client.client }).setStreamVisible(key, true);
+  // A restart is a fresh store: the page-session choice is gone, and with no
+  // entry in the account the stream is hidden again.
+  assert.equal(
+    makeStore({ storage, client: client.client }).getStreamVisible(key),
+    false,
+  );
+});
+
 test("a visibility entry is not read back as a volume", () => {
   const store = makeStore({
     storage: new MemoryStorage(),
@@ -146,7 +197,9 @@ test("a visibility entry is not read back as a volume", () => {
   // one, or hiding a stream would silence its audio too.
   assert.equal(store.get(key), null);
   assert.equal(store.get(ALICE), null);
-  assert.equal(store.getStreamVisible(ALICE), null);
+  // A bare MXID names a microphone, not a stream: no visibility entry exists
+  // for it, and a stream with no entry is hidden.
+  assert.equal(store.getStreamVisible(ALICE), false);
 });
 
 test("the microphone, the share's audio and its video are separate keys", () => {
@@ -276,15 +329,17 @@ test("a visibility entry without a boolean is junk", () => {
     client: fakeClient({ content: { [streamVideoKey(ALICE)]: { visible: "no" } } })
       .client,
   });
-  assert.equal(store.getStreamVisible(streamVideoKey(ALICE)), null);
+  assert.equal(store.getStreamVisible(streamVideoKey(ALICE)), false);
 });
 
 test("keys that are not a Matrix user id are not stored", () => {
   const storage = new MemoryStorage();
   const store = makeStore({ storage, client: fakeClient().client });
   for (const key of ["alice", "@alice", "@a:b#nonsense", ""]) {
-    store.setStreamVisible(key, false);
-    assert.equal(store.getStreamVisible(key), null, `accepted ${key}`);
+    // "show" rather than "hide": if a junk key were accepted it would read
+    // back as shown, which is what makes this a real check.
+    store.setStreamVisible(key, true);
+    assert.equal(store.getStreamVisible(key), false, `accepted ${key}`);
   }
   assert.equal(storage.writes, 0);
 });
@@ -294,18 +349,19 @@ test("the microphone's key cannot be used to hide a stream", () => {
     storage: new MemoryStorage(),
     client: fakeClient().client,
   });
+  store.set(ALICE, 0.4);
   // Only the video suffix names a visibility entry; a bare MXID must not turn
   // into one, or hiding somebody's video would overwrite their volume.
-  store.setStreamVisible(ALICE, false);
-  assert.equal(store.getStreamVisible(ALICE), null);
-  assert.equal(store.get(ALICE), null);
+  store.setStreamVisible(ALICE, true);
+  assert.equal(store.getStreamVisible(ALICE), false);
+  assert.deepEqual(store.get(ALICE), { volume: 0.4, muted: false });
 });
 
 test("without an account nothing is remembered", () => {
   const storage = new MemoryStorage();
   const store = makeStore({ storage, client: null });
-  store.setStreamVisible(streamVideoKey(ALICE), false);
-  assert.equal(store.getStreamVisible(streamVideoKey(ALICE)), null);
+  store.setStreamVisible(streamVideoKey(ALICE), true);
+  assert.equal(store.getStreamVisible(streamVideoKey(ALICE)), false);
   assert.equal(storage.writes, 0);
 });
 
