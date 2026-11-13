@@ -69,7 +69,11 @@ OFF_LIMITS = (
     "pnpm-lock.yaml",
 )
 
-VISIBILITY_KEYS = ("screen_share_visibility", "hide_stream", "stream_hidden")
+VISIBILITY_KEYS = ("screen_share_visibility", "show_stream", "stream_hidden")
+
+# The single-item menu this patch used to have; the button replaced it and its
+# label has no other reader, so it must not come back.
+RETIRED_KEYS = ("hide_stream",)
 
 # How the tile refers to them in the source.
 VISIBILITY_REFS = tuple(f"video_tile.{key}" for key in VISIBILITY_KEYS)
@@ -150,19 +154,30 @@ class PatchTests(unittest.TestCase):
         self.assertIn("videoEnabled && videoVisible", tile)
         self.assertIn("video={videoVisible ? props.video : undefined}", tile)
 
-    def test_the_ui_is_a_menu_item_with_a_state(self) -> None:
+    def test_the_ui_is_a_bare_toggle_not_a_menu(self) -> None:
         tile = "\n".join(added_lines(sections()[TILE]))
-        self.assertIn("<ToggleMenuItem", tile)
-        self.assertIn("checked={!videoVisible}", tile)
+        # A plain button: the click itself is the action.
+        self.assertIn("onClick={onToggle}", tile)
+        self.assertIn("vm.setVideoVisible(!vm.videoVisible$.value)", tile)
+        # The state is readable without hovering or opening anything.
+        self.assertIn("aria-pressed={!videoVisible}", tile)
         for key in VISIBILITY_REFS:
             self.assertIn(key, tile)
+        # ...and the eye follows it.
+        self.assertIn(
+            "const Icon = videoVisible ? VisibilityOnIcon : VisibilityOffIcon;",
+            tile,
+        )
         # It sits next to the existing volume button, in the same corner.
         self.assertIn("ScreenShareVisibilityButton", tile)
         self.assertIn("ScreenShareVolumeButton", sections()[TILE])
-        # ...and the menu stays open while toggling.
-        self.assertIn("e.preventDefault();", tile)
+        # Nothing left of the one-item menu it used to be.
+        for gone in ("<Menu", "<ToggleMenuItem", "menuitemcheckbox"):
+            self.assertNotIn(gone, tile)
         ui_test = "\n".join(added_lines(sections()[TILE_TEST]))
-        self.assertIn('"menuitemcheckbox"', ui_test)
+        self.assertNotIn('"menuitemcheckbox"', ui_test)
+        self.assertIn('"aria-pressed"', ui_test)
+        self.assertIn('"Show screen share"', ui_test)
 
     def test_a_viewer_choice_is_remembered_per_mxid(self) -> None:
         added = "\n".join(added_lines(sections()[SCREEN_SHARE_TEST]))
@@ -376,7 +391,8 @@ class AppliedSourceTests(unittest.TestCase):
     def test_the_tile_hides_the_track_not_just_the_pixels(self) -> None:
         source = self.read(TILE)
         self.assertIn("video={videoVisible ? props.video : undefined}", source)
-        self.assertIn("<ToggleMenuItem", source)
+        self.assertIn("aria-pressed={!videoVisible}", source)
+        self.assertNotIn("<ToggleMenuItem", source)
 
     def test_upstream_audio_controls_are_byte_identical(self) -> None:
         # Compare with the same file in the untouched archive.
@@ -399,6 +415,16 @@ class AppliedSourceTests(unittest.TestCase):
         for key in VISIBILITY_KEYS:
             self.assertIn(key, en)
             self.assertIn(key, ru)
+        # No dead keys: the retired menu label has no reader left in the tree.
+        source = "\n".join(
+            self.read(path) for path in (SCREEN_SHARE, TILE)
+        )
+        for key in RETIRED_KEYS:
+            self.assertNotIn(key, en, f"{key} is still in the English catalog")
+            self.assertNotIn(key, ru, f"{key} is still in the Russian catalog")
+            self.assertNotIn(
+                f"video_tile.{key}", source, f"{key} is still referenced"
+            )
 
 
 if __name__ == "__main__":
