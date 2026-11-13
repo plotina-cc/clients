@@ -49,14 +49,41 @@ stream must not remove the only way to unhide it.
 | `src/state/media/RemoteScreenShareViewModel.ts` | new `videoVisible$` (the viewer's choice) next to upstream's `videoEnabled$` (whether the publisher is sharing and connected). `setVideoVisible` / `toggleVideoVisible` change it; a `combineLatest` of the screen share publication and `videoVisible$` calls `setSubscribed`. |
 | `src/state/PersistentVolume.ts` | the store from `0004` gains a `#screenshare-video` key namespace and `getStreamVisible` / `setStreamVisible` (no entry = hidden); the map, debounce, merge and limit are shared with the volumes. |
 | `src/tile/SpotlightTile.tsx` | `ScreenShareVisibilityButton` (one `<button>` with `VisibilityOnIcon`/`VisibilityOffIcon`, `aria-pressed` and a state-dependent label) next to `ScreenShareVolumeButton`; `SpotlightRemoteScreenShareItem` does not hand the track to `MediaView` while hidden, and passes the paused block as `MediaView`'s `overlay`. |
-| `src/tile/SpotlightTile.module.css` | the paused block and its Watch button (centred, white on the dark scrim, `opacity: 1` so it does not wait for a hover). |
-| `src/tile/MediaView.tsx`, `MediaView.module.css` | a generic `overlay` layer: above the background (avatar, video), below the foreground chrome; the chrome itself is pointer-transparent (`.fg { pointer-events: none }`, its own children opt back in) so a click reaches the overlay's buttons rather than being taken by the chrome that covers the tile. |
+| `src/tile/SpotlightTile.module.css` | the paused block and its Watch button (centred, white on the dark scrim, `opacity: 1` so it does not wait for a hover); `@media (max-width: 480px) and (max-height: 480px)` + `.pipHidden` — the corner eye is not drawn in a picture-in-picture window (see below). |
+| `src/tile/MediaView.tsx`, `MediaView.module.css` | a generic `overlay` layer: above the background (avatar, video), below the foreground chrome, so the volume and eye controls stay reachable; the chrome itself is pointer-transparent (`.fg { pointer-events: none }`, its own children opt back in) so a click reaches the overlay's buttons rather than being taken by the chrome that covers the tile. |
 | `locales/{en,ru}/app.json` | `screen_share_visibility`, `show_stream`, `stream_paused`, `watch_stream`. The old menu label `hide_stream` went with the menu, and the old status line `stream_hidden` was replaced by the paused tile. |
 | `src/utils/test.ts` | the shared remote-participant mock's publication stub understands `setSubscribed`. |
 
 `videoEnabled$` is not changed or reused: it still means "this share is being published and we are
 connected", which is what other code (waiting states, the presenter bin) reads. Hiding a stream
 must not look like the publisher stopped sharing.
+
+## In a picture-in-picture window (Android PiP)
+
+Android PiP is this same page in a WebView resized down to a floating window a few hundred px on its
+longest side. The call draws a video there and nothing that can be pressed, so a corner button is not
+a control any more: it is chrome painted over the shared screen that also swallows the touch that was
+meant for the video. The eye is therefore not drawn in such a window.
+
+The mode is decided by the **viewport**, not by the platform: `@media (max-width: 480px) and
+(max-height: 480px)` hides `.pipHidden`, which the eye button carries. Both sides of the query have
+to hold, which is what keeps a full-screen call on a phone — ≥ ~360 CSS px wide and ~600 tall
+upright, ~700+ wide and ~360 tall sideways — and any desktop window outside the rule. Nothing sniffs
+a UA string and nothing measures the window in JS.
+
+The noise capsule (`noise/plotina-panel.js`, injected into the same document) carries the identical
+query for the same reason, so the two overlays cannot disagree about when they are in a PiP window —
+which is how they behaved before: shrinking the window lost the capsule and kept the eye. The capsule
+keeps its usual place in a full-screen call; moving it is a separate decision.
+
+`tests/test_pip_hides_controls.py` keeps the two together and proves the rule does something: the
+class and the query are asserted in both artifacts, and both pages are rendered in headless chromium
+in iframes of 390x844, 844x390, 1280x800, 320x180 and 480x270 — an iframe's document gets the
+iframe's viewport, which is how a 320x180 window can be measured at all (chromium clamps
+`--window-size` at 500 px wide). In the PiP sizes both controls must be `display: none` and
+`document.elementFromPoint` at their corners must find the stream; in the call sizes both must be
+there and hit-testable. Negative controls mutate the query so it never fires, and then so it fires
+for the capsule only, and require the same check to fail.
 
 ## What is *not* touched
 
@@ -164,7 +191,7 @@ Run from `element-call/` with the sources of the pinned tag plus the patch serie
 npx vitest run --project=unit        # 812 passed | 9 skipped, 99 files
 npx tsc --noEmit                     # clean
 npx oxlint src/state src/tile src/utils/test.ts   # 2 pre-existing no-meaningless-void-operator in Publisher.ts (0001), no new ones
-python3 -m unittest discover -s element-call/tests   # 90 tests, OK
+python3 -m unittest discover -s element-call/tests   # 101 tests, OK
 NODE_OPTIONS=--max-old-space-size=16384 npx vite build   # exit 0
 ```
 
@@ -199,6 +226,8 @@ The new coverage, in `src/state/media/RemoteScreenShareViewModel.test.ts` and tw
 `tests/stream_visibility_probe.mjs` re-checks the store rules under plain node with no
 `node_modules` (22 cases), and `tests/test_stream_video_toggle.py` applies the whole series to the
 pinned tag before running it, so the probe runs against the file that ships.
+`tests/test_pip_hides_controls.py` renders the eye from those same artifacts in headless chromium at
+the sizes that matter (and skips the rendering half when no chromium is installed).
 
 ## Live proof
 

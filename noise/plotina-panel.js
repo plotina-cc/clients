@@ -176,6 +176,13 @@
   style.textContent = [
     "#plotina-noise-panel{position:fixed;right:calc(12px + env(safe-area-inset-right,0px));bottom:calc(140px + env(safe-area-inset-bottom,0px));z-index:900;display:flex;flex-direction:column;align-items:flex-end;gap:8px;font:13px/1.35 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:var(--pp-fg);-webkit-tap-highlight-color:transparent;touch-action:manipulation}",
     "#plotina-noise-panel[hidden]{display:none}",
+    /* A picture-in-picture window is this same WebView resized down to a
+       floating window a few hundred px on its longest side. There is no call
+       UI to press there, so the capsule is dead weight painted over the
+       stream. Same query, same threshold as the corner eye
+       (element-call/patches/0005): one rule for both controls, and
+       element-call/tests/test_pip_hides_controls.py fails if the two drift. */
+    "@media (max-width: 480px) and (max-height: 480px){#plotina-noise-panel{display:none}}",
     "#plotina-noise-panel[data-theme=dark]{--pp-bg:rgba(28,28,32,.96);--pp-fg:#f2f2f2;--pp-border:rgba(255,255,255,.18);--pp-muted:rgba(255,255,255,.62);--pp-accent:#3ccf9a;--pp-track:rgba(255,255,255,.22)}",
     "#plotina-noise-panel[data-theme=light]{--pp-bg:rgba(255,255,255,.97);--pp-fg:#1b1b1b;--pp-border:rgba(0,0,0,.14);--pp-muted:rgba(0,0,0,.55);--pp-accent:#17795a;--pp-track:rgba(0,0,0,.16)}",
     "#plotina-noise-panel .pp-pill{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 14px;border-radius:18px;border:1px solid var(--pp-border);background:var(--pp-bg);color:var(--pp-fg);box-shadow:0 2px 10px rgba(0,0,0,.28);font:inherit;cursor:pointer;white-space:nowrap}",

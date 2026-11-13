@@ -1098,10 +1098,10 @@ index d574416..4061792 100644
          <div className={styles.reactions}>
            <RaisedHandIndicator
 diff --git a/src/tile/SpotlightTile.module.css b/src/tile/SpotlightTile.module.css
-index 22f62a9..cac9be7 100644
+index 22f62a9..eff2c86 100644
 --- a/src/tile/SpotlightTile.module.css
 +++ b/src/tile/SpotlightTile.module.css
-@@ -209,3 +209,44 @@ Please see LICENSE in the repository root for full details.
+@@ -209,3 +209,65 @@ Please see LICENSE in the repository root for full details.
  .indicators > .item[data-visible="true"] {
    background: var(--cpd-color-gray-1400);
  }
@@ -1145,6 +1145,27 @@ index 22f62a9..cac9be7 100644
 +   hidden by the tile's hover-only button rule above. */
 +.tile .streamPaused button {
 +  opacity: 1;
++}
++
++/* Plotina: our own chrome, gone in a picture-in-picture window.
++
++   Android PiP is a WebView resized down to a floating window a few hundred px
++   on its longest side; the call then draws a video and nothing that can be
++   pressed, so every control we add is dead weight painted over the shared
++   screen. The mode is decided by the viewport alone — no platform sniffing, no
++   UA string — and this is the one place the threshold is written down: the
++   noise capsule (noise/plotina-panel.js, injected into this same document)
++   carries the identical query, and element-call/tests/test_pip_hides_controls.py
++   fails if the two ever drift apart again.
++
++   What must stay outside the window: a full-screen call on a phone, in either
++   orientation (a phone is at least ~360 CSS px wide and ~600 tall in portrait,
++   and ~360 tall in landscape, so one of the two sides is always above 480), and
++   any desktop window. */
++@media (max-width: 480px) and (max-height: 480px) {
++  .pipHidden {
++    display: none;
++  }
 +}
 diff --git a/src/tile/SpotlightTile.test.tsx b/src/tile/SpotlightTile.test.tsx
 index 854d853..0238c3e 100644
@@ -1544,7 +1565,7 @@ index 854d853..0238c3e 100644
    const pickupState$ = new BehaviorSubject<
      RingingMediaViewModel["pickupState$"]["value"]
 diff --git a/src/tile/SpotlightTile.tsx b/src/tile/SpotlightTile.tsx
-index 97e1f4a..33a77d9 100644
+index 97e1f4a..8414d34 100644
 --- a/src/tile/SpotlightTile.tsx
 +++ b/src/tile/SpotlightTile.tsx
 @@ -8,6 +8,7 @@ Please see LICENSE in the repository root for full details.
@@ -1644,7 +1665,7 @@ index 97e1f4a..33a77d9 100644
    return vm.local ? (
      <SpotlightScreenShareItem vm={vm} videoEnabled {...baseProps} />
    ) : (
-@@ -380,6 +432,46 @@ const ScreenShareVolumeButton: FC<ScreenShareVolumeButtonProps> = ({ vm }) => {
+@@ -380,6 +432,49 @@ const ScreenShareVolumeButton: FC<ScreenShareVolumeButtonProps> = ({ vm }) => {
    );
  };
  
@@ -1678,7 +1699,10 @@ index 97e1f4a..33a77d9 100644
 +    : t("video_tile.show_stream");
 +  return (
 +    <button
-+      className={styles.expand}
++      // Plotina: the corner eye is chrome, and in a PiP window there is no call
++      // UI to reach with it. `pipHidden` takes it off the tile there; the rule
++      // and the threshold live in SpotlightTile.module.css.
++      className={classNames(styles.expand, styles.pipHidden)}
 +      aria-label={label}
 +      aria-pressed={!videoVisible}
 +      onClick={onToggle}
@@ -1691,7 +1715,7 @@ index 97e1f4a..33a77d9 100644
  interface Props {
    ref?: Ref<HTMLDivElement>;
    vm: SpotlightTileViewModel;
-@@ -536,6 +628,9 @@ export const SpotlightTile: FC<Props> = ({
+@@ -536,6 +631,9 @@ export const SpotlightTile: FC<Props> = ({
        </div>
  
        <div className={styles.bottomRightButtons}>

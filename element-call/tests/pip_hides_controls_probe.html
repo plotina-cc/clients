@@ -1,0 +1,133 @@
+<!doctype html>
+<!--
+  Child page of the PiP viewport probe, served as /room/index.html by
+  tests/test_pip_hides_controls.py.
+
+  It is a stand-in for the inside of a picture-in-picture window: the shared
+  video fills the viewport, the corner eye sits on the bottom-right of it, and
+  the real noise capsule script is loaded exactly as the bundle loads it. The
+  stylesheet it links (/tile.css) is the added CSS of
+  patches/0005-plotina-stream-video-toggle.patch, written out by the test, so
+  what is measured here is the shipped rule and not a copy of it.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>pip probe</title>
+<link rel="stylesheet" href="/tile.css">
+<style>
+  html,
+  body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #101014;
+  }
+  /* The stream this window is showing. */
+  #stage {
+    position: absolute;
+    inset: 0;
+    background: #2b6b4f;
+    color: #fff;
+    font: 12px/1.4 sans-serif;
+  }
+  /* Where the eye sits on the real tile: bottom-right corner of the tile. The
+     position is the fixture's; the class that can hide it is the patch's. */
+  #eye {
+    position: absolute;
+    right: 24px;
+    bottom: 24px;
+    width: 36px;
+    height: 36px;
+    border: 0;
+    border-radius: 18px;
+    background: #fff;
+    color: #000;
+  }
+</style>
+</head>
+<body>
+<div id="stage">shared screen</div>
+<button id="eye" class="expand pipHidden" type="button" aria-label="eye">eye</button>
+<script>
+/* The bundle sets this before the capsule script loads (plotina-dfn.js does it
+   in the real build); without it the capsule decides it is not in Element Call
+   and never mounts, which would make the probe measure nothing. */
+window.__plotinaEc = true;
+</script>
+<script src="/noise/plotina-panel.js"></script>
+<script>
+/*
+ * Measures this viewport and publishes the facts to the parent harness as
+ * window.__pipReport. Nothing here decides pass or fail: the test does, so a
+ * missing rule shows up as a fact ("noise=none") rather than as silence.
+ */
+(function () {
+  "use strict";
+
+  /** Names the element under a point: ours, or the stream underneath. */
+  function describe(el) {
+    if (!el) return "nothing";
+    if (el.closest && el.closest("#plotina-noise-panel")) return "noise";
+    if (el.closest && el.closest("#eye")) return "eye";
+    if (el.id === "stage" || (el.closest && el.closest("#stage"))) return "stage";
+    return el.id || el.tagName || "unknown";
+  }
+
+  function point(x, y) {
+    return [Math.max(0, Math.min(innerWidth - 1, x)), Math.max(0, Math.min(innerHeight - 1, y))];
+  }
+
+  function measure() {
+    var panel = document.getElementById("plotina-noise-panel");
+    var eye = document.getElementById("eye");
+    /* The capsule's pill sits 12px from the right edge and its bottom edge is
+       140px above the bottom (see the base rule in plotina-panel.js); the eye
+       is 24px in from the bottom-right corner here. */
+    var onNoise = point(innerWidth - 30, innerHeight - 158);
+    var onEye = point(innerWidth - 30, innerHeight - 42);
+    return {
+      width: innerWidth,
+      height: innerHeight,
+      noiseDisplay: panel ? getComputedStyle(panel).display : "missing",
+      eyeDisplay: getComputedStyle(eye).display,
+      noiseHit: describe(document.elementFromPoint(onNoise[0], onNoise[1])),
+      eyeHit: describe(document.elementFromPoint(onEye[0], onEye[1])),
+    };
+  }
+
+  /* The eye's click handler lives in the tile's React component, which this
+     probe does not mount; the capsule keeps its own state in the page, so the
+     capsule is the one that can show in the same run that a full-screen call
+     still gets a working control: one click opens the slider card. A
+     display:none capsule cannot be clicked, so the card stays shut — which is
+     what the PiP sizes report. */
+  function publish() {
+    var report = measure();
+    var card = document.getElementById("plotina-noise-card");
+    report.cardOpen = card ? !card.hidden : false;
+    if (report.noiseDisplay !== "none" && report.noiseDisplay !== "missing") {
+      var pill = document.querySelector("#plotina-noise-panel .pp-pill");
+      if (pill) pill.click();
+      setTimeout(function () {
+        report.cardOpen = card ? !card.hidden : false;
+        window.__pipReport = report;
+      }, 50);
+      return;
+    }
+    window.__pipReport = report;
+  }
+
+  /* The capsule mounts itself on DOMContentLoaded and keeps a 2s timer; wait
+     for the load event and one more turn, then report. */
+  if (document.readyState === "complete") {
+    setTimeout(publish, 200);
+  } else {
+    window.addEventListener("load", function () {
+      setTimeout(publish, 200);
+    });
+  }
+})();
+</script>
+</body>
+</html>
