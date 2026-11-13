@@ -33,6 +33,12 @@
 //    already reports the room as read: same;
 //  * a notification posted from a payload that *does* carry a client name
 //    (desktop-style push) is dismissed as well — both id shapes are matched;
+//  * a notification the push helper posted from its fallback (the event fetch
+//    timed out; `event_id_only` payload, so no group key at all) is dismissed
+//    like any other — patch 0026, the case `.35-dev.2` still shipped and QA
+//    reproduced 3/3 (`t_5d226c8d` §5);
+//  * that fallback for a room that is still unread stays in the shade, and an
+//    ungrouped notification of another account is never touched;
 //  * a room that is still unread is never cancelled;
 //  * the same state arriving again cancels nothing and rebuilds nothing
 //    (idempotent, one `getActiveNotifications` walk, no repeat of the work);
@@ -89,8 +95,12 @@ class _QuietHttpClient extends http.BaseClient {
 }
 
 /// Stands in for the Android notifications plugin: `show` puts the notification
-/// into the shade exactly as posted, `cancel` takes it out, every call is
-/// recorded.
+/// into the shade exactly as posted — **including its group key**, which is read
+/// from the details the caller passed. That field is not decoration: the cancel
+/// walk used to select on it, so a fake that hardcoded a group key of its own
+/// would hide every notification that reached the shade without one, which is
+/// exactly the notification QA found hanging (`t_5d226c8d` §2). `cancel` takes
+/// it out, every call is recorded.
 class _FakeNotifications extends AndroidFlutterLocalNotificationsPlugin {
   final active = <ActiveNotification>[];
   final cancelled = <int>[];
@@ -127,7 +137,7 @@ class _FakeNotifications extends AndroidFlutterLocalNotificationsPlugin {
     active.add(
       ActiveNotification(
         id: id,
-        groupKey: _clientName,
+        groupKey: notificationDetails?.groupKey,
         title: title,
         body: body,
       ),
@@ -237,11 +247,38 @@ void main() {
     clientName: clientName,
     roomId: roomId,
     notificationDetails: NotificationDetails(
-      android: AndroidNotificationDetails('messages', 'Messages'),
+      android: AndroidNotificationDetails(
+        'messages',
+        'Messages',
+        // What `_tryPushHelper` puts on the same call: the client's own group
+        // key. A room notification without it would be outside the group the
+        // summary counts, which is not a shape the normal path produces.
+        groupKey: _clientName,
+      ),
     ),
     title: 'Chat',
     body: body,
     payload: FluffyChatPushPayload(clientName, roomId, r'$event').toString(),
+  );
+
+  /// Posts the notification the push helper falls back to when it could not
+  /// load the event — through the production function, which is the body of
+  /// that `catch`. Nothing here chooses the group key: the payload is the shape
+  /// our gateway delivers (`event_id_only`, no `devices`), so production posts
+  /// it with no group key at all, exactly as QA read it off the shade
+  /// (`t_5d226c8d` §2: `groupKey` absent, channel `fluffychat_push`).
+  Future<int> postFallback(
+    String roomId, {
+    int unread = 1,
+  }) => plotinaShowFallbackNotification(
+    flutterLocalNotificationsPlugin: plugin,
+    notification: PushNotification.fromJson({
+      'room_id': roomId,
+      'event_id': r'$fallbackEvent',
+      'prio': 'high',
+      'counts': {'unread': unread},
+    }),
+    l10n: l10n,
   );
 
   setUp(() async {
@@ -354,6 +391,70 @@ void main() {
 
     expect(platform.roomCancels, [idA]);
     expect(platform.shadeRoomIds, isEmpty);
+  });
+
+  // The defect `.35-dev.2` still had, and the reason for patch 0026: the
+  // notification that stays in the shade is the one the push helper posts from
+  // its `catch` when the event cannot be fetched. Our gateway delivers
+  // `event_id_only`, so that payload has no `devices[0].data.client_name`, and
+  // the fallback lands in the shade with **no group key** (QA `t_5d226c8d` §2).
+  // A cancel walk that selected on the group key dropped it before it ever
+  // looked at which room it belongs to, so nothing ever dismissed it.
+  test('the fallback the push helper posts is dismissed when the room is '
+      'read', () async {
+    final subscription = listenLikeTheApp();
+    addTearDown(subscription.cancel);
+    final idA = await postFallback(_roomA, unread: 1);
+    // The id is still the room's own hash and the notification is still a room
+    // notification — only the group key is missing, which is why an id-only fix
+    // (patch 0025) did not reach it.
+    expect(idA, _roomA.hashCode);
+    expect(platform.active.single.groupKey, isNull);
+
+    await client.handleSync(
+      _syncUpdate({_roomA: _joinedRoom(unread: 0, receiptFromMe: true)}),
+    );
+    await pumpEventQueue();
+
+    expect(platform.roomCancels, [idA]);
+    expect(platform.shadeRoomIds, isEmpty);
+  });
+
+  test('a fallback notification of a room that is still unread stays '
+      'in the shade', () async {
+    final subscription = listenLikeTheApp();
+    addTearDown(subscription.cancel);
+    final idB = await postFallback(_roomB, unread: 2);
+
+    // Room A is read, room B is not: only A's notification may go.
+    await client.handleSync(
+      _syncUpdate({
+        _roomA: _joinedRoom(unread: 0),
+        _roomB: _joinedRoom(unread: 2),
+      }),
+    );
+    await pumpEventQueue();
+
+    expect(platform.roomCancels, isEmpty);
+    expect(platform.shadeRoomIds, [idB]);
+  });
+
+  test('an ungrouped notification of another account is not touched', () async {
+    // Matching every notification without a group key would reach into another
+    // account's shade: its rooms are not in this client's room list, so the
+    // walk must leave them alone. This is what keeps the fix narrow.
+    final subscription = listenLikeTheApp();
+    addTearDown(subscription.cancel);
+    const otherAccountRoom = '!otherAccountRoom:elsewhere.test';
+    final foreignId = await postFallback(otherAccountRoom, unread: 1);
+
+    await client.handleSync(
+      _syncUpdate({_roomA: _joinedRoom(unread: 0, receiptFromMe: true)}),
+    );
+    await pumpEventQueue();
+
+    expect(platform.roomCancels, isEmpty);
+    expect(platform.shadeRoomIds, [foreignId]);
   });
 
   test('a room that is still unread keeps its notification', () async {
