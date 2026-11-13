@@ -194,7 +194,7 @@ class InstallReplacesWidgetTest(unittest.TestCase):
             second = (webapp / MOUNT / "index.html").read_text(encoding="utf-8")
             self.assertEqual(first, second)
             self.assertEqual(second.count("noise/plotina-dfn.js"), 1)
-            self.assertEqual(second.count("noise/plotina-panel.js"), 1)
+            self.assertEqual(second.count("noise/plotina-panel.js"), 0)
 
 
 class NoiseWiringTest(unittest.TestCase):
@@ -209,13 +209,14 @@ class NoiseWiringTest(unittest.TestCase):
             html = (webapp / MOUNT / "index.html").read_text(encoding="utf-8")
             self.assertNotIn('src="/noise/', html)
             self.assertIn('src="../../noise/plotina-dfn.js"', html)
-            self.assertIn('src="../../noise/plotina-panel.js"', html)
+            # EC .17 deleted the floating panel: the archive tag is stripped and
+            # the desktop side must not put one back.
+            self.assertNotIn("plotina-panel", html)
             # boot.js replaces getUserMedia for the app document; on the widget
             # page it would no-op on window.__plotinaEc while adding a second
             # wrapper to the same document, so it must not be injected here.
             self.assertNotIn("noise/boot.js", html)
             self.assertEqual(html.count("noise/plotina-dfn.js"), 1)
-            self.assertEqual(html.count("noise/plotina-panel.js"), 1)
 
     def test_install_keeps_the_plotina_marker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -51,7 +51,9 @@ class WidgetNoisePatchTest(unittest.TestCase):
             after = widget.read_text(encoding="utf-8")
             self.assertEqual(before, after)
             self.assertEqual(after.count("noise/plotina-dfn.js"), 1)
-            self.assertEqual(after.count("noise/plotina-panel.js"), 1)
+            # The floating panel went away with Element Call .17 (the level is a
+            # Settings -> Audio row now); no tag may reintroduce it.
+            self.assertEqual(after.count("noise/plotina-panel.js"), 0)
             self.assertNotIn("noise/boot.js", after)
 
     def test_widget_without_the_tags_fails_the_build(self) -> None:

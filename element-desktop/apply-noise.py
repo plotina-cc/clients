@@ -41,8 +41,11 @@ TAG = '<script src="noise/logic.js"></script><script src="noise/boot.js" defer><
 # vector://vector/webapp/, so root-absolute /noise/... would miss the archive.
 WIDGET_TAGS = (
     '<script src="../../noise/plotina-dfn.js"></script>',
-    '<script src="../../noise/plotina-panel.js"></script>',
 )
+# The floating level panel was removed with Element Call .17: the level is a row
+# in the call's own Settings -> Audio, and noise/plotina-panel.js no longer
+# exists. A widget document that still loads it would 404 under vector://.
+PANEL_REF = "plotina-panel"
 MARKER = "noise/boot.js"
 
 REQUIRED_ASSETS = [
@@ -103,6 +106,11 @@ def patch_widget(path: Path) -> None:
         sys.exit(
             f"apply-noise: {path} loads noise/boot.js; the call widget is processed by "
             "plotina-dfn.js and boot.js would wrap getUserMedia a second time"
+        )
+    if PANEL_REF in src:
+        sys.exit(
+            f"apply-noise: {path} loads the floating noise panel ({PANEL_REF}); "
+            "Element Call .17 removed it and the level is a Settings -> Audio row now"
         )
     print(f"widget: noise wiring present ({path})")
 

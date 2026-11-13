@@ -86,11 +86,14 @@ echo "==> element call widget"
 
 echo "==> noise layer"
 mkdir -p "$NOISE/vendor"
-# logic.js/boot.js serve the app document; plotina-dfn.js/plotina-panel.js are
-# the ones the call widget loads (its microphone goes through the LiveKit track
-# processor, not through boot.js's getUserMedia wrapper).
+# logic.js/boot.js serve the app document; plotina-dfn.js is the one the call
+# widget loads (its microphone goes through the LiveKit track processor, not
+# through boot.js's getUserMedia wrapper). The floating level panel is gone:
+# since Element Call .17 the level is a row in the call's own Settings -> Audio,
+# so noise/plotina-panel.js no longer exists and must not be copied or asserted
+# here (a stale entry here killed the whole webapp job on a cp of a missing file).
 cp "$REPO_ROOT/noise/logic.js" "$REPO_ROOT/noise/boot.js" \
-   "$REPO_ROOT/noise/plotina-dfn.js" "$REPO_ROOT/noise/plotina-panel.js" "$NOISE/"
+   "$REPO_ROOT/noise/plotina-dfn.js" "$NOISE/"
 cp -a "$REPO_ROOT/noise/vendor/." "$NOISE/vendor/"
 
 echo "==> noise assets"
@@ -175,7 +178,10 @@ fi
 # without it the desktop widget's microphone is never processed.
 grep -q 'document.currentScript' "$DEST/noise/plotina-dfn.js"
 test -s "$DEST/noise/plotina-dfn.js"
-test -s "$DEST/noise/plotina-panel.js"
+# The floating level panel was deleted with Element Call .17 (the level is a row
+# in the call's Settings -> Audio now). A copy appearing here would be a layer
+# nobody loads, and the widget document is checked separately for a stale tag.
+test ! -e "$DEST/noise/plotina-panel.js"
 grep -q 'Plotina Desktop' "$DEST/index.html"
 if grep -q '>Element</title>' "$DEST/index.html"; then
   echo "prepare-webapp: the Element title is still in index.html" >&2; exit 1
