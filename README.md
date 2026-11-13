@@ -28,7 +28,7 @@ each build is based on.
 - **Noise suppression.** DeepFilterNet3 is applied to the microphone before the
   track is published — in the browsers, in the desktop apps and in Plotina X's
   call view. It is on by default and there is nothing to install; the level can
-  be changed while a call is running, from the control in the call view.
+  be changed while a call is running, from «…» → Audio in the call's settings.
 
 ## Trademarks
 

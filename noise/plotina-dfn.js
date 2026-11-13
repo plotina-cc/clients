@@ -8,8 +8,8 @@
  *
  * Diagnostics go to POST /noise/report (server-side log). The current state is
  * kept in window.__plotinaDfn for automated tests; this file draws nothing —
- * the in-call level control lives in plotina-panel.js and only calls
- * window.__plotinaSetLevel() here.
+ * the level control is the noise suppression row of Element Call's own
+ * Settings -> Audio tab, and it only calls window.__plotinaSetLevel() here.
  */
 (function () {
   "use strict";
