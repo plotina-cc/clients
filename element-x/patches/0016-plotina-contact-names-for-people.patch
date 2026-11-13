@@ -1206,7 +1206,7 @@ index 033d0fc9..1f4880f9 100644
                  timestamp = result.result.timestamp.toLong(),
              )
 diff --git a/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/timeline/RustTimeline.kt b/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/timeline/RustTimeline.kt
-index d875ac04..02692839 100644
+index d875ac04..9d793c1b 100644
 --- a/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/timeline/RustTimeline.kt
 +++ b/libraries/matrix/impl/src/main/kotlin/io/element/android/libraries/matrix/impl/timeline/RustTimeline.kt
 @@ -22,6 +22,10 @@ import io.element.android.libraries.matrix.api.media.VideoInfo
@@ -1272,8 +1272,12 @@ index d875ac04..02692839 100644
                  .let { items ->
                      roomBeginningPostProcessor.process(
                          items = items,
-@@ -653,15 +679,21 @@ class RustTimeline(
-         if (timelineItem != null) {
+@@ -650,18 +676,28 @@ class RustTimeline(
+             timelineItem is MatrixTimelineItem.Event && timelineItem.eventId == eventId
+         } as? MatrixTimelineItem.Event
+ 
+-        if (timelineItem != null) {
++        val replyDetails = if (timelineItem != null) {
              InReplyTo.Ready(
                  eventId = eventId,
 -                content = timelineItem.event.content,
@@ -1282,9 +1286,12 @@ index d875ac04..02692839 100644
                  senderProfile = timelineItem.event.senderProfile,
              )
          } else {
--            inner.loadReplyDetails(eventId.value).use(inReplyToMapper::map)
-+            inner.loadReplyDetails(eventId.value).use(inReplyToMapper::map).withPlotinaContactNames(currentPersonalNames())
+             inner.loadReplyDetails(eventId.value).use(inReplyToMapper::map)
          }
++        // Plotina: one overlay for both branches. The event already in the timeline is the one the
++        // composer replies to, so leaving its senderProfile alone showed the server's name in the
++        // reply preview while the sent reply (fetched from the SDK) carried the personal one.
++        replyDetails.withPlotinaContactNames(currentPersonalNames())
      }
  
 +    /** The names as of now, for the one-shot reads that happen outside the [timelineItems] flow. */
@@ -1635,26 +1642,113 @@ index 00000000..3ac5f5d9
 +    )
 +}
 diff --git a/libraries/matrix/impl/src/test/kotlin/io/element/android/libraries/matrix/impl/timeline/RustTimelineTest.kt b/libraries/matrix/impl/src/test/kotlin/io/element/android/libraries/matrix/impl/timeline/RustTimelineTest.kt
-index 4c96800c..8eefad9d 100644
+index 4c96800c..fb32d9cc 100644
 --- a/libraries/matrix/impl/src/test/kotlin/io/element/android/libraries/matrix/impl/timeline/RustTimelineTest.kt
 +++ b/libraries/matrix/impl/src/test/kotlin/io/element/android/libraries/matrix/impl/timeline/RustTimelineTest.kt
-@@ -12,6 +12,7 @@ package io.element.android.libraries.matrix.impl.timeline
+@@ -12,25 +12,39 @@ package io.element.android.libraries.matrix.impl.timeline
  import app.cash.turbine.test
  import com.google.common.truth.Truth.assertThat
  import io.element.android.libraries.matrix.api.room.JoinedRoom
++import io.element.android.libraries.matrix.api.room.RoomMembersState
 +import io.element.android.libraries.matrix.api.room.alias.ContactNameStore
  import io.element.android.libraries.matrix.api.timeline.MatrixTimelineItem
  import io.element.android.libraries.matrix.api.timeline.Timeline
++import io.element.android.libraries.matrix.api.timeline.item.event.InReplyTo
++import io.element.android.libraries.matrix.api.timeline.item.event.ProfileDetails
  import io.element.android.libraries.matrix.api.timeline.item.virtual.VirtualTimelineItem
-@@ -20,6 +21,7 @@ import io.element.android.libraries.matrix.impl.fixtures.fakes.FakeFfiTimeline
++import io.element.android.libraries.matrix.impl.fixtures.factories.aRustEventTimelineItem
+ import io.element.android.libraries.matrix.impl.fixtures.fakes.FakeFfiRoomListService
+ import io.element.android.libraries.matrix.impl.fixtures.fakes.FakeFfiTimeline
++import io.element.android.libraries.matrix.impl.fixtures.fakes.FakeFfiTimelineItem
  import io.element.android.libraries.matrix.impl.room.RoomContentForwarder
++import io.element.android.libraries.matrix.test.A_USER_ID_2
++import io.element.android.libraries.matrix.test.AN_EVENT_ID
  import io.element.android.libraries.matrix.test.room.FakeJoinedRoom
  import io.element.android.libraries.matrix.test.room.aRoomInfo
++import io.element.android.libraries.matrix.test.room.aRoomMember
 +import io.element.android.libraries.matrix.test.room.alias.FakeContactNameStore
  import io.element.android.services.toolbox.api.systemclock.SystemClock
  import io.element.android.services.toolbox.test.systemclock.A_FAKE_TIMESTAMP
  import io.element.android.services.toolbox.test.systemclock.FakeSystemClock
-@@ -97,6 +99,7 @@ private fun TestScope.createRustTimeline(
+ import io.element.android.tests.testutils.testCoroutineDispatchers
++import kotlinx.collections.immutable.persistentListOf
+ import kotlinx.coroutines.CoroutineDispatcher
+ import kotlinx.coroutines.CoroutineScope
+ import kotlinx.coroutines.ExperimentalCoroutinesApi
++import kotlinx.coroutines.launch
+ import kotlinx.coroutines.test.TestScope
+ import kotlinx.coroutines.test.runCurrent
+ import kotlinx.coroutines.test.runTest
+ import org.junit.Test
++import org.matrix.rustcomponents.sdk.EventOrTransactionId
++import org.matrix.rustcomponents.sdk.ProfileDetails as RustProfileDetails
+ import org.matrix.rustcomponents.sdk.TimelineDiff
+ import uniffi.matrix_sdk.PaginationStatus
+ import org.matrix.rustcomponents.sdk.Timeline as InnerTimeline
+@@ -87,6 +101,62 @@ class RustTimelineTest {
+             }
+         }
+     }
++
++    @Test
++    fun `loadReplyDetails uses the personal name of a quoted author that is already in the timeline`() = runTest {
++        // The composer's reply preview goes through loadReplyDetails for the event you can see, i.e.
++        // the branch that reads the item out of the timeline instead of fetching it from the SDK.
++        // That branch must overlay the account's personal names just like the fetched one, or the
++        // preview shows the server's name while the sent reply shows the personal one.
++        val inner = FakeFfiTimeline()
++        val joinedRoom = FakeJoinedRoom().apply {
++            givenRoomInfo(aRoomInfo())
++            givenRoomMembersState(
++                RoomMembersState.Ready(persistentListOf(aRoomMember(A_USER_ID_2, "Bob"))),
++            )
++        }
++        val sut = createRustTimeline(
++            inner = inner,
++            joinedRoom = joinedRoom,
++            contactNameStore = FakeContactNameStore(initialNames = mapOf(A_USER_ID_2 to "Боб")),
++        )
++        // Something has to collect the timeline for the diff to be processed.
++        backgroundScope.launch { sut.timelineItems.collect { } }
++        runCurrent()
++        inner.emitDiff(
++            listOf(
++                TimelineDiff.Reset(
++                    listOf(
++                        FakeFfiTimelineItem(
++                            asEventResult = aRustEventTimelineItem(
++                                eventOrTransactionId = EventOrTransactionId.EventId(AN_EVENT_ID.value),
++                                sender = A_USER_ID_2.value,
++                                senderProfile = RustProfileDetails.Ready(
++                                    displayName = "Bob",
++                                    displayNameAmbiguous = false,
++                                    avatarUrl = null,
++                                    status = null,
++                                    call = null,
++                                ),
++                            ),
++                        ),
++                    )
++                )
++            )
++        )
++        runCurrent()
++
++        // The event must really be in the timeline: the point of the test is the branch that reads
++        // it from there, and the fake's SDK-level loadReplyDetails would not answer at all.
++        assertThat(sut.isEventLoaded(AN_EVENT_ID)).isTrue()
++
++        val replyDetails = sut.loadReplyDetails(AN_EVENT_ID)
++
++        assertThat(replyDetails).isInstanceOf(InReplyTo.Ready::class.java)
++        val senderProfile = (replyDetails as InReplyTo.Ready).senderProfile
++        assertThat(senderProfile).isInstanceOf(ProfileDetails.Ready::class.java)
++        assertThat((senderProfile as ProfileDetails.Ready).displayName).isEqualTo("Боб")
++    }
+ }
+ 
+ private fun TestScope.createRustTimeline(
+@@ -97,6 +167,7 @@ private fun TestScope.createRustTimeline(
      coroutineScope: CoroutineScope = backgroundScope,
      dispatcher: CoroutineDispatcher = testCoroutineDispatchers().io,
      roomContentForwarder: RoomContentForwarder = RoomContentForwarder(FakeFfiRoomListService()),
@@ -1662,7 +1756,7 @@ index 4c96800c..8eefad9d 100644
  ): RustTimeline {
      return RustTimeline(
          inner = inner,
-@@ -106,5 +109,6 @@ private fun TestScope.createRustTimeline(
+@@ -106,5 +177,6 @@ private fun TestScope.createRustTimeline(
          coroutineScope = coroutineScope,
          dispatcher = dispatcher,
          roomContentForwarder = roomContentForwarder,
