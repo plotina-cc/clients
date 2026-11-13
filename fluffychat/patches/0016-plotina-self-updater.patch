@@ -339,10 +339,10 @@ index d1d8d9c..432290e 100644
                title: Text(L10n.of(context).about),
 diff --git a/lib/pages/updater/plotina_updater_page.dart b/lib/pages/updater/plotina_updater_page.dart
 new file mode 100644
-index 0000000..509154a
+index 0000000..613728f
 --- /dev/null
 +++ b/lib/pages/updater/plotina_updater_page.dart
-@@ -0,0 +1,585 @@
+@@ -0,0 +1,603 @@
 +// SPDX-FileCopyrightText: 2026 Plotina
 +//
 +// SPDX-License-Identifier: AGPL-3.0-or-later
@@ -511,12 +511,17 @@ index 0000000..509154a
 +  }
 +
 +  Future<void> _flow(UpdateManifest manifest) async {
-+    final InstallOutcome outcome;
++    final UpdateAttempt attempt;
 +    try {
 +      final target = await (widget.fileProvider ??
 +          PlotinaUpdater.cachedApkFile)();
-+      outcome = await PlotinaUpdater.runInstallFlow(
-+        manifest: manifest,
++      // One pass over the channel's sources: [manifest] is the first
++      // candidate, and a checksum/size failure or a dead APK endpoint moves
++      // the attempt to the next source as a whole - its own manifest, its own
++      // apkUrl - instead of retrying the same broken pair.
++      attempt = await PlotinaUpdater.installFromSources(
++        channel: PlotinaUpdater.channelProvider(),
++        first: manifest,
 +        target: target,
 +        onProgress: (fraction) {
 +          if (mounted) setState(() => _progress = fraction);
@@ -524,10 +529,10 @@ index 0000000..509154a
 +        isCanceled: () => _canceled,
 +      );
 +    } catch (e, s) {
-+      // runInstallFlow converts its own failures into outcomes; a throw here
-+      // is a bug or a platform shock. Report it and leave the downloading
-+      // state - never sit at "100 %" forever, which is exactly what the
-+      // dialog-based .25 flow did.
++      // The flow converts its own failures into outcomes; a throw here is a
++      // bug or a platform shock. Report it and leave the downloading state -
++      // never sit at "100 %" forever, which is exactly what the dialog-based
++      // .25 flow did.
 +      Logs().w('Updater: the install flow threw', e, s);
 +      _flowRunning = false;
 +      if (mounted) {
@@ -540,6 +545,19 @@ index 0000000..509154a
 +    }
 +    _flowRunning = false;
 +    if (!mounted) return;
++    // The source that answered may be the fallback one: keep its manifest, so
++    // "Try again" and the card above describe what actually worked.
++    final answered = attempt.manifest;
++    if (answered != null) _manifest = answered;
++    final outcome = attempt.outcome;
++    if (outcome == null) {
++      // No source answered at all: the same state as a failed check.
++      setState(() {
++        _progress = null;
++        _stage = _Stage.checkFailed;
++      });
++      return;
++    }
 +    setState(() {
 +      _progress = null;
 +      _stage = switch (outcome) {
@@ -1185,10 +1203,10 @@ index dee8b07..58bd0d9 100644
      try {
 diff --git a/lib/utils/updater/plotina_updater.dart b/lib/utils/updater/plotina_updater.dart
 new file mode 100644
-index 0000000..2e9e134
+index 0000000..b02148b
 --- /dev/null
 +++ b/lib/utils/updater/plotina_updater.dart
-@@ -0,0 +1,815 @@
+@@ -0,0 +1,943 @@
 +// SPDX-FileCopyrightText: 2026 Plotina
 +//
 +// SPDX-License-Identifier: AGPL-3.0-or-later
@@ -1279,11 +1297,20 @@ index 0000000..2e9e134
 +  );
 +
 +  /// Stable feed: mirrored by infra at plotina.cc/dl from the per-tag GitHub
-+  /// releases. The dev feed is a fixed GitHub release (`dev-latest`) whose
-+  /// assets CI overwrites on every `v<base>-plotina-mobile.<N>-dev.<M>` tag;
-+  /// it never touches the edge mirror, so opting into dev is fully reversible.
++  /// releases.
 +  static const String _defaultManifestUrl =
 +      'https://plotina.cc/dl/update-mobile.json';
++
++  /// Dev feed, source 1: the edge mirror of the `dev-latest` pair. It keeps
++  /// answering when GitHub is unreachable, which used to make dev updates
++  /// dead while GitHub was down.
++  static const String _defaultDevEdgeManifestUrl =
++      'https://plotina.cc/dl/dev/mobile/update-mobile-dev.json';
++
++  /// Dev feed, source 2: the fixed GitHub release (`dev-latest`) whose assets
++  /// CI overwrites on every `v<base>-plotina-mobile.<N>-dev.<M>` tag. It is
++  /// the fallback for a dead or stale edge copy, and the source the edge
++  /// mirror itself pulls from.
 +  static const String _defaultDevManifestUrl =
 +      'https://github.com/plotina-cc/clients/releases/download/dev-latest/update-mobile-dev.json';
 +
@@ -1294,14 +1321,26 @@ index 0000000..2e9e134
 +    'PLOTINA_DEV_UPDATE_URL',
 +  );
 +
-+  /// The manifest URL for one channel, after `--dart-define` overrides.
-+  /// Exposed for tests and for the settings UI's feed explanation.
-+  static String manifestUrlFor(UpdateChannel ch) => switch (ch) {
-+    UpdateChannel.stable =>
++  /// The manifest sources of one channel, in the order they are tried. Dev is
++  /// a self-contained pair - edge mirror first, GitHub second - so either one
++  /// of them being down still yields updates. Stable stays a single URL.
++  ///
++  /// A `--dart-define` override replaces the *first* entry and keeps the rest:
++  /// a local test server is exercised through the same fallback path as
++  /// production instead of silently becoming the only source.
++  static List<String> manifestUrlsFor(UpdateChannel ch) => switch (ch) {
++    UpdateChannel.stable => [
 +      _urlOverride.isEmpty ? _defaultManifestUrl : _urlOverride,
-+    UpdateChannel.dev =>
-+      _devUrlOverride.isEmpty ? _defaultDevManifestUrl : _devUrlOverride,
++    ],
++    UpdateChannel.dev => [
++      _devUrlOverride.isEmpty ? _defaultDevEdgeManifestUrl : _devUrlOverride,
++      _defaultDevManifestUrl,
++    ],
 +  };
++
++  /// The preferred (first) manifest URL of one channel, after `--dart-define`
++  /// overrides. Exposed for tests and for the settings UI's feed explanation.
++  static String manifestUrlFor(UpdateChannel ch) => manifestUrlsFor(ch).first;
 +
 +  /// Persisted update channel. `stable` is the default and the value of an
 +  /// unreadable or uninitialized store, so a fresh or broken preference can
@@ -1438,8 +1477,36 @@ index 0000000..2e9e134
 +  }
 +
 +  /// Fetches the manifest of one channel; default: the persisted one.
++  ///
++  /// Walks the channel's sources once, in order (see [manifestUrlsFor]), and
++  /// returns the first usable manifest: a 404, a dead host, a timeout, an
++  /// unparsable body or a manifest of another package all mean "this source
++  /// has nothing" and hand the attempt to the next one. One pass only - two
++  /// dead sources are the same "check failed" as one dead URL used to be.
 +  static Future<UpdateManifest?> fetchManifest({UpdateChannel? channel}) async {
-+    final url = manifestUrlFor(channel ?? channelProvider());
++    final ch = channel ?? channelProvider();
++    final urls = manifestUrlsFor(ch);
++    for (var i = 0; i < urls.length; i++) {
++      final manifest = await fetchManifestFrom(urls[i]);
++      if (manifest != null) {
++        // Which mirror answered is what makes a support log readable, and it
++        // is the one line QA looks for when proving the fallback.
++        Logs().i('Updater: manifest from ${urls[i]}');
++        return manifest;
++      }
++      if (i + 1 < urls.length) {
++        Logs().w(
++          'Updater: no manifest from ${urls[i]}, '
++          'falling back to ${urls[i + 1]}',
++        );
++      }
++    }
++    return null;
++  }
++
++  /// One source of [fetchManifest]: the GET, the strict parse and the "is this
++  /// manifest for this install" check. `null` on any failure.
++  static Future<UpdateManifest?> fetchManifestFrom(String url) async {
 +    try {
 +      final client = clientFactory();
 +      final http.Response response;
@@ -1619,6 +1686,68 @@ index 0000000..2e9e134
 +      return InstallOutcome.installFailed;
 +    }
 +    return InstallOutcome.installerOpened;
++  }
++
++  /// The install half of the two-source dev feed: one pass over
++  /// [manifestUrlsFor] with [first] as the already-fetched candidate (the page
++  /// keeps the manifest it decided on).
++  ///
++  /// A source fails when its download errors, truncates or does not match the
++  /// manifest's sha256/size; the next source is then fetched *whole* - a fresh
++  /// manifest, then the APK of *its* `apkUrl` - so bytes are never installed
++  /// under another source's manifest. A cancel, a missing install permission
++  /// and a started installer end the pass, and the list is never walked twice:
++  /// two dead sources end exactly where one dead URL used to.
++  static Future<UpdateAttempt> installFromSources({
++    required UpdateChannel channel,
++    required File target,
++    UpdateManifest? first,
++    void Function(double? fraction)? onProgress,
++    bool Function()? isCanceled,
++  }) async {
++    final urls = manifestUrlsFor(channel);
++    InstallOutcome? failure;
++    var tried = 0;
++    for (var i = 0; i < urls.length; i++) {
++      // Index 0 is the manifest the caller already fetched and decided on;
++      // every fallback source is fetched fresh, together with its own APK.
++      final fresh = i > 0 || first == null;
++      final manifest = fresh ? await fetchManifestFrom(urls[i]) : first;
++      if (manifest == null) {
++        Logs().w('Updater: source ${urls[i]} gave no manifest');
++        continue;
++      }
++      tried++;
++      if (fresh) {
++        // A fallback manifest is a new decision: never install a downgrade
++        // just because the previous source failed.
++        final decision = await decide(manifest, channel: channel);
++        if (decision != UpdateDecision.updateAvailable) {
++          Logs().w('Updater: source ${urls[i]} has nothing (${decision.name})');
++          continue;
++        }
++      }
++      final outcome = await runInstallFlow(
++        manifest: manifest,
++        target: target,
++        onProgress: onProgress,
++        isCanceled: isCanceled,
++      );
++      switch (outcome) {
++        case InstallOutcome.verifyFailed:
++        case InstallOutcome.downloadFailed:
++          failure = outcome;
++          Logs().w('Updater: source ${urls[i]} failed (${outcome.name})');
++          continue;
++        default:
++          return UpdateAttempt(
++            manifest: manifest,
++            outcome: outcome,
++            sourcesTried: tried,
++          );
++      }
++    }
++    return UpdateAttempt(outcome: failure, sourcesTried: tried);
 +  }
 +
 +  /// Streams the APK into [file] while hashing it. Completes as soon as
@@ -1918,6 +2047,23 @@ index 0000000..2e9e134
 +  installFailed,
 +}
 +
++/// The result of one pass over a channel's manifest sources
++/// ([PlotinaUpdater.installFromSources]): the source whose APK reached the
++/// installer (or failed last), and how many sources answered at all. A null
++/// [outcome] means no source answered - the page shows a failed check.
++class UpdateAttempt {
++  const UpdateAttempt({this.manifest, this.outcome, this.sourcesTried = 0});
++
++  /// The source that answered last with a usable manifest.
++  final UpdateManifest? manifest;
++
++  final InstallOutcome? outcome;
++
++  /// How many sources produced a usable manifest in this pass: never more than
++  /// [PlotinaUpdater.manifestUrlsFor] has entries.
++  final int sourcesTried;
++}
++
 +enum StreamResult {
 +  ok,
 +  httpError,
@@ -2151,6 +2297,360 @@ index 899be1b..7bc75ea 100644
    cupertino_ui: ^1.1.2
    desktop_drop: ^0.8.4
    device_info_plus: ^13.3.0
+diff --git a/test/utils/updater/dev_feed_fallback_test.dart b/test/utils/updater/dev_feed_fallback_test.dart
+new file mode 100644
+index 0000000..bbf7bcf
+--- /dev/null
++++ b/test/utils/updater/dev_feed_fallback_test.dart
+@@ -0,0 +1,348 @@
++// SPDX-FileCopyrightText: 2026 Plotina
++//
++// SPDX-License-Identifier: AGPL-3.0-or-later
++
++// Covers the two-source dev feed of patch 0016: the manifest is fetched from
++// the edge mirror first and from the GitHub dev-latest release second, and a
++// source that fails - HTTP error, transport, unparsable body, sha256/size
++// mismatch after the download - hands the whole attempt to the next one. A
++// single dead mirror must never take dev updates down, a manifest is never
++// paired with another source's APK, and a dead list must not become a loop.
++
++import 'dart:convert';
++import 'dart:io';
++
++import 'package:crypto/crypto.dart';
++import 'package:fluffychat/utils/updater/plotina_updater.dart';
++import 'package:flutter_test/flutter_test.dart';
++
++import 'updater_fakes.dart';
++
++void main() {
++  TestWidgetsFlutterBinding.ensureInitialized();
++
++  group('the source list', () {
++    test('dev is edge first, GitHub second', () {
++      expect(PlotinaUpdater.manifestUrlsFor(UpdateChannel.dev), [
++        'https://plotina.cc/dl/dev/mobile/update-mobile-dev.json',
++        'https://github.com/plotina-cc/clients/releases/download/dev-latest/update-mobile-dev.json',
++      ]);
++      expect(
++        PlotinaUpdater.manifestUrlFor(UpdateChannel.dev),
++        kDevEdgeManifestUrl,
++      );
++    });
++
++    test('stable stays a single plotina.cc URL', () {
++      expect(PlotinaUpdater.manifestUrlsFor(UpdateChannel.stable), [
++        'https://plotina.cc/dl/update-mobile.json',
++      ]);
++      expect(
++        PlotinaUpdater.manifestUrlFor(UpdateChannel.stable),
++        'https://plotina.cc/dl/update-mobile.json',
++      );
++    });
++  });
++
++  group('dev manifest sources', () {
++    test('the edge mirror is asked first, GitHub second', () async {
++      final github = makeManifest(
++        versionCode: 2112334,
++        apkUrl: kDevGithubApkUrl,
++        devBuild: 5,
++      );
++      final client = useUpdaterSourceFakes(
++        routes: {
++          kDevEdgeManifestUrl: FakeUpdaterSource.status(404),
++          kDevManifestUrl: FakeUpdaterSource.json(manifestJsonOf(github)),
++        },
++      );
++
++      final manifest = await PlotinaUpdater.fetchManifest(
++        channel: UpdateChannel.dev,
++      );
++
++      expect(manifest, isNotNull);
++      expect(manifest!.versionCode, 2112334);
++      expect(client.requestedUrls, [kDevEdgeManifestUrl, kDevManifestUrl]);
++    });
++
++    test('a working edge copy is used and GitHub is never asked', () async {
++      final edge = makeManifest(
++        versionCode: 2112334,
++        apkUrl: kDevEdgeApkUrl,
++        devBuild: 5,
++      );
++      final client = useUpdaterSourceFakes(
++        routes: {
++          kDevEdgeManifestUrl: FakeUpdaterSource.json(manifestJsonOf(edge)),
++          kDevManifestUrl: FakeUpdaterSource.status(500),
++        },
++      );
++
++      final manifest = await PlotinaUpdater.fetchManifest(
++        channel: UpdateChannel.dev,
++      );
++
++      expect(manifest, isNotNull);
++      expect(manifest!.apkUrl, kDevEdgeApkUrl);
++      expect(client.requestedUrls, [kDevEdgeManifestUrl]);
++    });
++
++    test('an unparsable edge manifest falls through to GitHub', () async {
++      final github = makeManifest(
++        versionCode: 2112334,
++        apkUrl: kDevGithubApkUrl,
++      );
++      final client = useUpdaterSourceFakes(
++        routes: {
++          kDevEdgeManifestUrl: FakeUpdaterSource.json('{"client":"mobile"'),
++          kDevManifestUrl: FakeUpdaterSource.json(manifestJsonOf(github)),
++        },
++      );
++
++      final manifest = await PlotinaUpdater.fetchManifest(
++        channel: UpdateChannel.dev,
++      );
++
++      expect(manifest?.apkUrl, kDevGithubApkUrl);
++      expect(client.requestedUrls, [kDevEdgeManifestUrl, kDevManifestUrl]);
++    });
++
++    test('both sources down: null after exactly one pass, no loop', () async {
++      final client = useUpdaterSourceFakes(
++        routes: {
++          kDevEdgeManifestUrl: FakeUpdaterSource.status(404),
++          kDevManifestUrl: FakeUpdaterSource.status(502),
++        },
++      );
++
++      final manifest = await PlotinaUpdater.fetchManifest(
++        channel: UpdateChannel.dev,
++      );
++
++      expect(manifest, isNull);
++      expect(client.requestedUrls, [kDevEdgeManifestUrl, kDevManifestUrl]);
++    });
++
++    test('the stable channel keeps its single plotina.cc source', () async {
++      final stable = makeManifest(versionCode: 2112326);
++      final client = useUpdaterSourceFakes(
++        channel: UpdateChannel.stable,
++        routes: {
++          kManifestUrl: FakeUpdaterSource.json(manifestJsonOf(stable)),
++          kDevEdgeManifestUrl: FakeUpdaterSource.status(500),
++          kDevManifestUrl: FakeUpdaterSource.status(500),
++        },
++      );
++
++      final manifest = await PlotinaUpdater.fetchManifest();
++
++      expect(manifest?.versionCode, 2112326);
++      expect(client.requestedUrls, [kManifestUrl]);
++    });
++  });
++
++  group('one attempt over the sources', () {
++    late Directory tmp;
++    setUp(() => tmp = Directory.systemTemp.createTempSync('source_fallback'));
++    tearDown(() => tmp.deleteSync(recursive: true));
++
++    File target() => File('${tmp.path}/Plotina-Mobile.apk');
++
++    test('a checksum failure on edge installs the GitHub copy whole', () async {
++      final edgeBytes = utf8.encode('edge apk, truncated by a slow mirror');
++      final githubBytes = utf8.encode('github apk, the real dev build');
++      final edge = makeManifest(
++        apkUrl: kDevEdgeApkUrl,
++        apkBytes: edgeBytes,
++        versionCode: 2112334,
++        devBuild: 5,
++      );
++      final github = makeManifest(
++        apkUrl: kDevGithubApkUrl,
++        apkBytes: githubBytes,
++        versionCode: 2112334,
++        devBuild: 5,
++      );
++      final platform = FakeUpdaterPlatform();
++      final client = useUpdaterSourceFakes(
++        platform: platform,
++        routes: {
++          // Same length, different bytes: the size check passes and the sha256
++          // check is what fails - the stale-pair case of a mirror.
++          kDevEdgeApkUrl: FakeUpdaterSource.bytes(
++            List<int>.filled(edgeBytes.length, 0x58),
++          ),
++          kDevManifestUrl: FakeUpdaterSource.json(manifestJsonOf(github)),
++          kDevGithubApkUrl: FakeUpdaterSource.bytes(githubBytes),
++        },
++      );
++
++      final attempt = await PlotinaUpdater.installFromSources(
++        channel: UpdateChannel.dev,
++        first: edge,
++        target: target(),
++        isCanceled: () => false,
++      );
++
++      expect(attempt.outcome, InstallOutcome.installerOpened);
++      expect(attempt.manifest?.apkUrl, kDevGithubApkUrl);
++      // The manifest of the second source and *its* apkUrl - never the edge
++      // manifest's URL with GitHub's bytes, or the other way round.
++      expect(client.requestedUrls, [
++        kDevEdgeApkUrl,
++        kDevManifestUrl,
++        kDevGithubApkUrl,
++      ]);
++      expect(
++        sha256.convert(target().readAsBytesSync()).toString(),
++        sha256.convert(githubBytes).toString(),
++      );
++      expect(platform.installApkCalls, 1);
++    });
++
++    test('a dead edge APK endpoint falls back to GitHub too', () async {
++      final githubBytes = utf8.encode('github apk');
++      final edge = makeManifest(
++        apkUrl: kDevEdgeApkUrl,
++        apkBytes: utf8.encode('edge apk'),
++        versionCode: 2112334,
++      );
++      final github = makeManifest(
++        apkUrl: kDevGithubApkUrl,
++        apkBytes: githubBytes,
++        versionCode: 2112334,
++      );
++      final platform = FakeUpdaterPlatform();
++      useUpdaterSourceFakes(
++        platform: platform,
++        routes: {
++          kDevEdgeApkUrl: FakeUpdaterSource.status(404),
++          kDevManifestUrl: FakeUpdaterSource.json(manifestJsonOf(github)),
++          kDevGithubApkUrl: FakeUpdaterSource.bytes(githubBytes),
++        },
++      );
++
++      final attempt = await PlotinaUpdater.installFromSources(
++        channel: UpdateChannel.dev,
++        first: edge,
++        target: target(),
++        isCanceled: () => false,
++      );
++
++      expect(attempt.outcome, InstallOutcome.installerOpened);
++      expect(platform.installApkCalls, 1);
++      expect(
++        sha256.convert(target().readAsBytesSync()).toString(),
++        sha256.convert(githubBytes).toString(),
++      );
++    });
++
++    test(
++      'both sources broken: verifyFailed, nothing installed, no loop',
++      () async {
++        final edge = makeManifest(
++          apkUrl: kDevEdgeApkUrl,
++          apkBytes: utf8.encode('edge apk'),
++          versionCode: 2112334,
++        );
++        final github = makeManifest(
++          apkUrl: kDevGithubApkUrl,
++          apkBytes: utf8.encode('github apk'),
++          versionCode: 2112334,
++        );
++        final platform = FakeUpdaterPlatform();
++        final client = useUpdaterSourceFakes(
++          platform: platform,
++          routes: {
++            kDevEdgeApkUrl: FakeUpdaterSource.bytes(utf8.encode('tampered')),
++            kDevManifestUrl: FakeUpdaterSource.json(manifestJsonOf(github)),
++            kDevGithubApkUrl: FakeUpdaterSource.bytes(
++              utf8.encode('tampered 2'),
++            ),
++          },
++        );
++
++        final attempt = await PlotinaUpdater.installFromSources(
++          channel: UpdateChannel.dev,
++          first: edge,
++          target: target(),
++          isCanceled: () => false,
++        );
++
++        expect(attempt.outcome, InstallOutcome.verifyFailed);
++        expect(platform.installApkCalls, 0);
++        expect(target().existsSync(), isFalse);
++        expect(client.requestedUrls, [
++          kDevEdgeApkUrl,
++          kDevManifestUrl,
++          kDevGithubApkUrl,
++        ]);
++      },
++    );
++
++    test('a fallback source that is no update is never installed', () async {
++      final edge = makeManifest(
++        apkUrl: kDevEdgeApkUrl,
++        apkBytes: utf8.encode('edge apk'),
++        versionCode: 2112334,
++      );
++      // The GitHub feed lags behind what this install already runs.
++      final github = makeManifest(
++        apkUrl: kDevGithubApkUrl,
++        apkBytes: utf8.encode('github apk'),
++        versionCode: 2112300,
++      );
++      final platform = FakeUpdaterPlatform(versionCode: 2112300);
++      useUpdaterSourceFakes(
++        platform: platform,
++        routes: {
++          kDevEdgeApkUrl: FakeUpdaterSource.bytes(utf8.encode('tampered')),
++          kDevManifestUrl: FakeUpdaterSource.json(manifestJsonOf(github)),
++          kDevGithubApkUrl: FakeUpdaterSource.bytes(utf8.encode('github apk')),
++        },
++      );
++
++      final attempt = await PlotinaUpdater.installFromSources(
++        channel: UpdateChannel.dev,
++        first: edge,
++        target: target(),
++        isCanceled: () => false,
++      );
++
++      // The edge failure is what the page reports: nothing newer was found
++      // anywhere, and the older GitHub APK was not installed over the newer
++      // build that is already running.
++      expect(attempt.outcome, InstallOutcome.verifyFailed);
++      expect(platform.installApkCalls, 0);
++    });
++
++    test('cancelling the edge download does not touch GitHub', () async {
++      final edge = makeManifest(
++        apkUrl: kDevEdgeApkUrl,
++        apkBytes: utf8.encode('edge apk'),
++        versionCode: 2112334,
++      );
++      final platform = FakeUpdaterPlatform();
++      final client = useUpdaterSourceFakes(
++        platform: platform,
++        routes: {
++          kDevEdgeApkUrl: FakeUpdaterSource.bytes(utf8.encode('edge apk')),
++          kDevManifestUrl: FakeUpdaterSource.json(manifestJsonOf(edge)),
++        },
++      );
++
++      final attempt = await PlotinaUpdater.installFromSources(
++        channel: UpdateChannel.dev,
++        first: edge,
++        target: target(),
++        isCanceled: () => true,
++      );
++
++      expect(attempt.outcome, InstallOutcome.canceled);
++      expect(platform.installApkCalls, 0);
++      expect(client.requestedUrls, isNot(contains(kDevManifestUrl)));
++    });
++  });
++}
 diff --git a/test/utils/updater/plotina_updater_flow_test.dart b/test/utils/updater/plotina_updater_flow_test.dart
 new file mode 100644
 index 0000000..45056df
@@ -2518,10 +3018,10 @@ index 0000000..a471b86
 +}
 diff --git a/test/utils/updater/plotina_updater_page_test.dart b/test/utils/updater/plotina_updater_page_test.dart
 new file mode 100644
-index 0000000..2241428
+index 0000000..5d3d43b
 --- /dev/null
 +++ b/test/utils/updater/plotina_updater_page_test.dart
-@@ -0,0 +1,321 @@
+@@ -0,0 +1,380 @@
 +// SPDX-FileCopyrightText: 2026 Plotina
 +//
 +// SPDX-License-Identifier: AGPL-3.0-or-later
@@ -2783,6 +3283,65 @@ index 0000000..2241428
 +    });
 +
 +    testWidgets(
++      'an edge APK that fails its checksum installs the GitHub copy whole',
++      (tester) async {
++        final githubBytes = List<int>.generate(900, (i) => (i * 13) % 251);
++        final edgeManifest = makeManifest(
++          apkUrl: kDevEdgeApkUrl,
++          apkBytes: apkBytes,
++          versionCode: 2112326,
++          devBuild: 5,
++        );
++        final githubManifest = makeManifest(
++          apkUrl: kDevGithubApkUrl,
++          apkBytes: githubBytes,
++          versionCode: 2112326,
++          devBuild: 5,
++        );
++        final platform = FakeUpdaterPlatform();
++        final client = useUpdaterSourceFakes(
++          platform: platform,
++          channel: UpdateChannel.dev,
++          routes: {
++            kDevEdgeManifestUrl: FakeUpdaterSource.json(
++              manifestJsonOf(edgeManifest),
++            ),
++            // Same length, different bytes: the size gate passes, sha256 fails.
++            kDevEdgeApkUrl: FakeUpdaterSource.bytes(
++              List<int>.filled(apkBytes.length, 0x58),
++            ),
++            kDevManifestUrl: FakeUpdaterSource.json(
++              manifestJsonOf(githubManifest),
++            ),
++            kDevGithubApkUrl: FakeUpdaterSource.bytes(githubBytes),
++          },
++        );
++
++        await tester.pumpWidget(
++          harness(
++            theme: darkTheme(),
++            home: PlotinaUpdaterPage(fileProvider: () async => target),
++          ),
++        );
++        await settleTo(tester, find.text('Download and install'));
++        await tester.tap(find.text('Download and install'));
++        await settleTo(
++          tester,
++          find.text('Continue the installation in the system installer.'),
++        );
++
++        expect(platform.installApkCalls, 1);
++        expect(target.readAsBytesSync(), githubBytes);
++        expect(client.requestedUrls, [
++          kDevEdgeManifestUrl,
++          kDevEdgeApkUrl,
++          kDevManifestUrl,
++          kDevGithubApkUrl,
++        ]);
++      },
++    );
++
++    testWidgets(
 +      'permission request resumes the download automatically after the '
 +      'user returns from settings - one tap on download, one install call',
 +      (tester) async {
@@ -2845,10 +3404,10 @@ index 0000000..2241428
 +}
 diff --git a/test/utils/updater/update_channel_test.dart b/test/utils/updater/update_channel_test.dart
 new file mode 100644
-index 0000000..2dfb4a6
+index 0000000..e53a934
 --- /dev/null
 +++ b/test/utils/updater/update_channel_test.dart
-@@ -0,0 +1,490 @@
+@@ -0,0 +1,493 @@
 +// SPDX-FileCopyrightText: 2026 Plotina
 +//
 +// SPDX-License-Identifier: AGPL-3.0-or-later
@@ -2888,12 +3447,15 @@ index 0000000..2dfb4a6
 +      );
 +    });
 +
-+    test('dev feed is the GitHub dev-latest manifest, not the edge', () {
++    test('dev feed starts at the edge mirror and falls back to GitHub', () {
++      final urls = PlotinaUpdater.manifestUrlsFor(UpdateChannel.dev);
++      expect(urls.first, kDevEdgeManifestUrl);
++      expect(urls.last, kDevManifestUrl);
++      expect(urls, hasLength(2));
++      // The preferred one is the mirror; GitHub is the fallback behind it.
 +      final url = Uri.parse(PlotinaUpdater.manifestUrlFor(UpdateChannel.dev));
-+      expect(url.toString(), kDevManifestUrl);
-+      expect(url.host, 'github.com');
-+      expect(url.path, contains('/releases/download/dev-latest/'));
-+      expect(url.path, endsWith('update-mobile-dev.json'));
++      expect(url.host, 'plotina.cc');
++      expect(url.path, '/dl/dev/mobile/update-mobile-dev.json');
 +    });
 +  });
 +
@@ -3156,7 +3718,7 @@ index 0000000..2dfb4a6
 +    setUp(() => tmp = Directory.systemTemp.createTempSync('channel_fetch'));
 +    tearDown(() => tmp.deleteSync(recursive: true));
 +
-+    test('the dev channel fetches the GitHub dev manifest', () async {
++    test('the dev channel asks the edge mirror before GitHub', () async {
 +      final platform = FakeUpdaterPlatform();
 +      final client = useUpdaterFakes(
 +        platform: platform,
@@ -3166,7 +3728,7 @@ index 0000000..2dfb4a6
 +
 +      await PlotinaUpdater.fetchManifest();
 +
-+      expect(client.requestedUrls, [kDevManifestUrl]);
++      expect(client.requestedUrls, [kDevEdgeManifestUrl, kDevManifestUrl]);
 +    });
 +
 +    test('the stable channel still fetches plotina.cc', () async {
@@ -3191,7 +3753,7 @@ index 0000000..2dfb4a6
 +
 +      await PlotinaUpdater.fetchManifest(channel: UpdateChannel.dev);
 +
-+      expect(client.requestedUrls, [kDevManifestUrl]);
++      expect(client.requestedUrls, [kDevEdgeManifestUrl, kDevManifestUrl]);
 +    });
 +  });
 +
@@ -3438,10 +4000,10 @@ index 0000000..a3a2f0d
 +}
 diff --git a/test/utils/updater/updater_fakes.dart b/test/utils/updater/updater_fakes.dart
 new file mode 100644
-index 0000000..4d82b1e
+index 0000000..b8cd551
 --- /dev/null
 +++ b/test/utils/updater/updater_fakes.dart
-@@ -0,0 +1,235 @@
+@@ -0,0 +1,324 @@
 +// SPDX-FileCopyrightText: 2026 Plotina
 +//
 +// SPDX-License-Identifier: AGPL-3.0-or-later
@@ -3461,10 +4023,17 @@ index 0000000..4d82b1e
 +import 'package:http/http.dart' as http;
 +
 +const String kManifestUrl = 'https://plotina.cc/dl/update-mobile.json';
++const String kDevEdgeManifestUrl =
++    'https://plotina.cc/dl/dev/mobile/update-mobile-dev.json';
 +const String kDevManifestUrl =
 +    'https://github.com/plotina-cc/clients/releases/download/'
 +    'dev-latest/update-mobile-dev.json';
 +const String kApkUrl = 'https://plotina.cc/dl/Plotina-Mobile.apk';
++const String kDevEdgeApkUrl =
++    'https://plotina.cc/dl/dev/mobile/Plotina-Mobile.apk';
++const String kDevGithubApkUrl =
++    'https://github.com/plotina-cc/clients/releases/download/'
++    'dev-latest/Plotina-Mobile.apk';
 +const String kPackageName = 'cc.plotina.mobile';
 +
 +UpdateManifest makeManifest({
@@ -3582,7 +4151,9 @@ index 0000000..4d82b1e
 +  Future<http.StreamedResponse> send(http.BaseRequest request) async {
 +    final url = request.url.toString();
 +    requestedUrls.add(url);
-+    if (url == kManifestUrl || url == kDevManifestUrl) {
++    if (url == kManifestUrl ||
++        url == kDevManifestUrl ||
++        url == kDevEdgeManifestUrl) {
 +      // When gated, the fetch freezes until the test opens the gate - used
 +      // to catch the spinner state of the updater page.
 +      if (gateManifest) await manifestGate.future;
@@ -3629,6 +4200,86 @@ index 0000000..4d82b1e
 +  void dispose() {
 +    apkController?.close();
 +  }
++}
++
++/// One canned answer for one URL of [FakeUpdaterSourceClient].
++class FakeUpdaterSource {
++  FakeUpdaterSource({this.status = 200, this.body = const []});
++
++  /// A manifest JSON answer.
++  FakeUpdaterSource.json(String json) : this(body: utf8.encode(json));
++
++  /// An APK (or manifest) answer with exactly these bytes.
++  FakeUpdaterSource.bytes(List<int> bytes) : this(body: bytes);
++
++  /// An answer with no body at all - a 404, a 502, a dropped feed.
++  FakeUpdaterSource.status(int code) : this(status: code);
++
++  final int status;
++  final List<int> body;
++}
++
++/// Per-URL http double for the two-source dev feed: every URL answers what the
++/// test put in [routes], and a URL the test forgot answers 404 instead of
++/// throwing, so a missing fallback shows up as "no manifest" rather than as a
++/// crash inside the updater.
++class FakeUpdaterSourceClient extends http.BaseClient {
++  FakeUpdaterSourceClient(this.routes);
++
++  final Map<String, FakeUpdaterSource> routes;
++  final List<String> requestedUrls = [];
++
++  @override
++  Future<http.StreamedResponse> send(http.BaseRequest request) async {
++    final url = request.url.toString();
++    requestedUrls.add(url);
++    final route = routes[url];
++    if (route == null) {
++      return http.StreamedResponse(Stream.value(const <int>[]), 404);
++    }
++    final body = route.body;
++    return http.StreamedResponse(
++      Stream.value(body),
++      route.status,
++      contentLength: body.isEmpty ? null : body.length,
++      headers: const {'content-type': 'application/json'},
++    );
++  }
++
++  /// The production code closes its client after every use; this fake is
++  /// handed out repeatedly, so closing must be a no-op.
++  @override
++  void close() {}
++}
++
++/// Installs a [FakeUpdaterSourceClient] as the updater's HTTP seam, together
++/// with the platform and package-info doubles. Returns the client so a test
++/// can assert the order of the requests it saw.
++FakeUpdaterSourceClient useUpdaterSourceFakes({
++  required Map<String, FakeUpdaterSource> routes,
++  FakeUpdaterPlatform? platform,
++  UpdateChannel channel = UpdateChannel.dev,
++  String versionName = '2.11.3',
++}) {
++  final previousClientFactory = PlotinaUpdater.clientFactory;
++  final previousPackageInfo = PlotinaUpdater.packageInfoProvider;
++  final previousChannel = PlotinaUpdater.channelProvider;
++  final client = FakeUpdaterSourceClient(routes);
++  platform ??= FakeUpdaterPlatform();
++  platform.register();
++  PlotinaUpdater.clientFactory = () => client;
++  PlotinaUpdater.packageInfoProvider = () async => (
++    packageName: kPackageName,
++    version: versionName,
++  );
++  PlotinaUpdater.channelProvider = () => channel;
++  addTearDown(() {
++    PlotinaUpdater.clientFactory = previousClientFactory;
++    PlotinaUpdater.packageInfoProvider = previousPackageInfo;
++    PlotinaUpdater.channelProvider = previousChannel;
++    platform?.dispose();
++  });
++  return client;
 +}
 +
 +/// Installs the fakes into [PlotinaUpdater]'s DI seams and restores whatever
