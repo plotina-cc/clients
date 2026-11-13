@@ -16,7 +16,8 @@ Both halves of the patch are measured in the same run, on the same build:
   2. the corner eye shows it on the first click — no menu — and that choice is
      not written either (showing is a page-session choice);
   3. hiding again with the same eye turns the tile into the paused tile, and
-     Watch brings the stream back from the keyboard;
+     Watch brings the stream back — clicked with a mouse first, which is how
+     the owner uses it, and then from the keyboard;
   4. hiding is remembered: after a reload the stream is hidden again, and it is
      written to account data;
   5. the sharer's own tile is never a paused stream, and the control viewer
@@ -233,6 +234,29 @@ const totalVideoFrames = (m) =>
   videoTracks(m).reduce((sum, t) => sum + t.framesDelta, 0);
 const audioBytesTotal = (m) =>
   audioTracks(m).reduce((sum, t) => sum + t.bytesDelta, 0);
+
+/**
+ * What a pointer click on the middle of `locator` lands on. jsdom has no hit
+ * testing, so this is the only place the question "is the button actually
+ * clickable" gets answered: an ancestor painted above it takes the click and
+ * `receivesClick` is false, even though the button is visible and enabled.
+ */
+const watchHitTest = (locator) =>
+  locator
+    .evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const stack = document.elementsFromPoint(
+        r.x + r.width / 2,
+        r.y + r.height / 2,
+      );
+      const name = (n) =>
+        `${n.tagName.toLowerCase()}.${String(n.className).slice(0, 48)}`;
+      return {
+        top: stack.slice(0, 4).map(name),
+        receivesClick: stack[0] === el || el.contains(stack[0]),
+      };
+    })
+    .catch((e) => ({ error: String(e) }));
 
 const browser = await chromium.launch({
   args: [
@@ -558,18 +582,51 @@ try {
     });
   };
 
-  // Show it again, in the same call: the paused block's own button, reached
-  // from the keyboard, is the same action as the corner eye toggle.
+  // Show it again, in the same call: the paused block's own button. The owner
+  // clicks it with a mouse, so that is the path measured first. The button sits
+  // under the tile's foreground chrome, and a chrome layer that takes pointer
+  // events swallows exactly this click — which is why the keyboard alone is not
+  // enough (this harness used to only tab to it, and stayed green while a mouse
+  // click did nothing).
   const watch = viewer.page.getByRole("button", { name: "Watch" });
-  await watch.focus();
-  const watchFocused = await watch.evaluate((el) => el === document.activeElement);
-  say("watch button focused from the keyboard", { watchFocused });
-  await viewer.page.keyboard.press("Enter");
-  await viewer.page.waitForTimeout(3000);
+  const watchHit = await watchHitTest(watch);
+  say("watch button hit test", watchHit);
+  let watchClickedWithMouse = false;
+  const watchBox = await watch.boundingBox();
+  if (watchBox) {
+    await viewer.page.mouse.move(
+      watchBox.x + watchBox.width / 2,
+      watchBox.y + watchBox.height / 2,
+    );
+    await viewer.page.waitForTimeout(200);
+    await viewer.page.mouse.click(
+      watchBox.x + watchBox.width / 2,
+      watchBox.y + watchBox.height / 2,
+    );
+    await viewer.page.waitForTimeout(3000);
+    watchClickedWithMouse = !(await readPausedTile(viewer.page)).visible;
+  }
+  say("after a mouse click on Watch", {
+    shown: watchClickedWithMouse,
+    hit: watchHit,
+  });
+  await viewer.page.screenshot({ path: join(OUT, "04-viewer-shown-again.png") });
+
+  // ...and from the keyboard, which is the accessibility path: hide again with
+  // the eye, focus Watch, press Enter.
+  let watchFocused = null;
+  if (watchClickedWithMouse) {
+    await setVisibility(true, "hide before the keyboard check");
+    await viewer.page.waitForTimeout(2000);
+    await watch.focus();
+    watchFocused = await watch.evaluate((el) => el === document.activeElement);
+    say("watch button focused from the keyboard", { watchFocused });
+    await viewer.page.keyboard.press("Enter");
+    await viewer.page.waitForTimeout(3000);
+  }
   const afterShowViewer = await measure(viewer.page, "viewer/after-show");
   const pausedAfterWatch = await readPausedTile(viewer.page);
   say("after Watch", { pausedBlockGone: !pausedAfterWatch.visible });
-  await viewer.page.screenshot({ path: join(OUT, "04-viewer-shown-again.png") });
 
   // Restart: hide, reload the page, rejoin, the choice must come back from the
   // store (localStorage + account data), not from component state.
@@ -619,6 +676,8 @@ try {
       pausedAfterWatch,
       sharerPaused,
       watchFocusedFromKeyboard: watchFocused,
+      watchClickedWithMouse,
+      watchHit,
       menusOpenedByTheEye: menusAfterClick + menusAfterClickHide,
       pressedOnJoin,
       pressedAfterShowing,
@@ -670,6 +729,11 @@ try {
         /^rgba\(0, 0, 0, 0\.5\d\)$/.test(pausedAfterHide.scrim ?? "") &&
         pausedAfterHide.oldStatusLineGone === true,
       watchBroughtItBack: pausedAfterWatch.visible === false,
+      // The pointer path, which is how the owner uses the button and what the
+      // foreground chrome used to swallow: visible and enabled is not the same
+      // as reachable.
+      watchClickableWithMouse:
+        watchHit?.receivesClick === true && watchClickedWithMouse === true,
       watchReachableFromKeyboard: watchFocused === true,
       hiddenAfterReload: pausedAfterReload.visible === true,
       stillHiddenAfterReload:

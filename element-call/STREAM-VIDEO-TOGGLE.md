@@ -50,7 +50,7 @@ stream must not remove the only way to unhide it.
 | `src/state/PersistentVolume.ts` | the store from `0004` gains a `#screenshare-video` key namespace and `getStreamVisible` / `setStreamVisible` (no entry = hidden); the map, debounce, merge and limit are shared with the volumes. |
 | `src/tile/SpotlightTile.tsx` | `ScreenShareVisibilityButton` (one `<button>` with `VisibilityOnIcon`/`VisibilityOffIcon`, `aria-pressed` and a state-dependent label) next to `ScreenShareVolumeButton`; `SpotlightRemoteScreenShareItem` does not hand the track to `MediaView` while hidden, and passes the paused block as `MediaView`'s `overlay`. |
 | `src/tile/SpotlightTile.module.css` | the paused block and its Watch button (centred, white on the dark scrim, `opacity: 1` so it does not wait for a hover). |
-| `src/tile/MediaView.tsx`, `MediaView.module.css` | a generic `overlay` layer: above the background (avatar, video), below the foreground chrome, so the volume and eye controls stay reachable. |
+| `src/tile/MediaView.tsx`, `MediaView.module.css` | a generic `overlay` layer: above the background (avatar, video), below the foreground chrome; the chrome itself is pointer-transparent (`.fg { pointer-events: none }`, its own children opt back in) so a click reaches the overlay's buttons rather than being taken by the chrome that covers the tile. |
 | `locales/{en,ru}/app.json` | `screen_share_visibility`, `show_stream`, `stream_paused`, `watch_stream`. The old menu label `hide_stream` went with the menu, and the old status line `stream_hidden` was replaced by the paused tile. |
 | `src/utils/test.ts` | the shared remote-participant mock's publication stub understands `setSubscribed`. |
 
@@ -83,6 +83,31 @@ The block is rendered through a new generic `MediaView` `overlay` slot: above th
 video) and below the foreground chrome. Covering the chrome instead would have taken the volume and
 eye controls away exactly when the viewer is looking at the tile. The old
 `video_tile.stream_hidden` status line is gone, and no dead key is left in the locales.
+
+### The chrome must not take the click (found live)
+
+`MediaView`'s foreground layer (`.fg`) covers the whole tile, so it is the element a pointer click
+lands on *anywhere* in the tile — including over the overlay painted beneath it. While it took
+pointer events, a mouse click on **Watch** was delivered to the chrome: `setVideoVisible` was never
+called, the tile stayed paused, and the button looked dead. It still worked from the keyboard
+(`Tab` → `Enter`), which is why the earlier proof — the only one that reached the button that way —
+stayed green, and why jsdom never saw it: jsdom has no hit testing.
+
+The chrome is a paint layer, not a hit target, so it is now pointer-transparent and only its own
+children take events:
+
+```css
+.fg { pointer-events: none; }
+.fg > * { pointer-events: auto; }
+```
+
+The hover that reveals the chrome's own buttons moves up to the tile (`.media:hover .fg > button`),
+because a pointer-transparent layer can no longer be the hovered element. The overlay still paints
+*under* the chrome: the name tag and the tile's corner controls stay visible over the scrim.
+
+Guarded twice: `tests/test_stream_video_toggle.py` asserts the shape of the patch without a browser,
+and `tests/live/stream_watch_click_proof.mjs` clicks the button with a real mouse and reports what
+`document.elementsFromPoint` says is on top of it.
 
 ## Storage
 
@@ -139,7 +164,7 @@ Run from `element-call/` with the sources of the pinned tag plus the patch serie
 npx vitest run --project=unit        # 812 passed | 9 skipped, 99 files
 npx tsc --noEmit                     # clean
 npx oxlint src/state src/tile src/utils/test.ts   # 2 pre-existing no-meaningless-void-operator in Publisher.ts (0001), no new ones
-python3 -m unittest discover -s element-call/tests   # 89 tests, OK
+python3 -m unittest discover -s element-call/tests   # 90 tests, OK
 NODE_OPTIONS=--max-old-space-size=16384 npx vite build   # exit 0
 ```
 
@@ -226,7 +251,23 @@ What the run established, check by check (22 checks, all `true`, `EXIT=0`):
   and the cache holds
   `{"@<sharer>:synapse.m.localhost#screenshare-video":{"visible":false,"ts":…}}`,
   the same account data event as the volumes;
-- `sharerOwnStreamVisible` — a local share never consults the visibility model.
+- `sharerOwnStreamVisible` — a local share never consults the visibility model;
+- `watchClickableWithMouse` — **Watch works with a mouse**, not only from the keyboard: the hit test
+  at the middle of the button returns the button itself, and the click brings the stream back. On the
+  published `.16` bundle the same check fails — the hit test returns `div._fg_…` (the tile's chrome)
+  and the click does nothing — which is what the owner saw.
+
+`tests/live/stream_watch_click_proof.mjs` is the focused version of that last check: two browsers,
+one sharer, and a viewer that only exercises the paused tile's pointer path (Watch by mouse, the
+corner eye by mouse, Watch again from the keyboard as the control). It reports
+`document.elementsFromPoint` at the centre of each button, so "the button is visible and enabled but
+something else takes the click" is a named result rather than a mystery:
+
+| build | Watch hit test | mouse click on Watch | keyboard on Watch | eye, by mouse |
+| :-- | :-- | :-- | :-- | :-- |
+| `.16` (before the fix) | `div._fg_…` on top, `receivesClick: false` | stream stays hidden | stream comes back | hide + show both work |
+| fixed | `button._watchButton_…`, `receivesClick: true` | stream comes back | stream comes back | hide + show both work |
+
 
 The negative control for this harness is a build of the same tree with one line
 changed — `getStreamVisible` returning `true` for a key with no entry, i.e. the
@@ -247,6 +288,14 @@ node element-call/tests/live/serve_bundle.mjs <dist> 3443 <cert dir>   # key.pem
 BASE_URL="https://localhost:3443/room/#?roomId=<url-encoded id>" EVIDENCE_DIR=/tmp/stream-proof \
   PLAYWRIGHT_FROM=<ec source tree>/package.json \
   node element-call/tests/live/stream_video_toggle_proof.mjs
+```
+
+The pointer-only harness runs the same way, against the same bundle:
+
+```bash
+BASE_URL="https://localhost:3443/room/#?roomId=<url-encoded id>" EVIDENCE_DIR=/tmp/watch-click \
+  PLAYWRIGHT_FROM=<ec source tree>/package.json \
+  node element-call/tests/live/stream_watch_click_proof.mjs
 ```
 
 Screenshots from the run: `01-viewer-arrives-hidden.png`, `02-viewer-receiving.png`,
