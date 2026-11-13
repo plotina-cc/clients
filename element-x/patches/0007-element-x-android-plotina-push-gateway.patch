@@ -1,3 +1,7 @@
+# Plotina-Patch: the Firebase pusher registers against https://push.plotina.cc instead of matrix.org's
+#   gateway, which would reject a token from our Firebase project.
+# Plotina-Marker: https://push.plotina.cc/_matrix/push/v1/notify
+
 diff --git a/libraries/pushproviders/firebase/src/main/kotlin/io/element/android/libraries/pushproviders/firebase/FirebaseConfig.kt b/libraries/pushproviders/firebase/src/main/kotlin/io/element/android/libraries/pushproviders/firebase/FirebaseConfig.kt
 index 10891d51..91720b63 100644
 --- a/libraries/pushproviders/firebase/src/main/kotlin/io/element/android/libraries/pushproviders/firebase/FirebaseConfig.kt

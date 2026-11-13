@@ -5,6 +5,14 @@ name: Validate Plotina X configuration
 # the first two. This job runs the same setup as the real build and stops after
 # Gradle has configured the project, so a red run costs minutes, not half an hour.
 #
+# What it proves: the pinned upstream tag still takes every patch in element-x/patches/
+# (through the same script the build uses), the signing/Firebase overlays still land, and
+# `:app:assembleGplayRelease` resolves — variant names, abiFilters and the task graph.
+# What it does NOT prove: anything about an APK. `--dry-run` stops before a single class is
+# compiled, so the marker gate (element-x/scripts/check-markers.sh, which reads the built APK)
+# cannot run here and does not pretend to. A green validate run means "the tag can be built",
+# not "the artifact is right" — build-element-x.yml is the only place that says the latter.
+#
 # Run it before tagging: workflow_dispatch on the branch you are about to tag.
 on:
   workflow_dispatch:
@@ -58,27 +66,12 @@ jobs:
         run: |
           GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 --branch "$ELEMENT_X_TAG" \
             https://github.com/element-hq/element-x-android upstream/element-x
-          cd upstream/element-x
-          # The same list, in the same order, as the `patches` and build jobs of
-          # build-element-x.yml: this check has to configure the tree the release build really
-          # makes. It used to stop at 0008, so 0009..0016 were never seen here at all.
-          for p in 0002-element-x-android-plotina-signing \
-                   0004-element-x-android-plotina-call-url \
-                   0005-element-x-android-plotina-app-link \
-                   0006-element-x-android-plotina-account-provider \
-                   0007-element-x-android-plotina-push-gateway \
-                   0008-element-x-android-plotina-sentry \
-                   0009-plotina-application-id \
-                   0010-plotina-visible-strings \
-                   0011-plotina-locales \
-                   0012-plotina-about-minimal \
-                   0013-plotina-analytics-off \
-                   0014-plotina-self-updater \
-                   0015-plotina-dm-personal-names \
-                   0016-plotina-contact-names-for-people; do
-            echo "==> $p"
-            git apply --verbose "$GITHUB_WORKSPACE/element-x/patches/$p.patch"
-          done
+          # Same entry point as the build job: the whole patches/ directory, in order, nothing named
+          # here. This list used to stop at patch 0008, so the later patches were never checked
+          # before a tag; the script applies all of them and writes the same marker file the build
+          # job's artifact gate consumes.
+          element-x/scripts/apply-patches.sh upstream/element-x \
+            "$GITHUB_WORKSPACE/plotina-markers.txt"
 
       - name: Write the Firebase project into the gplay flavour
         env:

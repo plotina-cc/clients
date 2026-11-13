@@ -1,3 +1,10 @@
+# Plotina-Patch: the Sentry release is element-x@<version+tag> (stamped as io.sentry.release in the
+#   manifest, from PLOTINA_SENTRY_RELEASE) and release builds report environment
+#   "production" instead of upstream's "RELEASE". No init code: the app-side SDK is
+#   upstream's services/analyticsproviders/sentry, initialised by its own
+#   SentryAnalyticsProvider.
+# Plotina-Marker: element-x@
+
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
 index 706a82f0..ebcc6642 100644
 --- a/app/build.gradle.kts

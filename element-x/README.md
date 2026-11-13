@@ -17,7 +17,8 @@ patched so calls run on our own Element Call instead of the bundle inside the AP
 ## Source
 
 The APK is built from `element-hq/element-x-android` at `v26.10.1` plus the
-patches in `element-x/patches/`. The upstream tag, the patch order and the
+patches in `element-x/patches/`, applied by `element-x/scripts/apply-patches.sh`.
+What each patch does is in `patches/README.md`; the upstream tag and the
 `./gradlew` command are in `../SOURCE.md`; the release notes repeat the offer.
 Upstream is AGPL-3.0-or-later; the patch layer here is AGPL-3.0.
 
@@ -43,15 +44,20 @@ Locally:
 
 ```sh
 git clone --depth 1 -b v26.10.1 https://github.com/element-hq/element-x-android /tmp/ex
+element-x/scripts/apply-patches.sh /tmp/ex                     # all of patches/, in order
+base64 -d /path/to/google-services.json.b64 > /tmp/ex/app/google-services.json
+python3 element-x/scripts/firebase-resources.py \
+        /tmp/ex/app/google-services.json /tmp/ex/app/src/gplay/res
 cd /tmp/ex
-for p in /path/to/clients/element-x/patches/*.patch; do git apply "$p"; done
-base64 -d /path/to/google-services.json.b64 > app/google-services.json
-python3 /path/to/clients/element-x/scripts/firebase-resources.py \
-        app/google-services.json app/src/gplay/res
 export ELEMENT_ANDROID_SENTRY_DSN="$(gh variable get SENTRY_DSN -R plotina-cc/clients)"
 export PLOTINA_SENTRY_RELEASE="element-x@26.10.1-plotina-x.14"
 ./gradlew -PplotinaSingleApk assembleGplayDebug
 ```
+
+Do not apply the patches by hand: the script is the single entry point CI uses, it checks every
+patch against the tree the previous ones built, and it writes the marker file that
+`element-x/scripts/check-markers.sh <apk> <markers-file>` uses to prove the APK really carries them.
+What each patch does is in `patches/README.md`.
 
 Add `-PplotinaBuildNumber=30 -PplotinaDevBuild=1` to reproduce a dev-channel build of the
 `v26.10.1-plotina-x.30-dev.1` shape (same versionCode as stable .30, versionName `26.10.1-dev.1`).

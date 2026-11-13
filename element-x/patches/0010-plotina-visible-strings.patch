@@ -1,3 +1,8 @@
+# Plotina-Patch: "Plotina Call" instead of "Element Call" in the strings a user sees (foreground-service
+#   notification, incoming-call subtitle), the onboarding headline and the
+#   unsupported-call notice.
+# Plotina-Marker: Plotina Call does not support using Bluetooth audio devices
+
 diff --git a/features/call/impl/src/main/res/values-ru/translations.xml b/features/call/impl/src/main/res/values-ru/translations.xml
 index dd5bb7a6..01e1fa10 100644
 --- a/features/call/impl/src/main/res/values-ru/translations.xml

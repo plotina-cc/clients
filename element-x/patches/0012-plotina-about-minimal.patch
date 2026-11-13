@@ -1,3 +1,8 @@
+# Plotina-Patch: About shows only the open-source licence list, not upstream's element.io legal links.
+# Plotina-Marker: plotina-patch-0012-about-minimal
+# Plotina-Note: this patch is build-level and ships no runtime string of its own, so it writes
+#   its marker into an asset file of its own; the artifact gate looks for it there.
+
 diff --git a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/ElementLegal.kt b/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/ElementLegal.kt
 index 0f3c25a..2b6a89d 100644
 --- a/features/preferences/impl/src/main/kotlin/io/element/android/features/preferences/impl/about/ElementLegal.kt
@@ -15,3 +20,10 @@ index 0f3c25a..2b6a89d 100644
 +    // are not ours. The About screen keeps only the open-source licence list.
 +    return persistentListOf()
  }
+
+diff --git a/app/src/main/assets/plotina-patches/0012.txt b/app/src/main/assets/plotina-patches/0012.txt
+new file mode 100644
+--- /dev/null
++++ b/app/src/main/assets/plotina-patches/0012.txt
+@@ -0,0 +1 @@
++plotina-patch-0012-about-minimal

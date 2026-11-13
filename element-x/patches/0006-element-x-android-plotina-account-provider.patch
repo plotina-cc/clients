@@ -1,3 +1,9 @@
+# Plotina-Patch: the default account provider is plotina.cc instead of matrix.org, so sign-in opens on
+#   our homeserver without anyone typing the address.
+# Plotina-Marker: plotina-patch-0006-account-provider
+# Plotina-Note: this patch is build-level and ships no runtime string of its own, so it writes
+#   its marker into an asset file of its own; the artifact gate looks for it there.
+
 diff --git a/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/accountprovider/AccountProvider.kt b/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/accountprovider/AccountProvider.kt
 index c2d103b3..3e581b15 100644
 --- a/libraries/matrix/api/src/main/kotlin/io/element/android/libraries/matrix/api/accountprovider/AccountProvider.kt
@@ -9,3 +15,10 @@ index c2d103b3..3e581b15 100644
 -    serverName = "matrix.org",
 +    serverName = "plotina.cc",
  )
+
+diff --git a/app/src/main/assets/plotina-patches/0006.txt b/app/src/main/assets/plotina-patches/0006.txt
+new file mode 100644
+--- /dev/null
++++ b/app/src/main/assets/plotina-patches/0006.txt
+@@ -0,0 +1 @@
++plotina-patch-0006-account-provider
