@@ -102,7 +102,7 @@ Out of scope on purpose, and asserted so in the tests:
 ## Tests
 
 ```bash
-python3 -m unittest discover -s element-call/tests          # 83 tests, ~6 s
+python3 -m unittest discover -s element-call/tests          # 86 tests, ~6 s
 EC_SKIP_NETWORK=1 python3 -m unittest discover -s element-call/tests   # fixtures only
 ```
 
@@ -133,7 +133,7 @@ the LiveKit options). See [STREAM-VIDEO-TOGGLE.md](./STREAM-VIDEO-TOGGLE.md).
 | `0002-plotina-sentry.patch` | early error reporting (`src/plotina/sentry.ts`, `src/main.tsx`) |
 | `0003-plotina-login-terms-guard.patch` | `useInteractiveRegistration`: a `/register` error without `params` (MAS) must not throw inside the `catch` |
 | `0004-plotina-persistent-volume.patch` | remember each participant's playback volume by MXID, and its screen share's separately, in localStorage + account data (`src/state/PersistentVolume.ts`) — see [VOLUME-PERSISTENCE.md](./VOLUME-PERSISTENCE.md) |
-| `0005-plotina-stream-video-toggle.patch` | let a viewer stop receiving and showing one participant's screen share (per MXID, remembered in the same store) — see [STREAM-VIDEO-TOGGLE.md](./STREAM-VIDEO-TOGGLE.md) |
+| `0005-plotina-stream-video-toggle.patch` | somebody else's screen share arrives hidden and the viewer turns it on with the tile's toggle (per MXID; hiding is remembered in the same store) — see [STREAM-VIDEO-TOGGLE.md](./STREAM-VIDEO-TOGGLE.md) |
 
 ## Error reporting
 

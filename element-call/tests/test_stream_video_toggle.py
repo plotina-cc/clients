@@ -10,9 +10,9 @@ Three things are checked, independently of a browser, an SFU or a build:
   must *not* be there: a global "hide every stream" toggle, or changes to
   upstream's ``VolumeControls``/LiveKit configuration.
 * ``StoreLogicTests`` runs the store the whole patch series produces under node
-  (``tests/stream_visibility_probe.mjs``): the visibility entries, the
-  default of "show", restarts, two devices, and that a visibility entry is
-  never read back as a volume. No node_modules are needed.
+  (``tests/stream_visibility_probe.mjs``): the visibility entries, the default
+  of "hidden", the session-only "show", restarts, two devices, and that a
+  visibility entry is never read back as a volume. No node_modules are needed.
 * ``AppliedSourceTests`` applies every patch, in filename order, to the
   upstream source of the tag pinned in ``pins.env`` — the way
   ``build.py --mode source`` does before it builds — and runs the probe against
@@ -163,7 +163,34 @@ class PatchTests(unittest.TestCase):
         # Keyed by MXID plus source, in the same store the volume patch added.
         self.assertIn("streamVideoKey(inputs.userId)", added)
         self.assertIn("persistentVolumeStore()", added)
-        self.assertIn("store.getStreamVisible(videoKey) ?? true", added)
+        self.assertIn("store.getStreamVisible(videoKey)", added)
+        # The default is "hidden": the old `?? true` must not survive anywhere.
+        self.assertNotIn("?? true", added)
+
+    def test_the_default_is_hidden_not_shown(self) -> None:
+        """t_6d5f61b4: somebody else's stream starts hidden."""
+        added = "\n".join(added_lines(sections()[STORE]))
+        self.assertIn("public getStreamVisible(key: string): boolean {", added)
+        self.assertIn(
+            "return entry !== undefined && isStreamVideoEntry(entry) && entry.visible;",
+            added,
+        )
+        # A stream the viewer turned on lasts for the page session only, so a
+        # `true` is never written: hiding is the only synced choice.
+        self.assertIn("this.sessionShown.has(key)) return true;", added)
+        self.assertIn("this.sessionShown.add(key);", added)
+        self.assertIn("[key]: { visible: false, ts: this.clock() },", added)
+        # An explicit hide from another device ends a local "watch".
+        self.assertIn("this.sessionShown.delete(key);", added)
+        for stale in ("?? true", "boolean | null", 'The ViewModel treats null'):
+            self.assertNotIn(stale, added)
+
+    def test_a_local_share_is_never_subject_to_the_choice(self) -> None:
+        """The person sharing always sees their own stream (t_6d5f61b4)."""
+        tile = "\n".join(added_lines(sections()[TILE]))
+        self.assertIn("a local screen share is this viewer's own stream", tile)
+        ui_test = "\n".join(added_lines(sections()[TILE_TEST]))
+        self.assertIn("the viewer's own screen share is never hidden", ui_test)
 
     def test_the_publishers_state_is_not_reused_as_the_viewers_choice(self) -> None:
         section = sections()[SCREEN_SHARE]
@@ -303,9 +330,13 @@ class StoreLogicTests(unittest.TestCase):
 
     expected = (
         "the stream visibility key is the mxid plus the source",
-        "a stream is shown until the viewer says otherwise",
+        "a stream nobody has chosen for is hidden",
+        "a stored choice to show a stream is honoured",
+        "a stored choice to hide a stream is still hidden",
         "hiding a stream is remembered",
         "showing a stream again is remembered",
+        "showing a stream is not written to the account",
+        "a stream the viewer showed is hidden again at the next start",
         "a visibility entry is not read back as a volume",
         "the microphone, the share's audio and its video are separate keys",
         "a hidden stream survives a restart",
@@ -451,7 +482,15 @@ class AppliedSourceTests(unittest.TestCase):
         self.assertIn("setSubscribed(visible)", source)
         self.assertIn("videoVisible$", source)
         self.assertIn("store.setStreamVisible(videoKey, visible)", source)
-        self.assertIn("store.getStreamVisible(videoKey) ?? true", source)
+        self.assertIn("store.getStreamVisible(videoKey)", source)
+        self.assertNotIn("?? true", source)
+
+    def test_the_default_is_hidden_in_the_applied_source(self) -> None:
+        # The docstring and the code both have to say "hidden by default".
+        store = self.read(STORE)
+        self.assertIn("hidden until the viewer turns it on", store)
+        self.assertIn("public getStreamVisible(key: string): boolean {", store)
+        self.assertNotIn("boolean | null", store.split("getStreamVisible")[1][:400])
 
     def test_the_tile_hides_the_track_not_just_the_pixels(self) -> None:
         source = self.read(TILE)
