@@ -9,8 +9,10 @@ control nor per-participant volume, and it is built for the site root, so the
 archive we mount has to be rebased onto the mount path. The checks below are
 the gate the card asks for:
 
-  * the frame is OUR bundle (hide_stream, screen_share_visibility,
+  * the frame is OUR bundle (stream_paused, screen_share_visibility,
     cc.plotina.voice_volumes, the ru label, the Plotina icon);
+  * the superseded hide_stream menu is NOT in the frame (a bundle that still
+    carries it is the previous build, not the one the card ships);
   * nothing of the upstream widget survives, and no source map is shipped;
   * the denoiser lives INSIDE the mount (the older pipeline copied a 50 MB
     noise/ tree to the dist root that no frame loaded);
@@ -49,6 +51,13 @@ OUR_INDEX = (
     "</head><body><div id=\"root\"></div></body></html>"
 )
 OUR_BUNDLE = (
+    'var a="video_tile.stream_paused",b="video_tile.watch_stream",'
+    'c="video_tile.screen_share_visibility",d="cc.plotina.voice_volumes";'
+)
+# The build this one replaces: it hid streams through a submenu keyed
+# video_tile.hide_stream. The card's DoD says that menu must be gone, so a frame
+# that still carries the key is rejected even though it looks like ours.
+SUPERSEDED_BUNDLE = (
     'var a="video_tile.hide_stream",b="video_tile.screen_share_visibility",'
     'c="cc.plotina.voice_volumes";'
 )
@@ -99,7 +108,7 @@ def make_archive(root: Path, *, ours: bool = True, with_noise: bool = True,
     if source_map:
         (stage / "assets" / "index-OURS.js.map").write_text("{}", encoding="utf-8")
     (stage / "assets" / "ru-app-CTBNJ8GR.json").write_text(
-        json.dumps({"video_tile": {"hide_stream": "Не показывать этот стрим"}}
+        json.dumps({"video_tile": {"stream_paused": "Стрим приостановлен"}}
                    if ru_label else {"a": "b"}, ensure_ascii=False),
         encoding="utf-8",
     )
@@ -147,7 +156,7 @@ class NegativeControlTest(unittest.TestCase):
             dist = make_dist(Path(tmp))
             failures = tool.check_frame(dist / tool.MOUNT)
             text = "\n".join(failures)
-            self.assertIn("hide_stream", text)
+            self.assertIn("stream_paused", text)
             self.assertIn("screen_share_visibility", text)
             self.assertIn("cc.plotina.voice_volumes", text)
             self.assertIn("__plotinaEc", text)
@@ -160,6 +169,22 @@ class NegativeControlTest(unittest.TestCase):
             with self.assertRaises(SystemExit) as ctx:
                 tool.verify_frame(dist / tool.MOUNT)
             self.assertNotEqual(ctx.exception.code, 0)
+
+
+class SupersededBuildTest(unittest.TestCase):
+    """The build .16 replaces must not pass: it still carries the hide_stream menu."""
+
+    def test_bundle_with_the_old_menu_is_rejected(self) -> None:
+        tool = load_tool()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dist = make_dist(root)
+            tool.install(make_archive(root), dist)
+            frame = dist / tool.MOUNT
+            (frame / "assets" / "index-OURS.js").write_text(SUPERSEDED_BUNDLE, encoding="utf-8")
+            text = "\n".join(tool.check_frame(frame))
+            self.assertIn("hide_stream", text)
+            self.assertIn("superseded", text)
 
 
 class InstallTest(unittest.TestCase):

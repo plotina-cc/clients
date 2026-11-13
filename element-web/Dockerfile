@@ -247,12 +247,14 @@ RUN set -eux; \
     bundle="$(ls /app/widgets/element-call/assets/index-*.js)"; \
     echo "voice_volumes: $(grep -o cc.plotina.voice_volumes "$bundle" | wc -l)"; \
     echo "setSubscribed: $(grep -o setSubscribed "$bundle" | wc -l)"; \
+    echo "stream_paused: $(grep -o video_tile.stream_paused "$bundle" | wc -l)"; \
     echo "hide_stream: $(grep -o video_tile.hide_stream "$bundle" | wc -l)"; \
-    echo "hide_stream_ru: $(grep -o 'Не показывать этот стрим' /app/widgets/element-call/assets/ru-app-*.json | wc -l)"; \
+    echo "stream_paused_ru: $(grep -o 'Стрим приостановлен' /app/widgets/element-call/assets/ru-app-*.json | wc -l)"; \
     test "$(grep -o cc.plotina.voice_volumes "$bundle" | wc -l)" -gt 0; \
     test "$(grep -o setSubscribed "$bundle" | wc -l)" -gt 0; \
-    test "$(grep -o video_tile.hide_stream "$bundle" | wc -l)" -gt 0; \
-    grep -q 'Не показывать этот стрим' /app/widgets/element-call/assets/ru-app-*.json; \
+    test "$(grep -o video_tile.stream_paused "$bundle" | wc -l)" -gt 0; \
+    test "$(grep -o video_tile.hide_stream "$bundle" | wc -l)" -eq 0; \
+    grep -q 'Стрим приостановлен' /app/widgets/element-call/assets/ru-app-*.json; \
     grep -q 'src="/widgets/element-call/assets/' /app/widgets/element-call/index.html; \
     ! grep -rqs 'src="/assets/' /app/widgets/element-call/index.html; \
     ! test -e /app/widgets/element-call/noise; \

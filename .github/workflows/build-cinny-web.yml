@@ -225,7 +225,11 @@ jobs:
             exit 1
           fi
           test ! -e upstream/cinny/dist/noise
-          grep -Raqs 'hide_stream' upstream/cinny/dist/public/element-call/assets
+          grep -Raqs 'video_tile.stream_paused' upstream/cinny/dist/public/element-call/assets
+          if grep -Raqs 'video_tile.hide_stream' upstream/cinny/dist/public/element-call/assets; then
+            echo "the superseded hide_stream menu survived in the dist" >&2
+            exit 1
+          fi
           test -f upstream/cinny/dist/public/element-call/noise/dfn/v3/pkg/df_bg.wasm
           test -f "$dist/config.json"
           test -s "$dist/LICENSE-AGPL-3.0"
