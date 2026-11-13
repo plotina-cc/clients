@@ -44,7 +44,10 @@ STORE = "src/state/PersistentVolume.ts"
 SCREEN_SHARE = "src/state/media/RemoteScreenShareViewModel.ts"
 SCREEN_SHARE_TEST = "src/state/media/RemoteScreenShareViewModel.test.ts"
 TILE = "src/tile/SpotlightTile.tsx"
+TILE_CSS = "src/tile/SpotlightTile.module.css"
 TILE_TEST = "src/tile/SpotlightTile.test.tsx"
+MEDIA_VIEW = "src/tile/MediaView.tsx"
+MEDIA_VIEW_CSS = "src/tile/MediaView.module.css"
 TEST_MOCKS = "src/utils/test.ts"
 LOCALE_EN = "locales/en/app.json"
 LOCALE_RU = "locales/ru/app.json"
@@ -54,7 +57,10 @@ TOUCHED = {
     SCREEN_SHARE,
     SCREEN_SHARE_TEST,
     TILE,
+    TILE_CSS,
     TILE_TEST,
+    MEDIA_VIEW,
+    MEDIA_VIEW_CSS,
     TEST_MOCKS,
     LOCALE_EN,
     LOCALE_RU,
@@ -69,11 +75,26 @@ OFF_LIMITS = (
     "pnpm-lock.yaml",
 )
 
-VISIBILITY_KEYS = ("screen_share_visibility", "show_stream", "stream_hidden")
+# The labels the merged patch puts in the video tile's catalog: the eye button
+# reads the first two (shown / hidden), the paused tile says the last two.
+VISIBILITY_KEYS = (
+    "screen_share_visibility",
+    "show_stream",
+    "stream_paused",
+    "watch_stream",
+)
 
-# The single-item menu this patch used to have; the button replaced it and its
-# label has no other reader, so it must not come back.
-RETIRED_KEYS = ("hide_stream",)
+# Labels the merge retired, neither of which has a reader left in the tree: the
+# label of the single-item menu the bare eye button replaced, and the old
+# "stream hidden" status line the paused tile replaced.
+RETIRED_KEYS = ("hide_stream", "stream_hidden")
+
+# What the paused tile says, per locale. A paused stream is a state of the whole
+# tile, not an annotation on a participant who looks present.
+PAUSED_TEXT = {
+    LOCALE_EN: {"stream_paused": "Stream paused", "watch_stream": "Watch"},
+    LOCALE_RU: {"stream_paused": "Стрим приостановлен", "watch_stream": "Смотреть"},
+}
 
 # How the tile refers to them in the source.
 VISIBILITY_REFS = tuple(f"video_tile.{key}" for key in VISIBILITY_KEYS)
@@ -178,6 +199,50 @@ class PatchTests(unittest.TestCase):
         self.assertNotIn('"menuitemcheckbox"', ui_test)
         self.assertIn('"aria-pressed"', ui_test)
         self.assertIn('"Show screen share"', ui_test)
+
+    def test_a_hidden_stream_is_a_paused_tile_not_a_participant(self) -> None:
+        tile = "\n".join(added_lines(sections()[TILE]))
+        # A block of its own in the middle of the tile, with a stable hook.
+        self.assertIn('data-testid="stream-paused"', tile)
+        self.assertIn("video_tile.stream_paused", tile)
+        # The way back is a real button, labelled for screen readers.
+        self.assertIn("<button", tile)
+        self.assertIn('aria-label={t("video_tile.watch_stream")}', tile)
+        self.assertIn("onClick={onWatch}", tile)
+        self.assertIn("vm.setVideoVisible(true)", tile)
+        # It owns the tile instead of annotating it: the old corner status line
+        # is replaced, not kept alongside.
+        self.assertIn(
+            "overlay={videoVisible ? undefined : <StreamPaused vm={vm} />}",
+            tile,
+        )
+        self.assertNotIn("status={videoVisible ? undefined", tile)
+
+        # The overlay is a MediaView layer over the avatar and the video, and
+        # under the foreground chrome, so the volume and eye controls still work.
+        view = "\n".join(added_lines(sections()[MEDIA_VIEW]))
+        self.assertIn("overlay?: ReactNode;", view)
+        self.assertIn(
+            "{overlay && <div className={styles.overlay}>{overlay}</div>}",
+            view,
+        )
+
+        # A dark backing in both themes: the label sits on someone's avatar.
+        view_css = "\n".join(added_lines(sections()[MEDIA_VIEW_CSS]))
+        self.assertIn(".overlay {", view_css)
+        self.assertIn("background: rgb(0 0 0 / 55%);", view_css)
+        self.assertIn("place-items: center;", view_css)
+
+        # Readable without hovering: the tile hides its buttons until hover.
+        tile_css = "\n".join(added_lines(sections()[TILE_CSS]))
+        self.assertIn(".streamPaused {", tile_css)
+        self.assertIn(".tile .streamPaused button {", tile_css)
+        self.assertIn("opacity: 1;", tile_css)
+
+        ui_test = "\n".join(added_lines(sections()[TILE_TEST]))
+        # Both directions are covered in the browser tests.
+        self.assertIn('getByTestId("stream-paused")', ui_test)
+        self.assertIn('{ name: "Watch" }', ui_test)
 
     def test_a_viewer_choice_is_remembered_per_mxid(self) -> None:
         added = "\n".join(added_lines(sections()[SCREEN_SHARE_TEST]))
@@ -425,6 +490,20 @@ class AppliedSourceTests(unittest.TestCase):
             self.assertNotIn(
                 f"video_tile.{key}", source, f"{key} is still referenced"
             )
+
+    def test_the_paused_state_says_what_it_is_in_both_locales(self) -> None:
+        for path, texts in PAUSED_TEXT.items():
+            keys = json.loads(self.read(path))["video_tile"]
+            for key, text in texts.items():
+                self.assertEqual(keys.get(key), text, f"{path}: {key}")
+            # The old status line is gone; no dead key left behind.
+            self.assertNotIn("stream_hidden", keys)
+
+    def test_the_applied_tile_renders_the_paused_block(self) -> None:
+        source = self.read(TILE)
+        self.assertIn('data-testid="stream-paused"', source)
+        self.assertIn('aria-label={t("video_tile.watch_stream")}', source)
+        self.assertNotIn('t("video_tile.stream_hidden")', source)
 
 
 if __name__ == "__main__":

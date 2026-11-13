@@ -21,10 +21,11 @@ a **single eye button**, not a menu: one click hides the stream, another click b
   «Показать демонстрацию экрана», `aria-pressed="true"`. Neither state needs a hover: the icon and
   the accessible name say which way the next click goes.
 - Hiding: the video track is taken out of the subscription
-  (`RemoteTrackPublication.setSubscribed(false)`), the tile stops rendering it, and the tile shows
-  "Stream hidden" / «Стрим скрыт» in its place.
-- Showing again: `setSubscribed(true)` and the normal render come back, without renegotiating the
-  call or reconnecting.
+  (`RemoteTrackPublication.setSubscribed(false)`), the tile stops rendering it, and the tile turns
+  into a **paused stream**: the participant's avatar under a dark scrim, «Стрим приостановлен» /
+  "Stream paused" in the middle, and a **Watch** button under it.
+- Showing again, from either surface: `setSubscribed(true)` and the normal render come back,
+  without renegotiating the call or reconnecting.
 - Each stream has its own toggle, keyed by the participant's MXID. There is deliberately **no**
   "hide all streams" switch.
 
@@ -37,8 +38,10 @@ stream must not remove the only way to unhide it.
 | :-- | :-- |
 | `src/state/media/RemoteScreenShareViewModel.ts` | new `videoVisible$` (the viewer's choice) next to upstream's `videoEnabled$` (whether the publisher is sharing and connected). `setVideoVisible` / `toggleVideoVisible` change it; a `combineLatest` of the screen share publication and `videoVisible$` calls `setSubscribed`. |
 | `src/state/PersistentVolume.ts` | the store from `0004` gains a `#screenshare-video` key namespace and `getStreamVisible` / `setStreamVisible`; the map, debounce, merge and limit are shared with the volumes. |
-| `src/tile/SpotlightTile.tsx` | `ScreenShareVisibilityButton` (one `<button>` with `VisibilityOnIcon`/`VisibilityOffIcon`, `aria-pressed` and a state-dependent label) next to `ScreenShareVolumeButton`; `SpotlightRemoteScreenShareItem` does not hand the track to `MediaView` while hidden. |
-| `locales/{en,ru}/app.json` | `screen_share_visibility`, `show_stream`, `stream_hidden`. The old menu label `hide_stream` was removed with the menu. |
+| `src/tile/SpotlightTile.tsx` | `ScreenShareVisibilityButton` (one `<button>` with `VisibilityOnIcon`/`VisibilityOffIcon`, `aria-pressed` and a state-dependent label) next to `ScreenShareVolumeButton`; `SpotlightRemoteScreenShareItem` does not hand the track to `MediaView` while hidden, and passes the paused block as `MediaView`'s `overlay`. |
+| `src/tile/SpotlightTile.module.css` | the paused block and its Watch button (centred, white on the dark scrim, `opacity: 1` so it does not wait for a hover). |
+| `src/tile/MediaView.tsx`, `MediaView.module.css` | a generic `overlay` layer: above the background (avatar, video), below the foreground chrome, so the volume and eye controls stay reachable. |
+| `locales/{en,ru}/app.json` | `screen_share_visibility`, `show_stream`, `stream_paused`, `watch_stream`. The old menu label `hide_stream` went with the menu, and the old status line `stream_hidden` was replaced by the paused tile. |
 | `src/utils/test.ts` | the shared remote-participant mock's publication stub understands `setSubscribed`. |
 
 `videoEnabled$` is not changed or reused: it still means "this share is being published and we are
@@ -52,6 +55,24 @@ must not look like the publisher stopped sharing.
   separate volume controls, not mentioned by this patch.
 - Other participants' streams: each toggle touches exactly one publication.
 - LiveKit/SFU configuration, `pins.env`/`EC_TAG`, `VolumeControls.ts`, any deployed artefact.
+
+## What a paused stream looks like
+
+A hidden stream must not read as a participant who happens to be present with their camera off. The
+tile therefore switches to a state of its own instead of painting a status line:
+
+- the participant's own avatar, dimmed under a dark scrim (`rgb(0 0 0 / 55%)`, the same in both
+  themes) so the label stays readable over any avatar, wallpaper or theme colour;
+- «Стрим приостановлен» / "Stream paused" in the middle of the tile;
+- a **Watch** button under the label, the same action as the corner eye toggle
+  (`vm.setVideoVisible(true)`), a real `<button>` with `aria-label`, so it is reachable with Tab and
+  announced by a screen reader. It is visible without a hover — the tile's own buttons are
+  hover-only, and the paused block opts out of that rule.
+
+The block is rendered through a new generic `MediaView` `overlay` slot: above the background (avatar,
+video) and below the foreground chrome. Covering the chrome instead would have taken the volume and
+eye controls away exactly when the viewer is looking at the tile. The old
+`video_tile.stream_hidden` status line is gone, and no dead key is left in the locales.
 
 ## Storage
 
@@ -189,8 +210,9 @@ button: its `02-viewer-menu.png` shows the single-item menu the button replaced.
   volume button is not, because it is gated on `audioEnabled`).
 - The control is one eye button: a click hides the stream and the same button
   (now the eye with the strike-through, labelled "Show screen share") brings it
-  back. Hiding keeps the tile in place with the avatar and "Stream hidden", so
-  the way back is always on screen.
+  back. Hiding keeps the tile in place, now as the paused state with the avatar,
+  «Стрим приостановлен» and the **Watch** button, so the way back is both in the
+  middle of the tile and in its corner.
 - In the grid layout the control is not shown: the tile chrome in grid is not the
   spotlight tile. Upstream's own per-share volume button is grid-less for the same
   reason, and this patch follows it rather than inventing a second control there.
@@ -199,12 +221,12 @@ button: its `02-viewer-menu.png` shows the single-item menu the button replaced.
 
 1. two accounts in one call, A shares a screen with audio;
 2. as B, click the eye button in the stream tile's corner — once, no menu;
-3. B's tile shows "Stream hidden", B's console logs `Unsubscribed: video
-   screen_share`, and `chrome://webrtc-internals` shows the share's inbound video
-   stream gone;
+3. B's tile turns into the paused state: dimmed avatar, «Стрим приостановлен», Watch button — with
+   no hover and no menu; B's console logs `Unsubscribed: video screen_share`, and
+   `chrome://webrtc-internals` shows the share's inbound video stream gone;
 4. A's voice and the share's audio still play for B, and another participant's
    stream (if any) is unaffected;
-5. reload B: the stream stays hidden; toggle it back and it renders again.
+5. reload B: the stream stays paused; press **Watch** and it renders again.
 
 ## Rollback
 

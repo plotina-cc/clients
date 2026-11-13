@@ -322,12 +322,119 @@ try {
   const menusAfterClick = await viewer.page.getByRole("menu").count();
   say("eye after the click", { pressedBefore, pressedAfter, menus: menusAfterClick });
 
-  const hiddenText = await viewer.page
-    .getByText("Stream hidden")
-    .isVisible()
-    .catch(() => false);
-  say("viewer tile says stream hidden", { hiddenText });
-  await viewer.page.screenshot({ path: join(OUT, "03-viewer-hidden.png") });
+  // What the viewer sees: not a participant who happens to be present, but a
+  // paused stream that owns the tile.
+  const readPausedTile = async (page) => {
+    const paused = page.getByTestId("stream-paused");
+    const visible = await paused.isVisible().catch(() => false);
+    if (!visible) return { visible: false };
+    const text = (await paused.innerText().catch(() => "")).replace(/\n+/g, " | ");
+    const watch = page.getByRole("button", { name: "Watch" });
+    const watchVisible = await watch.isVisible().catch(() => false);
+    // Readable without a hover: the tile hides its own buttons until then.
+    const watchOpacity = await watch
+      .evaluate((el) => getComputedStyle(el).opacity)
+      .catch(() => null);
+    // The participant's own avatar is still there, under the scrim. Scoped to
+    // this tile: a role query would also match the avatars in the grid sidebar.
+    const avatar = await paused
+      .evaluate((el) => {
+        const tile = el.closest('[data-testid="videoTile"]');
+        const mark = tile?.querySelector('[role="img"][aria-label^="@"]');
+        if (!mark) return false;
+        const r = mark.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      })
+      .catch(() => false);
+    // ...and a dark backing stands between the two, in any theme.
+    const scrim = await paused
+      .evaluate((el) => {
+        for (let n = el; n && n !== document.body; n = n.parentElement) {
+          const bg = getComputedStyle(n).backgroundColor;
+          if (bg && bg !== "rgba(0, 0, 0, 0)") return bg;
+        }
+        return null;
+      })
+      .catch(() => null);
+    // Ground truth about what is actually painted where: the element's own box,
+    // what sits at the middle of that box, and the opacity the ancestor chain
+    // applies (the tile fades during transitions).
+    const geometry = await paused
+      .evaluate((el) => {
+        const rect = el.getBoundingClientRect();
+        const chain = [];
+        for (let n = el; n && n !== document.body; n = n.parentElement) {
+          const s = getComputedStyle(n);
+          chain.push({
+            tag: n.tagName.toLowerCase(),
+            cls: String(n.className).slice(0, 60),
+            opacity: s.opacity,
+            visibility: s.visibility,
+            display: s.display,
+            transform: s.transform,
+          });
+        }
+        const mid = document.elementFromPoint(
+          rect.x + rect.width / 2,
+          rect.y + rect.height / 2,
+        );
+        return {
+          x: Math.round(rect.x),
+          y: Math.round(rect.y),
+          w: Math.round(rect.width),
+          h: Math.round(rect.height),
+          atCentre: mid
+            ? `${mid.tagName.toLowerCase()}.${String(mid.className).slice(0, 40)}`
+            : null,
+          chain,
+        };
+      })
+      .catch((e) => ({ error: String(e) }));
+    await paused
+      .screenshot({ path: join(OUT, "paused-element.png") })
+      .catch(() => {});
+    // Paint order, not just styles: the tile background is a paint container and
+    // paints as a positioned layer, so a static overlay would sit under it and be
+    // invisible while every assertion about boxes and colours still passed.
+    const paint = await paused
+      .evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const stack = document.elementsFromPoint(
+          r.x + r.width / 2,
+          r.y + r.height / 2,
+        );
+        const cls = (n) => String(n.className);
+        return {
+          pausedAboveBackground:
+            stack.indexOf(el) >= 0 &&
+            (stack.findIndex((n) => /_bg_/.test(cls(n))) === -1 ||
+              stack.indexOf(el) <
+                stack.findIndex((n) => /_bg_/.test(cls(n)))),
+          top: stack.slice(0, 3).map(cls),
+        };
+      })
+      .catch((e) => ({ error: String(e) }));
+    // No dead key left behind: the old corner status line is gone.
+    const statusLine = await page
+      .getByText("Stream hidden")
+      .isVisible()
+      .catch(() => false);
+    return {
+      visible: true,
+      text,
+      watchVisible,
+      watchOpacity,
+      avatar,
+      scrim,
+      geometry,
+      paint,
+      oldStatusLineGone: !statusLine,
+    };
+  };
+
+  const pausedAfterHide = await readPausedTile(viewer.page);
+  say("viewer tile is a paused stream", pausedAfterHide);
+  await viewer.page.screenshot({ path: join(OUT, "03-viewer-paused.png") });
 
   const afterHideViewer = await measure(viewer.page, "viewer/after-hide");
   const afterHideControl = await measure(control.page, "control/while-viewer-hid");
@@ -374,10 +481,17 @@ try {
     });
   };
 
-  // Show it again, in the same call.
-  await setVisibility(false, "show again");
+  // Show it again, in the same call: the paused block's own button, reached
+  // from the keyboard, is the same action as the corner eye toggle.
+  const watch = viewer.page.getByRole("button", { name: "Watch" });
+  await watch.focus();
+  const watchFocused = await watch.evaluate((el) => el === document.activeElement);
+  say("watch button focused from the keyboard", { watchFocused });
+  await viewer.page.keyboard.press("Enter");
   await viewer.page.waitForTimeout(3000);
   const afterShowViewer = await measure(viewer.page, "viewer/after-show");
+  const pausedAfterWatch = await readPausedTile(viewer.page);
+  say("after Watch", { pausedBlockGone: !pausedAfterWatch.visible });
   await viewer.page.screenshot({ path: join(OUT, "04-viewer-shown-again.png") });
 
   // Restart: hide, reload the page, rejoin, the choice must come back from the
@@ -395,13 +509,10 @@ try {
     .getByRole("button", { name: "Show screen share" })
     .waitFor({ state: "attached", timeout: 90_000 });
   await viewer.page.waitForTimeout(5000);
-  const afterReloadHidden = await viewer.page
-    .getByText("Stream hidden")
-    .isVisible()
-    .catch(() => false);
+  const pausedAfterReload = await readPausedTile(viewer.page);
   const reloadMeasure = await measure(viewer.page, "viewer/after-reload");
   await viewer.page.screenshot({ path: join(OUT, "05-viewer-after-reload.png") });
-  say("after reload", { hiddenText: afterReloadHidden });
+  say("after reload", { pausedTile: pausedAfterReload.visible });
 
   // Persisted choice, read back from the page.
   const stored = await viewer.page.evaluate(() => ({
@@ -424,8 +535,9 @@ try {
     viewerAfterShow: afterShowViewer,
     viewerAfterReload: reloadMeasure,
     ui: {
-      hiddenTextAfterToggle: hiddenText,
-      hiddenTextAfterReload: afterReloadHidden,
+      pausedAfterToggle: pausedAfterHide,
+      pausedAfterReload,
+      watchFocusedFromKeyboard: watchFocused,
       menusOpenedByTheEye: menusAfterClick,
     },
     stored,
@@ -444,7 +556,18 @@ try {
       sharerUnaffected: totalVideoFrames(afterHideSharer) > 0,
       viewerResumedAfterShow:
         videoCount(afterShowViewer) === videoCount(beforeHideViewer),
-      hiddenAfterReload: afterReloadHidden === true,
+      pausedTileOnHide:
+        pausedAfterHide.visible === true &&
+        /Stream paused/.test(pausedAfterHide.text ?? "") &&
+        pausedAfterHide.watchVisible === true &&
+        pausedAfterHide.watchOpacity === "1" &&
+        pausedAfterHide.avatar === true &&
+        pausedAfterHide.paint?.pausedAboveBackground === true &&
+        /^rgba\(0, 0, 0, 0\.5\d\)$/.test(pausedAfterHide.scrim ?? "") &&
+        pausedAfterHide.oldStatusLineGone === true,
+      watchBroughtItBack: pausedAfterWatch.visible === false,
+      watchReachableFromKeyboard: watchFocused === true,
+      hiddenAfterReload: pausedAfterReload.visible === true,
       stillHiddenAfterReload:
         videoCount(reloadMeasure) === videoCount(beforeHideViewer) - 1 &&
         totalVideoFrames(reloadMeasure) > 0,

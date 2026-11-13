@@ -1,33 +1,39 @@
 diff --git a/locales/en/app.json b/locales/en/app.json
-index f3d568b..0267992 100644
+index f3d568b..8b765c5 100644
 --- a/locales/en/app.json
 +++ b/locales/en/app.json
-@@ -272,7 +272,10 @@
+@@ -272,8 +272,12 @@
      "expand": "Expand",
      "mute_for_me": "Mute for me",
      "muted_for_me": "Muted for me",
 +    "screen_share_visibility": "Screen share visibility",
      "screen_share_volume": "Screen share volume",
 +    "show_stream": "Show screen share",
-+    "stream_hidden": "Stream hidden",
++    "stream_paused": "Stream paused",
      "volume": "Volume",
-     "waiting_for_media": "Waiting for media..."
+-    "waiting_for_media": "Waiting for media..."
++    "waiting_for_media": "Waiting for media...",
++    "watch_stream": "Watch"
    }
+ }
 diff --git a/locales/ru/app.json b/locales/ru/app.json
-index ec68fd7..9453caa 100644
+index ec68fd7..6e2e583 100644
 --- a/locales/ru/app.json
 +++ b/locales/ru/app.json
-@@ -252,7 +252,10 @@
+@@ -252,8 +252,12 @@
      "expand": "Развернуть",
      "mute_for_me": "Заглушить звук для меня",
      "muted_for_me": "Приглушить для меня",
 +    "screen_share_visibility": "Показ демонстрации экрана",
      "screen_share_volume": "Громкость демонстрации экрана",
 +    "show_stream": "Показать демонстрацию экрана",
-+    "stream_hidden": "Стрим скрыт",
++    "stream_paused": "Стрим приостановлен",
      "volume": "Громкость",
-     "waiting_for_media": "В ожидании медиа..."
+-    "waiting_for_media": "В ожидании медиа..."
++    "waiting_for_media": "В ожидании медиа...",
++    "watch_stream": "Смотреть"
    }
+ }
 diff --git a/src/state/PersistentVolume.ts b/src/state/PersistentVolume.ts
 index 7424b0f..7c9663a 100644
 --- a/src/state/PersistentVolume.ts
@@ -856,8 +862,117 @@ index bf5fb24..492c049 100644
      audioEnabled$: scope.behavior(
        inputs.participant$.pipe(
          switchMap((p) =>
+diff --git a/src/tile/MediaView.module.css b/src/tile/MediaView.module.css
+index 35cd63b..4ba7d7b 100644
+--- a/src/tile/MediaView.module.css
++++ b/src/tile/MediaView.module.css
+@@ -116,6 +116,22 @@ Please see LICENSE in the repository root for full details.
+   transition: opacity 0.2s;
+ }
+ 
++/* Plotina: a state that owns the whole tile (a stream this viewer paused).
++   It sits over the avatar and the video, which stay visible underneath, and
++   under the foreground chrome so the tile's own controls stay reachable. */
++.overlay {
++  grid-area: content;
++  /* Both .bg and .fg are paint containers (contain: strict) and therefore paint
++     in the positioned layer. A static overlay would be painted *under* them and
++     would be invisible even though every box and every style is right. */
++  position: relative;
++  display: grid;
++  place-items: center;
++  border-radius: inherit;
++  /* Dark backing in both themes: the label sits on top of someone's avatar. */
++  background: rgb(0 0 0 / 55%);
++}
++
+ .avatar[data-style="translucent"] {
+   opacity: 50%;
+ }
+diff --git a/src/tile/MediaView.tsx b/src/tile/MediaView.tsx
+index d574416..4061792 100644
+--- a/src/tile/MediaView.tsx
++++ b/src/tile/MediaView.tsx
+@@ -51,6 +51,12 @@ interface Props extends ComponentProps<typeof animated.div> {
+   videoEnabled: boolean;
+   unencryptedWarning: boolean;
+   status?: ReactNode;
++  /**
++   * Painted over the whole tile, between its background (avatar, video) and
++   * its foreground chrome (name tag, corner buttons). Used for states that
++   * own the tile rather than annotate it, such as a stream the viewer paused.
++   */
++  overlay?: ReactNode;
+   showNameTags: boolean;
+   nameTagLeadingIcon?: ReactNode;
+   displayName: string;
+@@ -99,6 +105,7 @@ export const MediaView: FC<Props> = ({
+   focusable,
+   primaryButton,
+   status,
++  overlay,
+   raisedHandTime,
+   currentReaction,
+   raisedHandOnClick,
+@@ -200,6 +207,7 @@ export const MediaView: FC<Props> = ({
+           />
+         )}
+       </div>
++      {overlay && <div className={styles.overlay}>{overlay}</div>}
+       <div className={styles.fg}>
+         <div className={styles.reactions}>
+           <RaisedHandIndicator
+diff --git a/src/tile/SpotlightTile.module.css b/src/tile/SpotlightTile.module.css
+index 22f62a9..cac9be7 100644
+--- a/src/tile/SpotlightTile.module.css
++++ b/src/tile/SpotlightTile.module.css
+@@ -209,3 +209,44 @@ Please see LICENSE in the repository root for full details.
+ .indicators > .item[data-visible="true"] {
+   background: var(--cpd-color-gray-1400);
+ }
++
++/* Plotina: the whole-tile state of a stream this viewer paused. It covers the
++   avatar and the video with a dark backing so the label reads on any avatar,
++   wallpaper or theme. */
++.streamPaused {
++  display: flex;
++  flex-direction: column;
++  align-items: center;
++  justify-content: center;
++  gap: var(--cpd-space-4x);
++  padding: var(--cpd-space-4x);
++  border-radius: inherit;
++  text-align: center;
++  /* The backing under this block is always dark, in both themes. */
++  color: #fff;
++}
++
++.watchButton {
++  appearance: none;
++  cursor: pointer;
++  display: inline-flex;
++  align-items: center;
++  gap: var(--cpd-space-2x);
++  padding: var(--cpd-space-2x) var(--cpd-space-4x);
++  border: none;
++  border-radius: var(--cpd-radius-pill-effect);
++  background: #fff;
++  color: #000;
++  font: var(--cpd-font-body-md-semibold);
++  box-shadow: var(--small-drop-shadow);
++}
++
++.watchButton > svg {
++  display: block;
++}
++
++/* The paused state has to be readable without hovering, so its button is not
++   hidden by the tile's hover-only button rule above. */
++.tile .streamPaused button {
++  opacity: 1;
++}
 diff --git a/src/tile/SpotlightTile.test.tsx b/src/tile/SpotlightTile.test.tsx
-index 854d853..34c15e7 100644
+index 854d853..5b5b2dc 100644
 --- a/src/tile/SpotlightTile.test.tsx
 +++ b/src/tile/SpotlightTile.test.tsx
 @@ -6,11 +6,18 @@ Please see LICENSE in the repository root for full details.
@@ -942,7 +1057,7 @@ index 854d853..34c15e7 100644
  test("SpotlightTile is accessible", async () => {
    const vm1 = mockRemoteMedia(
      mockRtcMembership("@alice:example.org", "AAAA"),
-@@ -171,6 +226,94 @@ test("Screen share volume UI is hidden when screen share has no audio", async ()
+@@ -171,6 +226,181 @@ test("Screen share volume UI is hidden when screen share has no audio", async ()
    ).not.toBeInTheDocument();
  });
  
@@ -991,7 +1106,7 @@ index 854d853..34c15e7 100644
 +  expect(vm.videoVisible$.value).toBe(false);
 +  expect(setSubscribed).toHaveBeenLastCalledWith(false);
 +  // The tile stays in place so the stream can be shown again from here.
-+  screen.getByText("Stream hidden");
++  screen.getByText("Stream paused");
 +
 +  // The same button now reads as the way back, and it is pressed.
 +  const show = screen.getByRole("button", { name: "Show screen share" });
@@ -1000,7 +1115,7 @@ index 854d853..34c15e7 100644
 +  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 +  expect(vm.videoVisible$.value).toBe(true);
 +  expect(setSubscribed).toHaveBeenLastCalledWith(true);
-+  expect(screen.queryByText("Stream hidden")).not.toBeInTheDocument();
++  expect(screen.queryByText("Stream paused")).not.toBeInTheDocument();
 +});
 +
 +test("The eye shows a stream the store has hidden as already hidden", async () => {
@@ -1024,7 +1139,7 @@ index 854d853..34c15e7 100644
 +  const show = screen.getByRole("button", { name: "Show screen share" });
 +  expect(show).toHaveAttribute("aria-pressed", "true");
 +  expect(setSubscribed).toHaveBeenLastCalledWith(false);
-+  screen.getByText("Stream hidden");
++  screen.getByText("Stream paused");
 +
 +  // Re-rendering the tile does not lose the state: it comes back from the VM.
 +  cleanup();
@@ -1034,11 +1149,98 @@ index 854d853..34c15e7 100644
 +  ).toHaveAttribute("aria-pressed", "true");
 +});
 +
++test("A hidden stream reads as a paused stream, not as a participant", async () => {
++  const vm = mockRemoteScreenShare(
++    mockRtcMembership("@alice:example.org", "AAAA"),
++    { rawDisplayName: "Alice", getMxcAvatarUrl: () => "mxc://alice" },
++    mockRemoteParticipant({}),
++  );
++  // Start from the viewer's own choice: this stream is hidden.
++  vm.setVideoVisible(false);
++
++  const user = userEvent.setup();
++  const { container } = render(
++    <SpotlightTile
++      vm={
++        new SpotlightTileViewModel(
++          constant([vm]),
++          constant(false),
++          constant("solid"),
++        )
++      }
++      targetWidth={300}
++      targetHeight={200}
++      expanded={false}
++      onToggleExpanded={vi.fn()}
++      showIndicators
++      showNameTags
++      showRingingStatus
++      focusable
++    />,
++  );
++
++  expect(await axe(container)).toHaveNoViolations();
++
++  // The paused state is a block of its own in the middle of the tile...
++  const paused = screen.getByTestId("stream-paused");
++  expect(paused).toHaveTextContent("Stream paused");
++  // ...over the participant's own avatar, which is still there.
++  expect(
++    screen.getByRole("img", { name: "@alice:example.org" }),
++  ).toBeInTheDocument();
++  // ...and it is readable without hovering or opening a menu.
++  expect(paused).toBeVisible();
++
++  const watch = screen.getByRole("button", { name: "Watch" });
++  // Reachable from the keyboard, and it is not the eye button in the corner.
++  watch.focus();
++  expect(watch).toHaveFocus();
++  await user.keyboard("{Enter}");
++
++  expect(vm.videoVisible$.value).toBe(true);
++  expect(screen.queryByTestId("stream-paused")).not.toBeInTheDocument();
++  expect(screen.queryByText("Stream paused")).not.toBeInTheDocument();
++});
++
++test("A visible stream has no paused block", () => {
++  const vm = mockRemoteScreenShare(
++    mockRtcMembership("@alice:example.org", "AAAA"),
++    { rawDisplayName: "Alice" },
++    mockRemoteParticipant({}),
++  );
++
++  render(
++    <SpotlightTile
++      vm={
++        new SpotlightTileViewModel(
++          constant([vm]),
++          constant(false),
++          constant("solid"),
++        )
++      }
++      targetWidth={300}
++      targetHeight={200}
++      expanded={false}
++      onToggleExpanded={vi.fn()}
++      showIndicators
++      showNameTags
++      showRingingStatus
++      focusable
++    />,
++  );
++
++  expect(screen.queryByTestId("stream-paused")).not.toBeInTheDocument();
++  expect(screen.queryByText("Stream paused")).not.toBeInTheDocument();
++  expect(
++    screen.queryByRole("button", { name: "Watch" }),
++  ).not.toBeInTheDocument();
++});
++
  test("SpotlightTile displays ringing media", async () => {
    const pickupState$ = new BehaviorSubject<
      RingingMediaViewModel["pickupState$"]["value"]
 diff --git a/src/tile/SpotlightTile.tsx b/src/tile/SpotlightTile.tsx
-index 97e1f4a..bcb6c24 100644
+index 97e1f4a..10394b7 100644
 --- a/src/tile/SpotlightTile.tsx
 +++ b/src/tile/SpotlightTile.tsx
 @@ -8,6 +8,7 @@ Please see LICENSE in the repository root for full details.
@@ -1058,20 +1260,60 @@ index 97e1f4a..bcb6c24 100644
    VolumeOffIcon,
    VolumeOnIcon,
    VolumeOffSolidIcon,
-@@ -146,6 +149,8 @@ SpotlightUserMediaItem.displayName = "SpotlightUserMediaItem";
+@@ -146,6 +149,11 @@ SpotlightUserMediaItem.displayName = "SpotlightUserMediaItem";
  interface SpotlightScreenShareItemProps extends SpotlightMemberMediaItemBaseProps {
    vm: ScreenShareViewModel;
    videoEnabled: boolean;
-+  /** Shown over the tile, e.g. when the viewer has hidden this stream. */
-+  status?: ReactNode;
++  /**
++   * Painted over the whole tile, above the video and its chrome: the state
++   * that owns the tile instead of annotating it (a stream the viewer paused).
++   */
++  overlay?: ReactNode;
  }
  
  const SpotlightScreenShareItem: FC<SpotlightScreenShareItemProps> = ({
-@@ -162,9 +167,19 @@ interface SpotlightRemoteScreenShareItemProps extends SpotlightMemberMediaItemBa
- const SpotlightRemoteScreenShareItem: FC<
+@@ -155,6 +163,38 @@ const SpotlightScreenShareItem: FC<SpotlightScreenShareItemProps> = ({
+   return <MediaView videoFit="contain" mirror={false} {...props} />;
+ };
+ 
++interface StreamPausedProps {
++  vm: RemoteScreenShareViewModel;
++}
++
++/**
++ * Plotina: what a stream looks like once this viewer has paused it. The tile
++ * keeps the participant's own avatar, dimmed under a dark scrim, and says in
++ * the middle of the tile that the stream is paused, with a button that brings
++ * it back. That is the same action as the corner eye toggle, but it is where
++ * the viewer is already looking and it does not need a hover or a menu.
++ */
++const StreamPaused: FC<StreamPausedProps> = ({ vm }) => {
++  const { t } = useTranslation();
++  const onWatch = useCallback(() => vm.setVideoVisible(true), [vm]);
++  return (
++    <div className={styles.streamPaused} data-testid="stream-paused">
++      <Text as="span" size="lg" weight="medium">
++        {t("video_tile.stream_paused")}
++      </Text>
++      <button
++        type="button"
++        className={styles.watchButton}
++        aria-label={t("video_tile.watch_stream")}
++        onClick={onWatch}
++      >
++        <VisibilityOnIcon aria-hidden width={20} height={20} />
++        {t("video_tile.watch_stream")}
++      </button>
++    </div>
++  );
++};
++
+ interface SpotlightRemoteScreenShareItemProps extends SpotlightMemberMediaItemBaseProps {
+   vm: RemoteScreenShareViewModel;
+ }
+@@ -163,8 +203,17 @@ const SpotlightRemoteScreenShareItem: FC<
    SpotlightRemoteScreenShareItemProps
  > = ({ vm, ...props }) => {
-+  const { t } = useTranslation();
    const videoEnabled = useBehavior(vm.videoEnabled$);
 +  const videoVisible = useBehavior(vm.videoVisible$);
    return (
@@ -1083,12 +1325,12 @@ index 97e1f4a..bcb6c24 100644
 +      // hand it to the player while the viewer has hidden the stream.
 +      video={videoVisible ? props.video : undefined}
 +      videoEnabled={videoEnabled && videoVisible}
-+      status={videoVisible ? undefined : t("video_tile.stream_hidden")}
++      overlay={videoVisible ? undefined : <StreamPaused vm={vm} />}
 +    />
    );
  };
  
-@@ -380,6 +395,46 @@ const ScreenShareVolumeButton: FC<ScreenShareVolumeButtonProps> = ({ vm }) => {
+@@ -380,6 +429,46 @@ const ScreenShareVolumeButton: FC<ScreenShareVolumeButtonProps> = ({ vm }) => {
    );
  };
  
@@ -1135,7 +1377,7 @@ index 97e1f4a..bcb6c24 100644
  interface Props {
    ref?: Ref<HTMLDivElement>;
    vm: SpotlightTileViewModel;
-@@ -536,6 +591,9 @@ export const SpotlightTile: FC<Props> = ({
+@@ -536,6 +625,9 @@ export const SpotlightTile: FC<Props> = ({
        </div>
  
        <div className={styles.bottomRightButtons}>
