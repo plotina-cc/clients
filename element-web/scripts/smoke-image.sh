@@ -86,7 +86,10 @@ curl -fsS -o "$BUNDLE" "http://127.0.0.1:${PORT}${BUNDLE_PATH}"
 voice_volumes="$(grep -o 'cc.plotina.voice_volumes' "$BUNDLE" | wc -l)"
 set_subscribed="$(grep -o 'setSubscribed' "$BUNDLE" | wc -l)"
 stream_paused="$(grep -o 'video_tile.stream_paused' "$BUNDLE" | wc -l)"
-old_menu="$(grep -o 'video_tile.hide_stream' "$BUNDLE" | wc -l)"
+# `|| true` is load-bearing: the key must be absent, and a bare grep would exit 1
+# here, which `set -e` + `pipefail` turn into a silent abort before any check
+# runs (that is how the .16 smoke test died in 1.4 s the first time).
+old_menu="$(grep -o 'video_tile.hide_stream' "$BUNDLE" | wc -l || true)"
 echo "widget bundle: voice_volumes=$voice_volumes setSubscribed=$set_subscribed stream_paused=$stream_paused hide_stream=$old_menu"
 test "$voice_volumes" -gt 0
 test "$set_subscribed" -gt 0
