@@ -374,21 +374,60 @@ Upstream's `ceb1331` also changes the desktop/web in-app notification ids, which
 our Android-only build never reaches, and the push serialisation (`_pushLock`,
 `syncPending`) comes from other v2.11.5 commits; neither is part of this patch.
 
-`fluffychat/tests/plotina_push_cancel_test.dart`, 9 cases, shipped into the
+### One id for show and cancel (the `.35-dev.1` defect)
+
+The first build of this patch, `.35-dev.1`, reached the path and cancelled
+nothing (QA `t_ece478f5` §3–§5). It was not the subscription, not the sync, not
+the hash function: the notification was in the shade under one id and the walk
+looked for another.
+
+```
+room !-CFM…   id in the shade (dumpsys) 672513629  = roomId.hashCode
+              id the walk searched       711748308  = '${clientName}_$roomId'.hashCode
+```
+
+The id is decided when a notification is **posted**, from the payload it came
+with: `push_helper.dart` shows under `PushNotification.notificationId`, which is
+`roomId.hashCode` when the payload has no `devices[0].data.client_name` and the
+prefixed id when it has. Both shapes reach a device —
+`background_push.dart` fills `devices` with an empty list when UnifiedPush strips
+it, and FCM counts pushes carry no `devices` at all — so the shade can hold
+either id for the same room, and the read path cannot know which payload posted
+what is in it now.
+
+So the id is derived in one function, `plotinaNotificationIdForRoom()`, and the
+cancel walk matches a shade entry against **both** ids that function can produce
+(`plotinaNotificationIdIsForRoom()`). The show call itself moved into
+`plotinaShowRoomNotification()`, which returns the id it posted under, so the
+show path and the cancel path cannot compute different numbers again. The
+messaging-style lookup that runs before the show now uses
+`notification.notificationId` too — it used a second, prefixed formula and so
+never found its own notification.
+
+`fluffychat/tests/plotina_push_cancel_test.dart`, 11 cases, shipped into the
 checkout as `test/plotina_push_cancel_test.dart` and run by the workflow before
-the Gradle build. The sync responses are the JSON a server sends, the client is a
-real `Client` on an in-memory SQLite database, and a fake
-`FlutterLocalNotificationsPlatform.instance` records `cancel`, `show` and
-`getActiveNotifications`. The cases: read in the app → that room is cancelled and
-the other one is not; read on another device (private receipt, no local action)
-→ cancelled; cold start → cancelled; still unread → kept; the same state again →
-no second cancel and no second summary; the summary is rebuilt from what is left;
-and, reading the sources, that `MatrixState` subscribes to `c.onSync`, drops the
-subscription with the client, that `push_helper.dart` has one definition of the
-walk and no copy of the old inline loop, and that the chat page still sets its
-own read marker and does not cancel anything itself. On the tree without the
-patch the four "should cancel" cases fail (`cancelled` is empty); with it, all
-nine pass.
+the Gradle build. Every notification in the test is posted **through
+`plotinaShowRoomNotification()`** — the function the push helper calls — with
+the payload shape the device gets (no `client_name`), so the shade holds exactly
+what a device holds and the test cannot agree with the cancel walk by
+construction. On `.35-dev.1` that test failed with `Expected: [672513629]
+Actual: []` — the two numbers from the device report — while the previous test,
+which posted under the prefixed id itself, was green on the same broken build.
+
+The sync responses are the JSON a server sends, the client is a real `Client` on
+an in-memory SQLite database, and a fake
+`FlutterLocalNotificationsPlatform.instance` puts `show` into the shade and
+records `cancel`. The cases: read in the app → that room is cancelled and the
+other one is not; read on another device (private receipt, no local action) →
+cancelled; cold start → cancelled; a notification posted from a payload that
+*does* carry a client name → cancelled too; still unread → kept; the same state
+again → no second cancel and no second summary; the summary is rebuilt from what
+is left; and, reading the sources, that `MatrixState` subscribes to `c.onSync`,
+drops the subscription with the client, that `push_helper.dart` has one
+definition of the walk and no copy of the old inline loop, that the show path and
+the cancel path share one id function and no second id formula is left in the
+file, and that the chat page still sets its own read marker and does not cancel
+anything itself.
 
 ## Building
 
