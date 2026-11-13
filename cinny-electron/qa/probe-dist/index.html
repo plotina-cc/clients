@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>share probe</title></head>
+<body>
+<h1>share probe</h1>
+<pre id="log"></pre>
+<script>
+  const logEl = document.getElementById('log');
+  const log = (m) => { logEl.textContent += m + '\n'; };
+  window.__results = [];
+
+  // One share cycle. `mode`:
+  //   'video'  -> getDisplayMedia({video:{frameRate:5}})
+  //   'ec'     -> the exact constraint object Element Call sends
+  //               (video true + audio object + systemAudio:'include')
+  window.__probe = async (opts = {}) => {
+    const mode = opts.mode || 'video';
+    const constraints = mode === 'ec'
+      ? { video: true, audio: { autoGainControl: false, noiseSuppression: false, voiceIsolation: false }, systemAudio: 'include' }
+      : { video: { frameRate: 5 }, audio: opts.audio === true ? true : false };
+    const t0 = performance.now();
+    let stream = null;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia(constraints);
+      const track = stream.getVideoTracks()[0];
+      const settings = track ? track.getSettings() : null;
+      let painted = 0;
+      try {
+        const v = document.createElement('video');
+        v.muted = true; v.srcObject = stream; await v.play();
+        const c = document.createElement('canvas'); c.width = 64; c.height = 36;
+        const ctx = c.getContext('2d');
+        await new Promise((r) => setTimeout(r, 600));
+        ctx.drawImage(v, 0, 0, c.width, c.height);
+        const d = ctx.getImageData(0, 0, c.width, c.height).data;
+        for (let i = 0; i < d.length; i += 4) if (d[i] || d[i+1] || d[i+2]) painted++;
+        v.srcObject = null;
+      } catch (e) { painted = 'read-error: ' + e.message; }
+      const before = stream.getTracks().map((t) => ({ kind: t.kind, label: t.label, state: t.readyState }));
+      stream.getTracks().forEach((t) => t.stop());
+      const after = stream.getTracks().map((t) => ({ kind: t.kind, state: t.readyState }));
+      const res = { mode, ok: true, ms: Math.round(performance.now() - t0), tracks: before, afterStop: after, settings, paintedPixels: painted };
+      window.__results.push(res); log(JSON.stringify(res));
+      return res;
+    } catch (e) {
+      try { stream?.getTracks().forEach((t) => t.stop()); } catch { /* ignore */ }
+      const res = { mode, ok: false, ms: Math.round(performance.now() - t0), name: e.name, message: e.message };
+      window.__results.push(res); log(JSON.stringify(res));
+      return res;
+    }
+  };
+</script>
+</body>
+</html>

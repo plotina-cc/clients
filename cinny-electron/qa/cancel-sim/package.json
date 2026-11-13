@@ -1,0 +1,9 @@
+{
+  "name": "lite-cancel-sim",
+  "productName": "Plotina Lite Desktop",
+  "version": "4.12.8",
+  "private": true,
+  "main": "main-sim.js",
+  "description": "QA wrapper: runs the real Lite Electron main.js with a desktopCapturer that can simulate a cancelled system picker (Wayland portal returns Response 1 / AbortError).",
+  "license": "AGPL-3.0-only"
+}
