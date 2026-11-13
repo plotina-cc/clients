@@ -74,18 +74,21 @@ PLOTINA_MARKERS = ("window.__plotinaEc",)
 PLOTINA_FILES = ("plotina-icon.svg",)
 
 # The desktop noise layer the call widget needs, relative from
-# webapp/widgets/element-call/ to the webapp's own noise/. Only these two:
+# webapp/widgets/element-call/ to the webapp's own noise/. Only this one:
 #   - plotina-dfn.js owns the microphone path here (the bundle's publish hook
-#     calls window.__plotinaAttach), and plotina-panel.js drives its level;
+#     calls window.__plotinaAttach); the level control itself moved into Element
+#     Call's Settings -> Audio with .17, so the floating capsule script that used
+#     to ride along (plotina-panel.js) is neither shipped nor loaded any more;
 #   - boot.js is deliberately absent — it no-ops on window.__plotinaEc
 #     (noise/boot.js, CALL_APP) and would wrap getUserMedia a second time;
 #   - logic.js is absent because neither of the two reads PlotinaNoiseLogic
 #     (they carry their own constants), so loading it here adds nothing.
 WIDGET_NOISE_TAGS = (
     '<script src="../../noise/plotina-dfn.js"></script>',
-    '<script src="../../noise/plotina-panel.js"></script>',
 )
-# Absolute tags written by element-call/inject-noise.py for call.plotina.cc.
+# Absolute tags written by element-call/inject-noise.py for call.plotina.cc. The
+# panel tag is the one .17 stopped emitting; it stays in the strip list so an
+# older archive handed to --check has its capsule tag removed, not rebased.
 ARCHIVE_NOISE_TAGS = (
     '<script src="/noise/logic.js"></script>',
     '<script src="/noise/plotina-dfn.js"></script>',
@@ -238,6 +241,11 @@ def check_widget(widget: Path) -> list[str]:
     for tag in WIDGET_NOISE_TAGS:
         if tag not in html:
             failures.append(f"index.html is missing the desktop noise tag {tag!r}")
+    if "plotina-panel" in html:
+        failures.append(
+            "index.html loads the removed noise capsule panel: .17 keeps the level "
+            "control in Settings -> Audio and ships no plotina-panel.js"
+        )
     if html.count("noise/boot.js"):
         failures.append("index.html loads noise/boot.js in the widget; plotina-dfn.js is the caller path")
 

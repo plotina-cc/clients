@@ -69,10 +69,20 @@ curl -fsS -o "$PAGE" "$WIDGET/index.html"
 grep -q 'window.__plotinaEc=true' "$PAGE"
 grep -q 'src="/widgets/element-call/assets/' "$PAGE"
 grep -q 'src="../../noise/plotina-dfn.js"' "$PAGE"
-grep -q 'src="../../noise/plotina-panel.js"' "$PAGE"
-# The two files those tags point at, served from the root noise layer.
+# The noise level lives in Element Call's Settings -> Audio since .17; the
+# floating capsule of .16 and earlier is gone, so the widget must not ask for its
+# script and the root noise layer must not serve it. Both are inverted here: a
+# widget that still loads the panel is the previous archive, not the one the lock
+# pins.
+if grep -q 'plotina-panel' "$PAGE"; then
+  echo "the widget index still loads the removed noise capsule panel" >&2
+  exit 1
+fi
 curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/noise/plotina-dfn.js"
-curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/noise/plotina-panel.js"
+if curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/noise/plotina-panel.js" 2>/dev/null; then
+  echo "the image still serves /noise/plotina-panel.js (removed with the capsule)" >&2
+  exit 1
+fi
 # The archive's own noise tree must not have come along (it would be 24 MB and a
 # second denoiser init): the prefix returns 404 for the widget-local copy.
 if curl -fsS -o /dev/null "$WIDGET/noise/boot.js" 2>/dev/null; then

@@ -302,7 +302,9 @@ class NoiseLayerIsNotDuplicatedTest(unittest.TestCase):
             run_adapter("--lock", str(lock), "--work", str(root / "work"), "--webapp", str(app))
             html = (app / MOUNT / "index.html").read_text(encoding="utf-8")
             self.assertIn('src="../../noise/plotina-dfn.js"', html)
-            self.assertIn('src="../../noise/plotina-panel.js"', html)
+            # .17 removed the floating capsule: OUR_INDEX still carries the panel
+            # tag, so it has to be stripped, not rebased onto the mount.
+            self.assertNotIn("plotina-panel", html)
             self.assertEqual(html.count("noise/plotina-dfn.js"), 1)
             self.assertNotIn('src="/noise/', html)
             self.assertNotIn("noise/boot.js", html)
@@ -503,10 +505,12 @@ class DockerfileWiringTest(unittest.TestCase):
                       self.dockerfile)
 
     def test_widget_noise_tags_resolve_inside_the_image(self) -> None:
-        """../../noise/ from /widgets/element-call/ is /app/noise/, so the two
-        files the widget's own index loads have to be in the image."""
+        """../../noise/ from /widgets/element-call/ is /app/noise/, so the file
+        the widget's index loads has to be in the image — and the capsule panel
+        .17 removed must not be, not even as a stale COPY."""
         self.assertIn("COPY noise/plotina-dfn.js /app/noise/plotina-dfn.js", self.dockerfile)
-        self.assertIn("COPY noise/plotina-panel.js /app/noise/plotina-panel.js", self.dockerfile)
+        self.assertNotIn("COPY noise/plotina-panel.js", self.dockerfile)
+        self.assertIn("! test -e /app/noise/plotina-panel.js", self.dockerfile)
 
     def test_build_context_stages_one_pin_for_both_clients(self) -> None:
         """One Element Call for both clients: element-web/ carries byte copies of

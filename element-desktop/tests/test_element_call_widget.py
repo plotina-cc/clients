@@ -194,14 +194,14 @@ class InstallReplacesWidgetTest(unittest.TestCase):
             second = (webapp / MOUNT / "index.html").read_text(encoding="utf-8")
             self.assertEqual(first, second)
             self.assertEqual(second.count("noise/plotina-dfn.js"), 1)
-            self.assertEqual(second.count("noise/plotina-panel.js"), 1)
+            self.assertEqual(second.count("noise/plotina-panel.js"), 0)
 
 
 class NoiseWiringTest(unittest.TestCase):
     """The archive's own /noise/<script> tags cannot resolve under vector://, and
     dragging its noise/ copy in would initialize the denoiser twice."""
 
-    def test_absolute_noise_tags_are_replaced_by_the_desktop_pair(self) -> None:
+    def test_absolute_noise_tags_are_replaced_by_the_desktop_tag(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             webapp = make_webapp(root)
@@ -209,13 +209,14 @@ class NoiseWiringTest(unittest.TestCase):
             html = (webapp / MOUNT / "index.html").read_text(encoding="utf-8")
             self.assertNotIn('src="/noise/', html)
             self.assertIn('src="../../noise/plotina-dfn.js"', html)
-            self.assertIn('src="../../noise/plotina-panel.js"', html)
+            # .17 moved the level control into Element Call's Settings -> Audio and
+            # deleted the floating capsule, so its tag is stripped, never rebased.
+            self.assertNotIn("plotina-panel", html)
             # boot.js replaces getUserMedia for the app document; on the widget
             # page it would no-op on window.__plotinaEc while adding a second
             # wrapper to the same document, so it must not be injected here.
             self.assertNotIn("noise/boot.js", html)
             self.assertEqual(html.count("noise/plotina-dfn.js"), 1)
-            self.assertEqual(html.count("noise/plotina-panel.js"), 1)
 
     def test_install_keeps_the_plotina_marker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
