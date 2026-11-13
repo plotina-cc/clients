@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina visible strings.
+# Plotina-Marker: 💬 New message in Plotina Mobile
+
 diff --git a/lib/l10n/intl_en.arb b/lib/l10n/intl_en.arb
 index e8fdc95..1840752 100644
 --- a/lib/l10n/intl_en.arb

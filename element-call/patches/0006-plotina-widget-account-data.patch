@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina widget account data.
+# Plotina-Marker: cc.plotina.set_account_data
+
 diff --git a/src/widget.ts b/src/widget.ts
 index b35e335..9d2fb12 100644
 --- a/src/widget.ts

@@ -97,15 +97,24 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Test the patch and marker scripts
+        # Seconds, and it covers the gate's own negative controls: a missing marker must fail, an
+        # artifact that cannot be read must fail, an empty marker list must fail.
+        run: scripts/tests/run-tests.sh
+
       - name: Apply the Plotina patches (incl. SSO 0007)
         working-directory: cinny
         shell: bash
         run: |
           set -euo pipefail
-          for patch in "$PWD"/patches/*.patch; do
-            git -C upstream/cinny apply --check "$patch"
-            git -C upstream/cinny apply "$patch"
-          done
+          # One entry point for every patch in this repository. The script applies the whole
+          # cinny/patches/ directory in LC_ALL=C order, checks each patch against the tree the
+          # previous ones built, fails on a .rej or on a shorter applied count than the directory
+          # holds, and refuses a patch with no marker header. Nothing here names a patch: a new file
+          # in cinny/patches/ is applied on the next run without editing this workflow, and a patch
+          # that is *not* applied cannot pass silently.
+          "$GITHUB_WORKSPACE/scripts/apply-patches.sh" "$PWD" "$PWD/upstream/cinny" \
+            "$GITHUB_WORKSPACE/cinny-markers.txt"
 
       - name: Build web
         working-directory: cinny/upstream/cinny
@@ -148,6 +157,14 @@ jobs:
           python scripts/mount-element-call.py --dist upstream/cinny/dist --check
           test ! -e upstream/cinny/dist/noise
           test -f upstream/cinny/dist/sw.js
+
+      - name: Gate — every applied patch is in the web dist
+        # The build is not allowed to be green about a patch that did not reach the dist. The marker
+        # list comes from apply-patches.sh, i.e. from the files really applied in this job, so this
+        # catches both shapes of the bug: a patch in patches/ that never applied, and a patch that
+        # applied but whose string the minifier dropped. It is checked on the built dist, never on
+        # the source tree — that is where the literals survive or die.
+        run: scripts/check-markers.sh cinny/upstream/cinny/dist cinny-markers.txt
 
       - name: Package the web dist
         shell: bash

@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina stream video toggle.
+# Plotina-Marker: stream_paused
+
 diff --git a/locales/en/app.json b/locales/en/app.json
 index f3d568b..8b765c5 100644
 --- a/locales/en/app.json

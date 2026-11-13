@@ -46,6 +46,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Test the patch and marker scripts
+        # Seconds, and it covers the gate's own negative controls: a missing marker must fail, an
+        # artifact that cannot be read must fail, an empty marker list must fail.
+        run: scripts/tests/run-tests.sh
+
       - name: Read pins
         id: pins
         env:
@@ -103,6 +108,24 @@ jobs:
           fi
           bash element-call/build.sh --mode "${{ steps.pins.outputs.mode }}" --out dist \
             --maps-out dist/sourcemaps ${cli[@]+"${cli[@]}"}
+
+      - name: Gate — every applied patch is in the bundle
+        # Runs on the tarball the build just produced, before any network step, so a broken
+        # GlitchTip upload cannot hide the answer. The markers come from apply-patches.sh, i.e. from
+        # the patches really applied in this run, and are looked for in the packaged bundle — never
+        # in the source tree, because the bundler drops literals of code it removes.
+        #
+        # Release mode is refused here on purpose: it ships upstream's prebuilt tarball and applies
+        # none of element-call/patches/, which is exactly the "green build, missing change" shape
+        # this gate exists to stop.
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.pins.outputs.mode }}" != "source" ]; then
+            echo "::error::mode=release ships upstream's prebuilt bundle and applies none of element-call/patches/:"
+            echo "  this artifact would carry none of the Plotina changes. Dispatch the build with mode=source."
+            exit 1
+          fi
+          scripts/check-markers.sh dist/plotina-element-call.tar.gz dist/plotina-markers.txt
 
       - name: Upload source maps to GlitchTip
         if: ${{ env.SENTRY_AUTH_TOKEN != '' }}

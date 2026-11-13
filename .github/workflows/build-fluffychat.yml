@@ -72,6 +72,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Test the patch and marker scripts
+        # Seconds, and it covers the gate's own negative controls: a missing marker must fail, an
+        # artifact that cannot be read must fail, an empty marker list must fail.
+        run: scripts/tests/run-tests.sh
+
       - name: Pin upstream and apply patches
         working-directory: fluffychat
         run: |
@@ -79,10 +84,13 @@ jobs:
           TAG="$(cat UPSTREAM_TAG)"
           echo "upstream: $UPSTREAM_REPO @ $TAG"
           git clone --depth 1 --branch "$TAG" "$UPSTREAM_REPO" upstream
-          for patch in "$PWD"/patches/*.patch; do
-            echo "applying $(basename "$patch")"
-            git -C upstream apply --verbose "$patch"
-          done
+          # One entry point for every patch in this repository: the whole fluffychat/patches/
+          # directory, in LC_ALL=C order, checked against the tree the previous patches built,
+          # refused on a short count, a .rej, or a patch with no marker header. This loop used to be
+          # the only thing applying them, and it would have gone on being green if a patch stopped
+          # landing in the APK.
+          "$GITHUB_WORKSPACE/scripts/apply-patches.sh" "$PWD" "$PWD/upstream" \
+            "$GITHUB_WORKSPACE/fluffychat-markers.txt"
           grep -q '^  plotina_dfn:' upstream/pubspec.yaml
           echo "plugin registered in upstream/pubspec.yaml"
 
@@ -489,6 +497,19 @@ jobs:
             echo "armv7_version_code=$armv7_found"
           } >> "$GITHUB_OUTPUT"
           echo "::notice::versionCode $arm64_found / $armv7_found verified with $(basename "${AAPT:-$AK}")"
+
+      - name: Gate — every applied patch is in the APK
+        # The build is not allowed to be green about a patch that did not reach the APK. The marker
+        # list comes from apply-patches.sh, i.e. from the files really applied in this job, so this
+        # catches both shapes of the bug: a patch in patches/ that never applied, and a patch that
+        # applied but whose string the Dart AOT compiler or the resource shrinker dropped. Both
+        # splits are checked — they carry the same libapp.so, and both are published.
+        run: |
+          set -euo pipefail
+          for apk in "$APK_NAME" "$APK_NAME_ARMV7"; do
+            echo "-- $apk"
+            scripts/check-markers.sh "$apk" fluffychat-markers.txt
+          done
 
       # What the in-app updater fetches. Stable: https://plotina.cc/dl/
       # update-mobile.json (infra mirrors it from the per-tag release). Dev:

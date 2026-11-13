@@ -1,3 +1,9 @@
+# Plotina-Patch: plotina favicon.
+# Plotina-Marker: plotina-patch-0005-favicon
+# Plotina-Note: this patch is build-level and ships no runtime string of its own, so it
+#   writes its marker into public/res/plotina-patches/0005-favicon.txt, which the artifact carries verbatim; the gate
+#   looks for it there.
+
 diff --git a/src/app/pages/client/ClientNonUIFeatures.tsx b/src/app/pages/client/ClientNonUIFeatures.tsx
 index ce952bf..f8491a8 100644
 --- a/src/app/pages/client/ClientNonUIFeatures.tsx
@@ -48,3 +54,11 @@ index ce952bf..f8491a8 100644
          body: `You have ${count} new invitation request.`,
          silent: true,
        });
+
+diff --git a/public/res/plotina-patches/0005-favicon.txt b/public/res/plotina-patches/0005-favicon.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..1111111111111111111111111111111111111111
+--- /dev/null
++++ b/public/res/plotina-patches/0005-favicon.txt
+@@ -0,0 +1 @@
++plotina-patch-0005-favicon

@@ -138,13 +138,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Same patches as scripts/build.sh: 0001 adds Sentry, 0002 adds the
-          # Plotina source link to the auth footer and About page. Fails loudly
-          # if a future upstream tag moves an anchor.
-          for patch in "$PWD"/patches/*.patch; do
-            git -C upstream/cinny apply --check "$patch"
-            git -C upstream/cinny apply "$patch"
-          done
+          # One entry point for every patch in this repository: the whole cinny/patches/ directory,
+          # in LC_ALL=C order, checked against the tree the previous patches built, refused on a
+          # short count, a .rej or a patch with no marker header.
+          "$GITHUB_WORKSPACE/scripts/apply-patches.sh" "$PWD" "$PWD/upstream/cinny" \
+            "$GITHUB_WORKSPACE/cinny-markers.txt"
           # Desktop shell patches apply to the cinny-desktop checkout itself
           # (window title), not to its frontend submodule.
           for patch in "$PWD"/desktop-patches/*.patch; do
@@ -280,6 +278,11 @@ jobs:
             echo "::notice::SENTRY_DSN is empty: the bundle carries the SDK but reports nothing"
           fi
           echo "patch present in the dist"
+
+      - name: Gate — every applied patch is in the web dist
+        # The markers of the patches really applied, checked in the built dist the desktop shell
+        # packages: a patch that applied but whose literal the minifier dropped fails the run.
+        run: scripts/check-markers.sh cinny/upstream/cinny/dist cinny-markers.txt
 
       - name: Install Tauri CLI
         working-directory: cinny/upstream

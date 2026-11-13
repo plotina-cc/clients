@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina auth branding.
+# Plotina-Marker: Welcome to Plotina Lite Web
+
 diff --git a/public/res/svg/plotina.svg b/public/res/svg/plotina.svg
 new file mode 100644
 index 0000000..0432060

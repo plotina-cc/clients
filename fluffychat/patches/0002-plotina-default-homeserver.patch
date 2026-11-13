@@ -1,3 +1,9 @@
+# Plotina-Patch: plotina default homeserver.
+# Plotina-Marker: plotina-patch-0002-default-homeserver
+# Plotina-Note: this patch is build-level and ships no runtime string of its own, so it
+#   writes its marker into android/app/src/main/assets/plotina-patches/0002-default-homeserver.txt, which the artifact carries verbatim; the gate
+#   looks for it there.
+
 diff --git a/lib/config/setting_keys.dart b/lib/config/setting_keys.dart
 index 1f0c0bd..6e701bc 100644
 --- a/lib/config/setting_keys.dart
@@ -18,3 +24,11 @@ index 1f0c0bd..6e701bc 100644
    welcomeText<String>('chat.fluffy.welcome_text', ''),
    website<String>('chat.fluffy.website_url', 'https://fluffychat.im'),
    logoUrl<String>(
+
+diff --git a/android/app/src/main/assets/plotina-patches/0002-default-homeserver.txt b/android/app/src/main/assets/plotina-patches/0002-default-homeserver.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..1111111111111111111111111111111111111111
+--- /dev/null
++++ b/android/app/src/main/assets/plotina-patches/0002-default-homeserver.txt
+@@ -0,0 +1 @@
++plotina-patch-0002-default-homeserver

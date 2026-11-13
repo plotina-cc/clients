@@ -131,13 +131,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Apply every patch in cinny/patches in name order. 0001 adds Sentry;
-          # 0002 adds the Plotina source link to the auth footer and About page.
-          # Fails loudly if a future upstream tag moves an anchor.
-          for patch in "$PWD"/patches/*.patch; do
-            git -C upstream/cinny apply --check "$patch"
-            git -C upstream/cinny apply "$patch"
-          done
+          # One entry point for every patch in this repository: the whole cinny/patches/ directory,
+          # in LC_ALL=C order, checked against the tree the previous patches built, refused on a
+          # short count, a .rej or a patch with no marker header. This workflow used to keep its own
+          # loop; it had the same blind spot as the release build (a patch that does not apply is
+          # loud, a patch that never reaches the dist is not).
+          "$GITHUB_WORKSPACE/scripts/apply-patches.sh" "$PWD" "$PWD/upstream/cinny" \
+            "$GITHUB_WORKSPACE/cinny-markers.txt"
 
       - name: Build Plotina Lite Web
         working-directory: cinny/upstream/cinny
@@ -249,6 +249,12 @@ jobs:
             exit 1
           fi
           echo "reporting enabled for $SENTRY_RELEASE"
+
+      - name: Gate — every applied patch is in the web dist
+        # The published bundle is checked against the markers of the patches that were really
+        # applied: a patch that applied but whose string the minifier dropped fails here, not after
+        # the dist is on the edge.
+        run: scripts/check-markers.sh cinny/upstream/cinny/dist cinny-markers.txt
 
       - name: Package
         shell: bash

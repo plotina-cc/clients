@@ -1,3 +1,9 @@
+# Plotina-Patch: plotina update utf8.
+# Plotina-Marker: plotina-patch-0021-update-utf8
+# Plotina-Note: this patch is build-level and ships no runtime string of its own, so it
+#   writes its marker into android/app/src/main/assets/plotina-patches/0021-update-utf8.txt, which the artifact carries verbatim; the gate
+#   looks for it there.
+
 diff --git a/lib/utils/updater/plotina_updater.dart b/lib/utils/updater/plotina_updater.dart
 index 2e9e134..1c6af72 100644
 --- a/lib/utils/updater/plotina_updater.dart
@@ -25,3 +31,11 @@ index 2e9e134..1c6af72 100644
        if (manifest == null) return null;
        final info = await packageInfoProvider();
        if (manifest.client != 'mobile' || manifest.package != info.packageName) {
+
+diff --git a/android/app/src/main/assets/plotina-patches/0021-update-utf8.txt b/android/app/src/main/assets/plotina-patches/0021-update-utf8.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..1111111111111111111111111111111111111111
+--- /dev/null
++++ b/android/app/src/main/assets/plotina-patches/0021-update-utf8.txt
+@@ -0,0 +1 @@
++plotina-patch-0021-update-utf8

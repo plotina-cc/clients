@@ -1,3 +1,9 @@
+# Plotina-Patch: plotina about dialog.
+# Plotina-Marker: plotina-patch-0015-about-dialog
+# Plotina-Note: this patch is build-level and ships no runtime string of its own, so it
+#   writes its marker into android/app/src/main/assets/plotina-patches/0015-about-dialog.txt, which the artifact carries verbatim; the gate
+#   looks for it there.
+
 diff --git a/lib/pages/intro/intro_page.dart b/lib/pages/intro/intro_page.dart
 index d9586c7..980336f 100644
 --- a/lib/pages/intro/intro_page.dart
@@ -136,3 +142,11 @@ index 36bc490..dcbdd4f 100644
                child: Text(L10n.of(context).about, style: shadowTextStyle),
              ),
            ],
+
+diff --git a/android/app/src/main/assets/plotina-patches/0015-about-dialog.txt b/android/app/src/main/assets/plotina-patches/0015-about-dialog.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..1111111111111111111111111111111111111111
+--- /dev/null
++++ b/android/app/src/main/assets/plotina-patches/0015-about-dialog.txt
+@@ -0,0 +1 @@
++plotina-patch-0015-about-dialog

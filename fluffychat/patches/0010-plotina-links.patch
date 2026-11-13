@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina links.
+# Plotina-Marker: https://plotina.cc/dl/plotina-purple.png
+
 --- a/lib/config/setting_keys.dart
 +++ b/lib/config/setting_keys.dart
 @@ -63,14 +63,14 @@

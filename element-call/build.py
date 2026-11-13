@@ -58,6 +58,10 @@ Usage:
                           drop the maps from the bundle (CI uploads DIR to
                           GlitchTip; the served JS keeps working because the
                           SDK talks to the server, not to the .map file)
+  --markers-out FILE      where apply-patches.sh writes the `<patch><TAB><marker>`
+                          list (default: $OUT/plotina-markers.txt). The artifact
+                          gate in CI reads it after the build: every marker must
+                          be inside the bundle, or the run fails.
   --sentry-cli FILE       sentry-cli binary: inject debug ids into the build
                           before --maps-out copies it elsewhere. Optional;
                           without it maps are still split out, just unlabelled
@@ -92,6 +96,7 @@ _VALUE_OPTS = {
     "--config": "config",
     "--icons": "icons",
     "--maps-out": "maps_out",
+    "--markers-out": "markers_out",
     "--sentry-cli": "sentry_cli",
 }
 
@@ -143,6 +148,8 @@ def apply_defaults(opts: dict, pins: dict, here: Path, repo: Path) -> dict:
         "config": Path(opts["config"] or here / "config.json"),
         "icons": Path(opts["icons"] or repo / "branding" / "icons"),
         "maps_out": Path(opts["maps_out"]) if opts["maps_out"] else None,
+        "markers_out": Path(opts["markers_out"]) if opts["markers_out"]
+        else (Path(opts["out"] or repo / "dist") / "plotina-markers.txt"),
         "sentry_cli": opts["sentry_cli"] or None,
         "keep": bool(opts["keep"]),
     }
@@ -267,6 +274,23 @@ def _tree_contains(root: Path, needle: bytes) -> bool:
     return False
 
 
+def apply_patch_set(here: Path, src: Path, markers: Path, say=print) -> None:
+    """Apply every element-call/patches/*.patch through scripts/apply-patches.sh.
+
+    One entry point for the whole repository: the script sorts with LC_ALL=C, checks each patch
+    against the tree the previous ones built, refuses a patch without a marker or a file count that
+    does not match, and writes the marker list the artifact gate reads after the build.
+    """
+    script = here.parent / "scripts" / "apply-patches.sh"
+    if not script.is_file():
+        raise BuildError(f"the patch script is missing: {script}")
+    markers.parent.mkdir(parents=True, exist_ok=True)
+    say(f"applying plotina patches through {script.name}")
+    proc = subprocess.run(["bash", str(script), str(here), str(src), str(markers)])
+    if proc.returncode != 0:
+        raise BuildError("applying the Plotina patches failed; the script named the patch above")
+
+
 def build_from_source(work: Path, conf: dict, pins: dict, release: str,
                       environ: dict, here: Path, say=print) -> Path:
     if not shutil.which("node"):
@@ -281,11 +305,7 @@ def build_from_source(work: Path, conf: dict, pins: dict, release: str,
     subprocess.run(["git", "clone", "--depth", "1", "--branch", conf["tag"],
                     pins["EC_REPO"], str(work / "src")], check=True)
 
-    patches = sorted(str(p) for p in Path(here / "patches").glob("*.patch"))
-    if patches:
-        say("applying plotina patches")
-        for patch in patches:
-            subprocess.run(["git", "apply", "--verbose", patch], cwd=work / "src", check=True)
+    apply_patch_set(here, work / "src", conf["markers_out"], say=say)
 
     if not shutil.which("pnpm"):
         say(f"activating pnpm@{pins['PNPM_VERSION']} through corepack")

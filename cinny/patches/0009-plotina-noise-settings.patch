@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina noise settings.
+# Plotina-Marker: plotina.noise.level
+
 diff --git a/src/app/features/settings/general/General.tsx b/src/app/features/settings/general/General.tsx
 index b861a06..1e99e82 100644
 --- a/src/app/features/settings/general/General.tsx

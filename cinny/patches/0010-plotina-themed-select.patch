@@ -1,3 +1,9 @@
+# Plotina-Patch: plotina themed select.
+# Plotina-Marker: plotina-patch-0010-themed-select
+# Plotina-Note: this patch is build-level and ships no runtime string of its own, so it
+#   writes its marker into public/res/plotina-patches/0010-themed-select.txt, which the artifact carries verbatim; the gate
+#   looks for it there.
+
 diff --git a/src/app/features/settings/PlotinaSelect.tsx b/src/app/features/settings/PlotinaSelect.tsx
 new file mode 100644
 index 0000000..2a97803
@@ -227,3 +233,11 @@ index 84311ab..4e08fa4 100644
                        <Button
                          variant="Primary"
                          fill="Soft"
+
+diff --git a/public/res/plotina-patches/0010-themed-select.txt b/public/res/plotina-patches/0010-themed-select.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..1111111111111111111111111111111111111111
+--- /dev/null
++++ b/public/res/plotina-patches/0010-themed-select.txt
+@@ -0,0 +1 @@
++plotina-patch-0010-themed-select
