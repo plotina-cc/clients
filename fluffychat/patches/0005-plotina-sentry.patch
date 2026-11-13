@@ -1,5 +1,5 @@
 # Plotina-Patch: plotina sentry.
-# Plotina-Marker: Plotina Sentry smoke test
+# Plotina-Marker: sentry.plotina.cc
 
 diff --git a/lib/main.dart b/lib/main.dart
 index c3691ce..0806894 100644

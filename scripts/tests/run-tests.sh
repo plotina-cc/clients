@@ -365,6 +365,31 @@ case_gate_empty_markers() {
   pass "$name"
 }
 
+case_gate_non_ascii_marker() {
+  new_case
+  # A marker can be a Russian UI string or carry an emoji. `strings` with the C locale stops at the
+  # first non-ASCII byte, so a gate that only greps its output cannot see these — and a marker the
+  # gate cannot see is a patch nobody verifies.
+  printf '0018-donations\tСпасибо, что пользуетесь Plotina Mobile.\n0011-strings\t💬 Новое сообщение в Plotina Mobile\n' > "$MARKERS"
+  fake_apk "$CASE_DIR/app.apk" 'noise Спасибо, что пользуетесь Plotina Mobile. more noise 💬 Новое сообщение в Plotina Mobile'
+  run_gate "$CASE_DIR/app.apk"
+  local name="gate: a non-ASCII marker is found in the APK (raw byte search)"
+  [ "$gate_rc" -eq 0 ] || { fail "$name (exit $gate_rc: $gate_out)"; return; }
+  pass "$name"
+}
+
+case_gate_utf16_non_ascii() {
+  new_case
+  # The same string inside a UTF-16LE resource table (resources.arsc) — the shape a translated
+  # Android string takes.
+  printf '0018-donations\tСпасибо, что пользуетесь Plotina Mobile.\n' > "$MARKERS"
+  fake_apk "$CASE_DIR/app.apk" 'nothing here' 'Спасибо, что пользуетесь Plotina Mobile.'
+  run_gate "$CASE_DIR/app.apk"
+  local name="gate: a non-ASCII marker in UTF-16 resources is found"
+  [ "$gate_rc" -eq 0 ] || { fail "$name (exit $gate_rc: $gate_out)"; return; }
+  pass "$name"
+}
+
 case_apply_two_patches
 case_apply_c_locale_order
 case_apply_broken_patch
@@ -384,6 +409,8 @@ case_gate_plain_file
 case_gate_broken_archive
 case_gate_missing_artifact
 case_gate_empty_markers
+case_gate_non_ascii_marker
+case_gate_utf16_non_ascii
 
 printf '\n%s case(s), %s failure(s)\n' "$case_no" "$failures"
 [ "$failures" -eq 0 ]

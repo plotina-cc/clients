@@ -14,7 +14,10 @@
 #   * any other file     — an app.asar or an AppImage
 # In every case the bytes are streamed through `strings` twice, UTF-8 and UTF-16LE, because a marker
 # can live in a JS chunk, in a Dart AOT snapshot, in the dex string pool, in resources.arsc or in a
-# compiled manifest. The check is deliberately on the artifact and not on the source tree: the
+# compiled manifest. `strings` alone is not enough: with the C locale it stops at the first non-ASCII
+# byte, so a Russian UI string or an emoji never appears in its output. Each token is therefore also
+# searched for in the raw bytes, as UTF-8 and as UTF-16LE, which is how Flutter and the Android
+# resource table store it. The check is deliberately on the artifact and not on the source tree: the
 # minifier drops string literals of code it removes, and a marker that a bundler dropped is the same
 # failure as a patch that never applied.
 #
@@ -44,6 +47,8 @@ fi
 
 bytes="$(mktemp "${TMPDIR:-/tmp}/plotina-artifact.XXXXXX")"
 text="$(mktemp "${TMPDIR:-/tmp}/plotina-artifact-strings.XXXXXX")"
+pat8="$(mktemp "${TMPDIR:-/tmp}/plotina-artifact-pat8.XXXXXX")"
+pat16="$(mktemp "${TMPDIR:-/tmp}/plotina-artifact-pat16.XXXXXX")"
 
 if [ -d "$artifact" ]; then
     find "$artifact" -type f -exec cat {} + > "$bytes" 2>/dev/null || true
@@ -87,7 +92,14 @@ while IFS=$'\t' read -r patch token; do
         exit 1
     fi
     total=$((total + 1))
-    if grep -qF -- "$token" "$text"; then
+    # Three ways to be present, because the artifact stores strings in more than one encoding:
+    # `strings` output (fast, ASCII), the raw bytes as UTF-8 (JS chunks, Dart one-byte strings), and
+    # the raw bytes as UTF-16LE (Android resources, Dart two-byte strings).
+    printf '%s' "$token" > "$pat8"
+    if printf '%s' "$token" | iconv -f UTF-8 -t UTF-16LE > "$pat16" 2>/dev/null; then :; else : > "$pat16"; fi
+    if grep -qF -- "$token" "$text" \
+        || grep -aqF -f "$pat8" "$bytes" \
+        || { [ -s "$pat16" ] && grep -aqF -f "$pat16" "$bytes"; }; then
         printf 'ok: %s (%s)\n' "$patch" "$token"
     else
         printf '::error::marker missing: %s — "%s" is not in %s\n' \

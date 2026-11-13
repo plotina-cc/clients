@@ -1,5 +1,5 @@
 # Plotina-Patch: plotina version details.
-# Plotina-Marker: build {code}
+# Plotina-Marker: updateBuild
 
 diff --git a/lib/l10n/intl_en.arb b/lib/l10n/intl_en.arb
 index e704c9f..0dcbf31 100644
