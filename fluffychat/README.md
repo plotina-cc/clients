@@ -19,7 +19,7 @@ listened to a call on a device yet.
 | Tag | `v2.11.3` (`UPSTREAM_TAG`), commit `6fc4920` |
 | Flutter | `3.47.8` (upstream `.fvmrc`) |
 | Call stack | `livekit_client` 2.13.1, `flutter_webrtc` 1.6.2+hotfix.4 (both from `pubspec.lock`) |
-| Patch | twenty-two: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.mobile`, `0008`-`0011` Plotina name/label/links/visible strings, `0012` intro buttons, `0013` OIDC scheme, `0014` no upstream support, `0015` About dialog, `0016` in-app updater, `0018` no donation/support prompts, `0019` one "Обновления" settings tab, `0020` build number in the update status, `0021` UTF-8 update manifests, `0023` personal names for contacts, `0024` live refresh of the preview author line (`patches/`); numbers are per directory, so nothing may reuse one. `0017` is retired: it was the room-keyed personal-name model, removed in favour of `0023`, and its number stays unused |
+| Patch | twenty-three: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.mobile`, `0008`-`0011` Plotina name/label/links/visible strings, `0012` intro buttons, `0013` OIDC scheme, `0014` no upstream support, `0015` About dialog, `0016` in-app updater, `0018` no donation/support prompts, `0019` one "Обновления" settings tab, `0020` build number in the update status, `0021` UTF-8 update manifests, `0023` personal names for contacts, `0024` live refresh of the preview author line, `0025` notification of a room is cancelled when the room is read (`patches/`); numbers are per directory, so nothing may reuse one. `0017` is retired: it was the room-keyed personal-name model, removed in favour of `0023`, and its number stays unused |
 
 ## What is in this directory
 
@@ -50,6 +50,8 @@ patches/0021-plotina-update-utf8.patch      UTF-8 update manifests
 patches/0023-plotina-contact-names.patch    personal names for contacts (see below)
 patches/0024-plotina-preview-live-refresh.patch  live refresh of the preview
                                  author line (see below)
+patches/0025-plotina-cancel-on-read.patch  notification of a room is cancelled
+                                 when the room is read (see below)
 scripts/version-code.py          the versionCode formula, used by CI and by
                                  scripts/build-android.sh
 tests/intro_plotina_test.dart    Flutter widget regression test for 0012
@@ -59,6 +61,8 @@ tests/plotina_contact_name_entry_test.dart  Dart test for the two 0023 entry
                                  points, chat list and invite banner
 tests/plotina_contact_name_refresh_test.dart  Dart test for 0024: the preview
                                  author line follows a live rename/reset
+tests/plotina_push_cancel_test.dart  Dart test for 0025: reading a room clears
+                                 its notification, an unread room keeps its own
 ```
 
 The patch adds only this to `pubspec.yaml`:
@@ -321,6 +325,70 @@ are not covered (see the table). A name changed in *another* client while the
 chat itself is open reaches the chat list on the next sync, but the app bar
 title of the already-open chat re-renders on its next room update (or on
 re-entering the chat), not instantly.
+
+## Reading a room clears its notification (patch `0025`)
+
+The symptom: a message arrives in another chat, the notification appears in the
+Android shade, you open that chat and read it without tapping the notification —
+and the notification stays until you tap it. The same happens when the room is
+read on *another* device: the desktop sends the receipt, our sync learns the
+room is read, and the phone keeps showing the notification.
+
+This is not a Plotina patch that broke it. Upstream cancels notifications from
+the sync stream (`cancelNotificationsOnSync`, upstream commit `ceb1331` "clear up
+active notifications on sync on all platforms"), and that commit is in the
+upstream tags **v2.11.2 and v2.11.5** but *not* in **v2.11.3**, the tag in
+`UPSTREAM_TAG`. The v2.11.3 release does not carry it, so every build from it
+has no sync-driven read → cancel path at all: the walk over the shade existed
+only inside the push helper's clearing branch, where it runs when a push arrives
+— never when a room is read.
+
+`0025` reuses that walk instead of writing a second one. The block is lifted out
+of the push helper's clearing branch into `cancelNotificationsOfReadRooms()` in
+`lib/utils/push_helper.dart`, and both callers use it: the push helper itself,
+and a new `onReadRooms` subscription in `lib/widgets/matrix.dart` on
+`c.onSync.stream`. One implementation, so the read path and the push path cannot
+drift apart.
+
+It dismisses a room's notification when the sync says the room is not unread any
+more (`!room.isUnreadOrInvited`), which covers all three ways a room becomes
+read:
+
+- read inside the app — `ChatPage.setReadMarker` sends the receipt, the sync
+  that carries it back zeroes the unread counter;
+- read on another device of the same account — only the sync says so, nothing
+  happens locally;
+- a cold start — the notification was posted while the app was closed, the
+  message was read elsewhere, and the first sync already reports the room read.
+
+Nothing is done twice: the walk only cancels ids that are still in the shade, so
+the next sync with the same state cancels nothing and does not rebuild the
+summary. Rooms that are still unread are never touched, and a notification whose
+room is not in `client.rooms` (another account's, or not synced yet) is left
+alone. `updateSummaryNotification` runs after a cancellation, so the group
+summary is rebuilt from what is left instead of listing a room that is gone. The
+tap handler (`notification_background_handler.dart`) is untouched: tapping a
+notification still opens that chat.
+
+Upstream's `ceb1331` also changes the desktop/web in-app notification ids, which
+our Android-only build never reaches, and the push serialisation (`_pushLock`,
+`syncPending`) comes from other v2.11.5 commits; neither is part of this patch.
+
+`fluffychat/tests/plotina_push_cancel_test.dart`, 9 cases, shipped into the
+checkout as `test/plotina_push_cancel_test.dart` and run by the workflow before
+the Gradle build. The sync responses are the JSON a server sends, the client is a
+real `Client` on an in-memory SQLite database, and a fake
+`FlutterLocalNotificationsPlatform.instance` records `cancel`, `show` and
+`getActiveNotifications`. The cases: read in the app → that room is cancelled and
+the other one is not; read on another device (private receipt, no local action)
+→ cancelled; cold start → cancelled; still unread → kept; the same state again →
+no second cancel and no second summary; the summary is rebuilt from what is left;
+and, reading the sources, that `MatrixState` subscribes to `c.onSync`, drops the
+subscription with the client, that `push_helper.dart` has one definition of the
+walk and no copy of the old inline loop, and that the chat page still sets its
+own read marker and does not cancel anything itself. On the tree without the
+patch the four "should cancel" cases fail (`cancelled` is empty); with it, all
+nine pass.
 
 ## Building
 
