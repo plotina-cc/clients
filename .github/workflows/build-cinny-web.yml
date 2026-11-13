@@ -151,6 +151,16 @@ jobs:
           npm install --no-save --no-audit --no-fund "@sentry/browser@${SENTRY_SDK_VERSION}"
           VITE_SENTRY_RELEASE="$SENTRY_RELEASE" npm run build
 
+      # The GlitchTip noise filter is code in our patch, not configuration: a
+      # filter that quietly stops filtering would look like a healthy build and
+      # an empty project. The rules and the "must still be reported" half are
+      # pinned against the same patched tree, with the esbuild npm ci just
+      # installed.
+      - name: Sentry noise filter tests (node)
+        working-directory: cinny
+        shell: bash
+        run: bash scripts/test-sentry-filter.sh "$PWD/upstream/cinny"
+
       # Debug ids pair an event with its map, and the maps then leave the dist:
       # /srv/cinny must not publish the TypeScript source.
       - name: Split the source maps
@@ -213,6 +223,10 @@ jobs:
           # settings never ship. The shell itself carries no noise <script>
           # tags any more — only the call frame does.
           grep -Raqs 'plotina-noise-settings' "$dist/assets"
+          # The GlitchTip noise filter is code, not a stamp: these rule names
+          # exist only in patches/0001, so one of them in the bundle is what a
+          # patch that got past the minifier looks like.
+          grep -Raqs 'widget-transport-timeout' "$dist/assets"
           if grep -q 'noise/cinny-ui.js' "$dist/index.html"; then
             echo "stale noise injection survived in the shell" >&2
             exit 1
