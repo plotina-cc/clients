@@ -147,10 +147,10 @@ index cc058d0f..eab5ab90 100644
      /**
 diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt
 new file mode 100644
-index 00000000..00a0b576
+index 00000000..15028e8e
 --- /dev/null
 +++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdate.kt
-@@ -0,0 +1,310 @@
+@@ -0,0 +1,371 @@
 +/*
 + * Plotina: the in-app updater's manifest side.
 + *
@@ -268,10 +268,16 @@ index 00000000..00a0b576
 +    const val MANIFEST_URL = "https://plotina.cc/dl/update-x.json"
 +
 +    /**
-+     * The dev feed lives on GitHub, not on the edge host: a moving `dev-latest` release whose two
-+     * assets (update-x-dev.json + Plotina-X.apk) are overwritten by hand when a dev build is cut.
-+     * The URL is static forever, so opting in needs nothing but this constant.
++     * The dev feed has two sources, and the order is the whole feature: the edge mirror first, the
++     * GitHub release it is mirrored from second.
++     *
++     * Both are self-contained pairs - the manifest of a source names that source's APK, so a pair
++     * is never mixed. The mirror is a byte-for-byte copy of the two `dev-latest` assets with
++     * `apkUrl` rewritten to the edge host, refreshed every few minutes; when GitHub is unreachable
++     * updates still work, and when the mirror answers 404 (or anything else that is not a usable
++     * manifest) the app walks on to GitHub, which is what the previous release did alone.
 +     */
++    const val DEV_EDGE_MANIFEST_URL = "https://plotina.cc/dl/dev/x/update-x-dev.json"
 +    const val DEV_MANIFEST_URL =
 +        "https://github.com/plotina-cc/clients/releases/download/dev-latest/update-x-dev.json"
 +
@@ -290,10 +296,22 @@ index 00000000..00a0b576
 +        }
 +    }
 +
-+    fun manifestUrlFor(channel: UpdateChannel): String = when (channel) {
-+        UpdateChannel.STABLE -> MANIFEST_URL
-+        UpdateChannel.DEV -> DEV_MANIFEST_URL
++    /** Every manifest source of a channel, most preferred first. */
++    fun manifestUrlsFor(channel: UpdateChannel): List<String> = when (channel) {
++        UpdateChannel.STABLE -> listOf(MANIFEST_URL)
++        UpdateChannel.DEV -> listOf(DEV_EDGE_MANIFEST_URL, DEV_MANIFEST_URL)
 +    }
++
++    /**
++     * The same list with the `plotina_manifest_url` test override in front of it. The override is a
++     * source, not a replacement: a dead hook host is how the walk to the next source is proven on a
++     * device, and a hook that repeats a real source does not get a second request.
++     */
++    fun manifestUrlsFor(channel: UpdateChannel, overrideUrl: String?): List<String> =
++        (listOfNotNull(overrideUrl?.takeIf { it.isNotBlank() }) + manifestUrlsFor(channel)).distinct()
++
++    /** The preferred source of a channel - what a log line, a QA hook or a test names. */
++    fun manifestUrlFor(channel: UpdateChannel): String = manifestUrlsFor(channel).first()
 +
 +    /** The updater screen, named from other modules too - they cannot see the app module. */
 +    const val ACTIVITY_CLASS = "io.element.android.x.updater.PlotinaUpdateActivity"
@@ -331,8 +349,50 @@ index 00000000..00a0b576
 +            .apply()
 +    }
 +
-+    /** The manifest URL for whatever channel the user is on right now. */
-+    fun manifestUrl(context: Context): String = manifestUrlFor(channel(context))
++    /** Every manifest source for whatever channel the user is on right now. */
++    fun manifestUrls(context: Context, overrideUrl: String? = null): List<String> =
++        manifestUrlsFor(channel(context), overrideUrl)
++
++    /** A manifest plus the source that answered it, so a failed download can move past that source. */
++    data class ManifestHit(
++        val info: UpdateInfo,
++        /** Position in the list this pass walked; -1 when the manifest was handed over fully parsed. */
++        val sourceIndex: Int,
++        val sourceUrl: String,
++    )
++
++    /**
++     * One pass over [urls]: the first manifest that parses and that [accept] approves wins.
++     *
++     * Every source failure - non-200, timeout, truncated body, a manifest that does not parse, an
++     * APK whose bytes did not match this manifest's sha256 (the caller rejects it through [accept])
++     * - is answered by the *next* source, never by the same one again. Null means the pass is over;
++     * the caller's next attempt starts a fresh pass, so no list is walked in a loop.
++     */
++    fun firstManifest(
++        urls: List<String>,
++        startAt: Int = 0,
++        accept: (UpdateInfo) -> Boolean = { true },
++        fetch: (String) -> UpdateInfo?,
++    ): ManifestHit? {
++        for (index in startAt until urls.size) {
++            val url = urls[index]
++            // Info, not debug: the source that answered (or did not) is the first thing anyone
++            // reads when an update "does not arrive", and the walk is invisible otherwise.
++            val info = fetch(url)
++            if (info == null) {
++                Timber.tag(loggerTag).i("no usable manifest from %s, trying the next source", url)
++                continue
++            }
++            if (!accept(info)) {
++                Timber.tag(loggerTag).i("manifest from %s is not usable for this install, trying the next source", url)
++                continue
++            }
++            Timber.tag(loggerTag).i("manifest from %s", url)
++            return ManifestHit(info = info, sourceIndex = index, sourceUrl = url)
++        }
++        return null
++    }
 +
 +    /**
 +     * Drops the ABI digit the packaging step appends (`base * 10 + abiCode`, arm64-v8a = 2,
@@ -422,7 +482,7 @@ index 00000000..00a0b576
 +     * Silent once-a-day check started from MainActivity.onCreate. Only when the manifest really
 +     * describes a newer build does anything open: the updater page, carrying the manifest we
 +     * already fetched, so the user never waits on a second request. The channel decides which
-+     * feed is read.
++     * feed is read, and the walk inside it decides which source answers.
 +     */
 +    fun onAppStart(activity: Activity) {
 +        val prefs = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -431,7 +491,8 @@ index 00000000..00a0b576
 +        prefs.edit().putLong(KEY_LAST_CHECK, now).apply()
 +        val appContext = activity.applicationContext
 +        Thread {
-+            val info = fetch(appContext, manifestUrl(appContext)) ?: return@Thread
++            val hit = firstManifest(manifestUrls(appContext)) { url -> fetch(appContext, url) } ?: return@Thread
++            val info = hit.info
 +            if (!isUpdateAvailable(appContext, info)) return@Thread
 +            if (activity.isFinishing || activity.isDestroyed) return@Thread
 +            val intent = activityIntent(appContext)
@@ -451,7 +512,7 @@ index 00000000..00a0b576
 +            connection.readTimeout = 15_000
 +            connection.instanceFollowRedirects = true
 +            if (connection.responseCode != HttpURLConnection.HTTP_OK) {
-+                Timber.tag(loggerTag).d("manifest HTTP %s", connection.responseCode)
++                Timber.tag(loggerTag).d("manifest HTTP %s for %s", connection.responseCode, url)
 +                return null
 +            }
 +            val body = connection.inputStream.bufferedReader().use { it.readText() }
@@ -463,10 +524,10 @@ index 00000000..00a0b576
 +}
 diff --git a/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt
 new file mode 100644
-index 00000000..a5c36300
+index 00000000..b36931cb
 --- /dev/null
 +++ b/app/src/main/kotlin/io/element/android/x/updater/PlotinaUpdateActivity.kt
-@@ -0,0 +1,427 @@
+@@ -0,0 +1,489 @@
 +/*
 + * Plotina: the in-app updater's screen host.
 + *
@@ -536,7 +597,13 @@ index 00000000..a5c36300
 +class PlotinaUpdateActivity : ComponentActivity() {
 +    private lateinit var appBindings: AppBindings
 +    private var uiState by mutableStateOf<UpdaterUiState>(UpdaterUiState.Checking)
++
++    /** The manifest in hand, and the source it came from - the pair that a failed download leaves. */
++    private var pendingHit: PlotinaUpdate.ManifestHit? = null
 +    private var pendingInfo: UpdateInfo? = null
++
++    /** The sources of the current attempt: one pass over this list, then the user's next tap. */
++    private var sources: List<String> = emptyList()
 +    private var downloadId: Long = -1L
 +    private var apkFile: File? = null
 +    private var pollJob: Job? = null
@@ -596,7 +663,10 @@ index 00000000..a5c36300
 +        val passed = intent.getStringExtra(PlotinaUpdate.EXTRA_MANIFEST)
 +        if (passed != null) {
 +            val info = UpdateInfo.fromJson(this, passed)
-+            if (info != null) showResult(info) else check()
++            // -1: the daily check already walked the sources and hands over the winner, so the
++            // index of that source is unknown here - a failed pair then starts the walk at the top,
++            // skipping only the pair that just failed.
++            if (info != null) showResult(PlotinaUpdate.ManifestHit(info, sourceIndex = -1, sourceUrl = "")) else check()
 +        } else {
 +            check()
 +        }
@@ -604,24 +674,73 @@ index 00000000..a5c36300
 +
 +    private fun check() {
 +        uiState = UpdaterUiState.Checking
++        // The `plotina_manifest_url` test hook is the preferred source, not the only one: pointing
++        // it at a host that does not answer is exactly how the walk to the next source is proven
++        // on a device. The channel's own sources stay behind it.
++        val urls = PlotinaUpdate.manifestUrls(this, intent.getStringExtra(PlotinaUpdate.EXTRA_MANIFEST_URL))
++        sources = urls
 +        lifecycleScope.launch {
-+            // The EXTRA_MANIFEST_URL test hook wins; otherwise the user's channel decides the feed:
-+            // the edge host for stable, the GitHub dev-latest release for dev.
-+            val url = intent.getStringExtra(PlotinaUpdate.EXTRA_MANIFEST_URL)
-+                ?: PlotinaUpdate.manifestUrl(this@PlotinaUpdateActivity)
-+            val info = withContext(Dispatchers.IO) { PlotinaUpdate.fetch(this@PlotinaUpdateActivity, url) }
-+            if (info == null) {
++            val hit = withContext(Dispatchers.IO) {
++                // No availability filter here: an up-to-date manifest still has to be read so the
++                // page can say «up to date» (or the passive-stable line) instead of an error.
++                PlotinaUpdate.firstManifest(urls) { url -> PlotinaUpdate.fetch(this@PlotinaUpdateActivity, url) }
++            }
++            if (hit == null) {
++                pendingHit = null
++                pendingInfo = null
 +                uiState = UpdaterUiState.Message(
 +                    text = getString(R.string.plotina_update_error_check),
 +                    retry = UpdaterUiState.Retry.Check,
 +                )
 +            } else {
-+                showResult(info)
++                showResult(hit)
 +            }
 +        }
 +    }
 +
-+    private fun showResult(info: UpdateInfo) {
++    /**
++     * A failed pair - a download that broke off, or an APK that did not match the sha256/size of the
++     * manifest that named it - hands this attempt to the *next* source, used whole: its own
++     * manifest, its own apkUrl, its own checksum. One pass over the list per attempt; when it is
++     * exhausted the error stays on screen and [retry] starts a fresh pass from the preferred source.
++     */
++    private fun advanceAfterFailure(errorText: Int) {
++        val failed = pendingInfo
++        val from = (pendingHit?.sourceIndex ?: -1) + 1
++        // The list of this attempt; a manifest handed over by the daily check arrives without one,
++        // so the channel's own sources (plus the test hook, if any) are used instead.
++        val urls = sources.ifEmpty {
++            PlotinaUpdate.manifestUrls(this, intent.getStringExtra(PlotinaUpdate.EXTRA_MANIFEST_URL))
++        }
++        lifecycleScope.launch {
++            uiState = UpdaterUiState.Checking
++            val next = withContext(Dispatchers.IO) {
++                PlotinaUpdate.firstManifest(
++                    urls = urls,
++                    startAt = from,
++                    accept = { info ->
++                        // The pair that just failed is never handed back, whatever its index: a
++                        // manifest the daily check passed over has no index at all.
++                        info.apkUrl != failed?.apkUrl && PlotinaUpdate.isUpdateAvailable(this@PlotinaUpdateActivity, info)
++                    },
++                ) { url -> PlotinaUpdate.fetch(this@PlotinaUpdateActivity, url) }
++            }
++            if (next == null) {
++                pendingHit = null
++                pendingInfo = null
++                uiState = UpdaterUiState.Message(text = getString(errorText), retry = UpdaterUiState.Retry.Download)
++                return@launch
++            }
++            Timber.tag("PlotinaUpdate").i("update source %s failed, continuing from %s", pendingHit?.sourceUrl, next.sourceUrl)
++            pendingHit = next
++            pendingInfo = next.info
++            startDownload(next.info)
++        }
++    }
++
++    private fun showResult(hit: PlotinaUpdate.ManifestHit) {
++        val info = hit.info
++        pendingHit = hit
 +        pendingInfo = info
 +        val installed = PlotinaUpdate.installedVersionName(this)
 +        val available = PlotinaUpdate.isUpdateAvailable(this, info)
@@ -645,7 +764,14 @@ index 00000000..a5c36300
 +        when (val state = uiState) {
 +            is UpdaterUiState.Message -> when (state.retry) {
 +                UpdaterUiState.Retry.Check -> check()
-+                UpdaterUiState.Retry.Download -> pendingInfo?.let(::confirmAndDownload)
++                // A pair that failed mid-download or at its checksum is never asked for again: the
++                // same tap moves on to the next source, or - when the pass is over, which is the
++                // usual case because that walk already ran on failure - starts a fresh one.
++                UpdaterUiState.Retry.Download -> if (pendingHit != null) {
++                    advanceAfterFailure(R.string.plotina_update_error_download)
++                } else {
++                    check()
++                }
 +                UpdaterUiState.Retry.None -> Unit
 +            }
 +            else -> Unit
@@ -716,10 +842,8 @@ index 00000000..a5c36300
 +                        return@launch
 +                    }
 +                    DownloadManager.STATUS_FAILED, null -> {
-+                        uiState = UpdaterUiState.Message(
-+                            text = getString(R.string.plotina_update_error_download),
-+                            retry = UpdaterUiState.Retry.Download,
-+                        )
++                        Timber.tag("PlotinaUpdate").w("download of %s failed (status %s)", info.apkUrl, row?.status)
++                        advanceAfterFailure(R.string.plotina_update_error_download)
 +                        return@launch
 +                    }
 +                    else -> {
@@ -750,10 +874,9 @@ index 00000000..a5c36300
 +            if (!matches) {
 +                Timber.tag("PlotinaUpdate").w("checksum or size mismatch for %s", file.name)
 +                file.delete()
-+                uiState = UpdaterUiState.Message(
-+                    text = getString(R.string.plotina_update_error_mismatch),
-+                    retry = UpdaterUiState.Retry.Download,
-+                )
++                // The bytes are gone; the manifest that named them is not asked for another copy.
++                // The next source has its own pair, and that pair is used whole.
++                advanceAfterFailure(R.string.plotina_update_error_mismatch)
 +                return@launch
 +            }
 +            if (!mayInstallPackages()) {
@@ -1868,12 +1991,237 @@ index 00000000..1089784e
 +            "\"apkUrl\":\"https://github.com/plotina-cc/clients/releases/download/dev-latest/Plotina-X.apk\"," +
 +            "\"sha256\":\"${"0".repeat(64)}\",\"size\":137608493,\"notes\":\"Dev.\"}"
 +}
+diff --git a/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdateSourcesTest.kt b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdateSourcesTest.kt
+new file mode 100644
+index 00000000..05655259
+--- /dev/null
++++ b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdateSourcesTest.kt
+@@ -0,0 +1,219 @@
++/*
++ * Plotina: the in-app updater's dev-feed sources and the walk from one to the next.
++ *
++ * Copyright (C) 2026 Plotina
++ *
++ * This program is free software: you can redistribute it and/or modify it under the terms of the
++ * GNU Affero General Public License as published by the Free Software Foundation, version 3.
++ */
++
++package io.element.android.x.updater
++
++import com.google.common.truth.Truth.assertThat
++import io.element.android.x.updater.PlotinaUpdate.UpdateChannel
++import org.junit.Test
++
++/**
++ * The dev feed has two self-contained sources: the edge mirror of the pair «manifest + APK», and
++ * the GitHub `dev-latest` release it is mirrored from. A source is used whole - the manifest of a
++ * source only ever names that source's APK - so the only thing that can go wrong between them is
++ * the walk itself: order, moving on after a failure, and stopping after one pass.
++ *
++ * A failure is anything [PlotinaUpdate.fetch] answers with null (non-200, timeout, truncated body,
++ * a manifest that does not parse) plus anything the caller rejects through [accept] (an APK whose
++ * bytes did not match the checksum of *this* manifest).
++ */
++class PlotinaUpdateSourcesTest {
++    private val edge = "https://plotina.cc/dl/dev/x/update-x-dev.json"
++    private val github = "https://github.com/plotina-cc/clients/releases/download/dev-latest/update-x-dev.json"
++    private val edgeApk = "https://plotina.cc/dl/dev/x/Plotina-X.apk"
++    private val githubApk = "https://github.com/plotina-cc/clients/releases/download/dev-latest/Plotina-X.apk"
++
++    private fun manifest(apkUrl: String, sha256: String, devBuild: Int = 6) = UpdateInfo(
++        packageName = "cc.plotina.x",
++        versionName = "26.10.1-dev.$devBuild",
++        versionCode = 2026100322,
++        apkUrl = apkUrl,
++        sha256 = sha256,
++        size = 137_628_877,
++        notes = "",
++        devBuild = devBuild,
++    )
++
++    private val edgeManifest = manifest(edgeApk, "a".repeat(64))
++    private val githubManifest = manifest(githubApk, "b".repeat(64))
++
++    // --- the source list --------------------------------------------------------------------
++
++    @Test
++    fun `the dev channel lists the edge mirror first and GitHub second`() {
++        assertThat(PlotinaUpdate.manifestUrlsFor(UpdateChannel.DEV))
++            .containsExactly(edge, github)
++            .inOrder()
++    }
++
++    @Test
++    fun `the stable channel keeps its single plotina cc source`() {
++        // Out of scope on purpose: the stable feed is one published file, and the card that adds
++        // a mirror for it changes this test too.
++        assertThat(PlotinaUpdate.manifestUrlsFor(UpdateChannel.STABLE))
++            .containsExactly("https://plotina.cc/dl/update-x.json")
++    }
++
++    @Test
++    fun `the preferred url of a channel is its first source`() {
++        assertThat(PlotinaUpdate.manifestUrlFor(UpdateChannel.DEV)).isEqualTo(edge)
++        assertThat(PlotinaUpdate.manifestUrlFor(UpdateChannel.STABLE))
++            .isEqualTo("https://plotina.cc/dl/update-x.json")
++    }
++
++    @Test
++    fun `a test hook url is tried before the channel sources`() {
++        // `adb --es plotina_manifest_url <url>`: the hook replaces the preferred source, it does not
++        // hide the fallbacks - a dead hook host is exactly how the fallback is proven on a device.
++        assertThat(PlotinaUpdate.manifestUrlsFor(UpdateChannel.DEV, "https://nothing.invalid/update.json"))
++            .containsExactly("https://nothing.invalid/update.json", edge, github)
++            .inOrder()
++    }
++
++    @Test
++    fun `a test hook url that repeats a channel source is not tried twice`() {
++        assertThat(PlotinaUpdate.manifestUrlsFor(UpdateChannel.DEV, edge))
++            .containsExactly(edge, github)
++            .inOrder()
++    }
++
++    @Test
++    fun `a blank test hook url adds no source`() {
++        assertThat(PlotinaUpdate.manifestUrlsFor(UpdateChannel.DEV, "  "))
++            .containsExactly(edge, github)
++            .inOrder()
++    }
++
++    // --- one pass over the list -------------------------------------------------------------
++
++    @Test
++    fun `the first source wins when it answers`() {
++        val calls = mutableListOf<String>()
++        val hit = PlotinaUpdate.firstManifest(PlotinaUpdate.manifestUrlsFor(UpdateChannel.DEV)) { url ->
++            calls += url
++            edgeManifest
++        }
++
++        assertThat(hit?.sourceUrl).isEqualTo(edge)
++        assertThat(hit?.sourceIndex).isEqualTo(0)
++        // One request: a working preferred source is never doubled.
++        assertThat(calls).containsExactly(edge)
++    }
++
++    @Test
++    fun `a 404 on the edge mirror falls back to GitHub`() {
++        val calls = mutableListOf<String>()
++        val hit = PlotinaUpdate.firstManifest(PlotinaUpdate.manifestUrlsFor(UpdateChannel.DEV)) { url ->
++            calls += url
++            if (url == github) githubManifest else null
++        }
++
++        assertThat(calls).containsExactly(edge, github).inOrder()
++        assertThat(hit?.sourceUrl).isEqualTo(github)
++        assertThat(hit?.sourceIndex).isEqualTo(1)
++    }
++
++    @Test
++    fun `a timeout or a manifest that does not parse is the same failure as a 404`() {
++        // Both reach the walk as a null from fetch, so the second source is read for the same reason.
++        val hit = PlotinaUpdate.firstManifest(PlotinaUpdate.manifestUrlsFor(UpdateChannel.DEV)) { url ->
++            if (url == github) githubManifest else null
++        }
++        assertThat(hit?.info).isEqualTo(githubManifest)
++    }
++
++    @Test
++    fun `both sources failing leaves no manifest after exactly one pass`() {
++        val calls = mutableListOf<String>()
++        val hit = PlotinaUpdate.firstManifest(PlotinaUpdate.manifestUrlsFor(UpdateChannel.DEV)) { url ->
++            calls += url
++            null
++        }
++
++        assertThat(hit).isNull()
++        assertThat(calls).containsExactly(edge, github).inOrder()
++    }
++
++    @Test
++    fun `a pass never wraps around to the first source again`() {
++        val calls = mutableListOf<String>()
++        val hit = PlotinaUpdate.firstManifest(PlotinaUpdate.manifestUrlsFor(UpdateChannel.DEV), startAt = 2) { url ->
++            calls += url
++            edgeManifest
++        }
++
++        assertThat(hit).isNull()
++        assertThat(calls).isEmpty()
++    }
++
++    // --- a failed pair hands the attempt to the next source ----------------------------------
++
++    @Test
++    fun `a checksum failure on the edge copy moves the retry to GitHub`() {
++        // The APK the edge manifest named did not match its sha256. The retry starts *after* that
++        // source: the edge URL is not requested again, whatever it would answer this time.
++        val calls = mutableListOf<String>()
++        val hit = PlotinaUpdate.firstManifest(
++            urls = PlotinaUpdate.manifestUrlsFor(UpdateChannel.DEV),
++            startAt = 1,
++        ) { url ->
++            calls += url
++            if (url == github) githubManifest else edgeManifest
++        }
++
++        assertThat(calls).containsExactly(github)
++        assertThat(hit?.sourceUrl).isEqualTo(github)
++    }
++
++    @Test
++    fun `an install from the fallback takes the fallback apk and the fallback checksum`() {
++        // Never a mix: the manifest that is used decides the URL and the hash the file is checked
++        // against. The edge pair is rejected here, so the recorded values must be GitHub's.
++        val hit = PlotinaUpdate.firstManifest(
++            urls = PlotinaUpdate.manifestUrlsFor(UpdateChannel.DEV),
++            startAt = 1,
++            accept = { it.apkUrl != edgeApk },
++        ) { url ->
++            if (url == github) githubManifest else edgeManifest
++        }
++
++        assertThat(hit?.info?.apkUrl).isEqualTo(githubApk)
++        assertThat(hit?.info?.sha256).isEqualTo(githubManifest.sha256)
++        assertThat(hit?.info?.size).isEqualTo(githubManifest.size)
++    }
++
++    @Test
++    fun `a fallback manifest that offers no newer build is skipped instead of installed`() {
++        // The mirrored copy may lag behind. Installing it would be a downgrade offer, so the walk
++        // moves on - and here it runs out of sources.
++        val hit = PlotinaUpdate.firstManifest(
++            urls = PlotinaUpdate.manifestUrlsFor(UpdateChannel.DEV),
++            startAt = 1,
++            accept = { it.devBuild > 6 },
++        ) { githubManifest }
++
++        assertThat(hit).isNull()
++    }
++
++    @Test
++    fun `a failed pair on the last source ends the pass instead of looping`() {
++        val calls = mutableListOf<String>()
++        val hit = PlotinaUpdate.firstManifest(
++            urls = PlotinaUpdate.manifestUrlsFor(UpdateChannel.DEV),
++            startAt = 1,
++            accept = { false },
++        ) { url ->
++            calls += url
++            githubManifest
++        }
++
++        assertThat(hit).isNull()
++        assertThat(calls).containsExactly(github)
++    }
++}
 diff --git a/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdateTest.kt b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdateTest.kt
 new file mode 100644
-index 00000000..93509097
+index 00000000..f9c45d76
 --- /dev/null
 +++ b/app/src/test/kotlin/io/element/android/x/updater/PlotinaUpdateTest.kt
-@@ -0,0 +1,188 @@
+@@ -0,0 +1,189 @@
 +/*
 + * Plotina: the in-app updater's versionCode comparison and update-channel rules.
 + *
@@ -1945,11 +2293,12 @@ index 00000000..93509097
 +    }
 +
 +    @Test
-+    fun `the dev channel reads the GitHub dev-latest feed`() {
-+        // Static URL: tag dev-latest is a moving target whose assets are overwritten by hand, so
-+        // the app never needs to know a version number to find the feed.
++    fun `the dev channel reads the edge mirror first`() {
++        // Static URLs: the edge copy is a byte-for-byte mirror of the GitHub dev-latest assets, and
++        // dev-latest is a moving target whose assets are overwritten by hand. The GitHub release is
++        // the second source, so a dead mirror costs one request, not the update.
 +        assertThat(PlotinaUpdate.manifestUrlFor(PlotinaUpdate.UpdateChannel.DEV))
-+            .isEqualTo("https://github.com/plotina-cc/clients/releases/download/dev-latest/update-x-dev.json")
++            .isEqualTo("https://plotina.cc/dl/dev/x/update-x-dev.json")
 +    }
 +
 +    @Test
