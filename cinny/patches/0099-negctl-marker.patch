@@ -1,0 +1,10 @@
+# Plotina-Patch: negative control for the artifact marker gate. Not to be merged.
+# Plotina-Marker: plotina-negctl-not-in-artifact
+
+diff --git a/docs/plotina-patches/0099-negctl.txt b/docs/plotina-patches/0099-negctl.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..2222222222222222222222222222222222222222
+--- /dev/null
++++ b/docs/plotina-patches/0099-negctl.txt
+@@ -0,0 +1 @@
++plotina-negctl-not-in-artifact
