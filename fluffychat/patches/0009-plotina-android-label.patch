@@ -1,3 +1,9 @@
+# Plotina-Patch: plotina android label.
+# Plotina-Marker: plotina-patch-0009-android-label
+# Plotina-Note: this patch is build-level and ships no runtime string of its own, so it
+#   writes its marker into android/app/src/main/assets/plotina-patches/0009-android-label.txt, which the artifact carries verbatim; the gate
+#   looks for it there.
+
 --- a/android/app/src/main/AndroidManifest.xml
 +++ b/android/app/src/main/AndroidManifest.xml
 @@ -29,4 +29,4 @@
@@ -6,3 +12,11 @@
 +        android:label="Plotina Mobile"
          android:icon="@mipmap/ic_launcher"
          android:requestLegacyExternalStorage="true"
+
+diff --git a/android/app/src/main/assets/plotina-patches/0009-android-label.txt b/android/app/src/main/assets/plotina-patches/0009-android-label.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..1111111111111111111111111111111111111111
+--- /dev/null
++++ b/android/app/src/main/assets/plotina-patches/0009-android-label.txt
+@@ -0,0 +1 @@
++plotina-patch-0009-android-label

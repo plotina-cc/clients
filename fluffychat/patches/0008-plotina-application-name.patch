@@ -1,3 +1,9 @@
+# Plotina-Patch: plotina application name.
+# Plotina-Marker: plotina-patch-0008-application-name
+# Plotina-Note: this patch is build-level and ships no runtime string of its own, so it
+#   writes its marker into android/app/src/main/assets/plotina-patches/0008-application-name.txt, which the artifact carries verbatim; the gate
+#   looks for it there.
+
 --- a/lib/config/setting_keys.dart
 +++ b/lib/config/setting_keys.dart
 @@ -53,5 +53,5 @@ enum AppSettings<T> {
@@ -7,3 +13,11 @@
 +  applicationName<String>('chat.fluffy.application_name', 'Plotina Mobile'),
    defaultHomeserver<String>('chat.fluffy.default_homeserver', 'plotina.cc'),
    // colorSchemeSeed stored as ARGB int
+
+diff --git a/android/app/src/main/assets/plotina-patches/0008-application-name.txt b/android/app/src/main/assets/plotina-patches/0008-application-name.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..1111111111111111111111111111111111111111
+--- /dev/null
++++ b/android/app/src/main/assets/plotina-patches/0008-application-name.txt
+@@ -0,0 +1 @@
++plotina-patch-0008-application-name

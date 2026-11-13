@@ -1,3 +1,9 @@
+# Plotina-Patch: plotina login terms guard.
+# Plotina-Marker: plotina-patch-0003-login-terms-guard
+# Plotina-Note: this patch is build-level and ships no runtime string of its own, so it
+#   writes its marker into public/plotina-patches/0003-login-terms-guard.txt, which the artifact carries verbatim; the gate
+#   looks for it there.
+
 diff --git a/src/auth/useInteractiveRegistration.ts b/src/auth/useInteractiveRegistration.ts
 index 7314c9e..61361d9 100644
 --- a/src/auth/useInteractiveRegistration.ts
@@ -17,3 +23,11 @@ index 7314c9e..61361d9 100644
      });
    }, [isWidget]);
  
+
+diff --git a/public/plotina-patches/0003-login-terms-guard.txt b/public/plotina-patches/0003-login-terms-guard.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..1111111111111111111111111111111111111111
+--- /dev/null
++++ b/public/plotina-patches/0003-login-terms-guard.txt
+@@ -0,0 +1 @@
++plotina-patch-0003-login-terms-guard

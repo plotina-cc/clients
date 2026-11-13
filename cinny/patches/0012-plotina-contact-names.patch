@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina contact names.
+# Plotina-Marker: cc.plotina.contact_names
+
 diff --git a/src/app/components/editor/autocomplete/UserMentionAutocomplete.tsx b/src/app/components/editor/autocomplete/UserMentionAutocomplete.tsx
 index 7a8012e..4ad4bdd 100644
 --- a/src/app/components/editor/autocomplete/UserMentionAutocomplete.tsx

@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina contact names.
+# Plotina-Marker: This name is visible only to you and does not change the room name for anyone else.
+
 diff --git a/lib/l10n/intl_en.arb b/lib/l10n/intl_en.arb
 index 0dcbf31..03ce4db 100644
 --- a/lib/l10n/intl_en.arb

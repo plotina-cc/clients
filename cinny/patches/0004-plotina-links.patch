@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina links.
+# Plotina-Marker: https://plotina.cc
+
 diff --git a/src/app/features/settings/about/About.tsx b/src/app/features/settings/about/About.tsx
 index 3e3a13a..f2a3a2a 100644
 --- a/src/app/features/settings/about/About.tsx

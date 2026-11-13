@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina sso sign in window token handoff.
+# Plotina-Marker: plotina:sso:login-token
+
 diff --git a/src/app/pages/auth/login/Login.tsx b/src/app/pages/auth/login/Login.tsx
 index 2f04a73..a0bac31 100644
 --- a/src/app/pages/auth/login/Login.tsx

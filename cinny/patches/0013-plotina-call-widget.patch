@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina call widget.
+# Plotina-Marker: cc.plotina.set_account_data
+
 diff --git a/package-lock.json b/package-lock.json
 index d61fec5..88064fd 100644
 --- a/package-lock.json

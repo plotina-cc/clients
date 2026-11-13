@@ -1,3 +1,9 @@
+# Plotina-Patch: plotina sentry.
+# Plotina-Marker: plotina-patch-0001-sentry
+# Plotina-Note: this patch is build-level and ships no runtime string of its own, so it
+#   writes its marker into public/res/plotina-patches/0001-sentry.txt, which the artifact carries verbatim; the gate
+#   looks for it there.
+
 diff --git a/src/index.tsx b/src/index.tsx
 index 6cc0ca3..d933380 100644
 --- a/src/index.tsx
@@ -77,3 +83,11 @@ index a5af94d..e4bf4c3 100644
      copyPublicDir: false,
      rollupOptions: {
        plugins: [inject({ Buffer: ['buffer', 'Buffer'] })],
+
+diff --git a/public/res/plotina-patches/0001-sentry.txt b/public/res/plotina-patches/0001-sentry.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..1111111111111111111111111111111111111111
+--- /dev/null
++++ b/public/res/plotina-patches/0001-sentry.txt
+@@ -0,0 +1 @@
++plotina-patch-0001-sentry

@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina noise level.
+# Plotina-Marker: Maximum attenuation in dB for outgoing call audio.
+
 diff --git a/lib/config/setting_keys.dart b/lib/config/setting_keys.dart
 index 8b1faa7..14862ed 100644
 --- a/lib/config/setting_keys.dart

@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina lite slider theme.
+# Plotina-Marker: --plotina-range-pct
+
 diff --git a/src/app/features/settings/general/PlotinaNoise.tsx b/src/app/features/settings/general/PlotinaNoise.tsx
 index 7360542..32a5c7b 100644
 --- a/src/app/features/settings/general/PlotinaNoise.tsx

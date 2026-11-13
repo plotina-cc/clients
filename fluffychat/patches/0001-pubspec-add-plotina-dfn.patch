@@ -1,3 +1,9 @@
+# Plotina-Patch: pubspec add plotina dfn.
+# Plotina-Marker: plotina-patch-0001-dfn
+# Plotina-Note: this patch is build-level and ships no runtime string of its own, so it
+#   writes its marker into android/app/src/main/assets/plotina-patches/0001-plotina-dfn.txt, which the artifact carries verbatim; the gate
+#   looks for it there.
+
 diff --git a/pubspec.yaml b/pubspec.yaml
 index 121bedf..0927017 100644
 --- a/pubspec.yaml
@@ -13,3 +19,11 @@ index 121bedf..0927017 100644
    pretty_qr_code: ^3.6.0
    provider: ^6.0.2
    punycode: ^1.0.0
+
+diff --git a/android/app/src/main/assets/plotina-patches/0001-plotina-dfn.txt b/android/app/src/main/assets/plotina-patches/0001-plotina-dfn.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..1111111111111111111111111111111111111111
+--- /dev/null
++++ b/android/app/src/main/assets/plotina-patches/0001-plotina-dfn.txt
+@@ -0,0 +1 @@
++plotina-patch-0001-dfn

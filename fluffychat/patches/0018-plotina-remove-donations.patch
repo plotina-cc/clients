@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina remove donations.
+# Plotina-Marker: Спасибо, что пользуетесь Plotina Mobile.
+
 diff --git a/lib/l10n/intl_en.arb b/lib/l10n/intl_en.arb
 index 98e8724..3c267fa 100644
 --- a/lib/l10n/intl_en.arb

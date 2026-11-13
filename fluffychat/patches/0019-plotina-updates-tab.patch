@@ -1,3 +1,9 @@
+# Plotina-Patch: plotina updates tab.
+# Plotina-Marker: plotina-patch-0019-updates-tab
+# Plotina-Note: this patch is build-level and ships no runtime string of its own, so it
+#   writes its marker into android/app/src/main/assets/plotina-patches/0019-updates-tab.txt, which the artifact carries verbatim; the gate
+#   looks for it there.
+
 diff --git a/lib/l10n/intl_en.arb b/lib/l10n/intl_en.arb
 index 3c267fa..e704c9f 100644
 --- a/lib/l10n/intl_en.arb
@@ -121,3 +127,11 @@ index 0000000..6989efb
 +    );
 +  }
 +}
+
+diff --git a/android/app/src/main/assets/plotina-patches/0019-updates-tab.txt b/android/app/src/main/assets/plotina-patches/0019-updates-tab.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..1111111111111111111111111111111111111111
+--- /dev/null
++++ b/android/app/src/main/assets/plotina-patches/0019-updates-tab.txt
+@@ -0,0 +1 @@
++plotina-patch-0019-updates-tab

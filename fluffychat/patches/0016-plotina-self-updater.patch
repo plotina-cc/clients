@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina self updater.
+# Plotina-Marker: https://plotina.cc/dl/update-mobile.json
+
 diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
 index 6a5b86f..e5c5d2f 100644
 --- a/android/app/src/main/AndroidManifest.xml

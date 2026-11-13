@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina remove upstream support.
+# Plotina-Marker: https://api.github.com/repos/plotina-cc/clients/releases/latest
+
 diff --git a/lib/config/app_config.dart b/lib/config/app_config.dart
 index 18a0768..460395b 100644
 --- a/lib/config/app_config.dart

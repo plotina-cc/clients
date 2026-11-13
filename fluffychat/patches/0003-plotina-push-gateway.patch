@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina push gateway.
+# Plotina-Marker: https://push.plotina.cc/_matrix/push/v1/notify
+
 diff --git a/lib/config/setting_keys.dart b/lib/config/setting_keys.dart
 index 6e701bc..8b1faa7 100644
 --- a/lib/config/setting_keys.dart

@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina oidc scheme.
+# Plotina-Marker: cc.plotina.fluffychat
+
 diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
 index f721c20..67b49d0 100644
 --- a/android/app/src/main/AndroidManifest.xml

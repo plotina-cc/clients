@@ -1,3 +1,6 @@
+# Plotina-Patch: plotina updates settings.
+# Plotina-Marker: plotina-updates-page
+
 diff --git a/src/app/features/settings/Settings.tsx b/src/app/features/settings/Settings.tsx
 index 5e1a20f..ca65a7e 100644
 --- a/src/app/features/settings/Settings.tsx
