@@ -43,7 +43,9 @@ cp -a "$WORK/webapp" webapp
 pnpm run asar-webapp
 pnpm exec asar list webapp.asar | grep -q '^/noise/boot.js$'
 pnpm exec asar list webapp.asar | grep -q '^/noise/plotina-dfn.js$'
-pnpm exec asar list webapp.asar | grep -q '^/noise/plotina-panel.js$'
+# The floating level panel is gone with EC .17 (Settings -> Audio owns the
+# level); an entry reappearing here means a stale layer was copied back in.
+! pnpm exec asar list webapp.asar | grep -q '^/noise/plotina-panel.js$'
 pnpm exec asar list webapp.asar | grep -q '^/config.json$'
 pnpm exec asar list webapp.asar | grep -q '^/LICENSE-AGPL-3.0$'
 pnpm exec asar list webapp.asar | grep -q '^/NOTICE$'
