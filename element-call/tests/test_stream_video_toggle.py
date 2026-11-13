@@ -10,9 +10,9 @@ Three things are checked, independently of a browser, an SFU or a build:
   must *not* be there: a global "hide every stream" toggle, or changes to
   upstream's ``VolumeControls``/LiveKit configuration.
 * ``StoreLogicTests`` runs the store the whole patch series produces under node
-  (``tests/stream_visibility_probe.mjs``): the visibility entries, the
-  default of "show", restarts, two devices, and that a visibility entry is
-  never read back as a volume. No node_modules are needed.
+  (``tests/stream_visibility_probe.mjs``): the visibility entries, the default
+  of "hidden", the session-only "show", restarts, two devices, and that a
+  visibility entry is never read back as a volume. No node_modules are needed.
 * ``AppliedSourceTests`` applies every patch, in filename order, to the
   upstream source of the tag pinned in ``pins.env`` — the way
   ``build.py --mode source`` does before it builds — and runs the probe against
@@ -44,7 +44,10 @@ STORE = "src/state/PersistentVolume.ts"
 SCREEN_SHARE = "src/state/media/RemoteScreenShareViewModel.ts"
 SCREEN_SHARE_TEST = "src/state/media/RemoteScreenShareViewModel.test.ts"
 TILE = "src/tile/SpotlightTile.tsx"
+TILE_CSS = "src/tile/SpotlightTile.module.css"
 TILE_TEST = "src/tile/SpotlightTile.test.tsx"
+MEDIA_VIEW = "src/tile/MediaView.tsx"
+MEDIA_VIEW_CSS = "src/tile/MediaView.module.css"
 TEST_MOCKS = "src/utils/test.ts"
 LOCALE_EN = "locales/en/app.json"
 LOCALE_RU = "locales/ru/app.json"
@@ -54,7 +57,10 @@ TOUCHED = {
     SCREEN_SHARE,
     SCREEN_SHARE_TEST,
     TILE,
+    TILE_CSS,
     TILE_TEST,
+    MEDIA_VIEW,
+    MEDIA_VIEW_CSS,
     TEST_MOCKS,
     LOCALE_EN,
     LOCALE_RU,
@@ -69,7 +75,26 @@ OFF_LIMITS = (
     "pnpm-lock.yaml",
 )
 
-VISIBILITY_KEYS = ("screen_share_visibility", "hide_stream", "stream_hidden")
+# The labels the merged patch puts in the video tile's catalog: the eye button
+# reads the first two (shown / hidden), the paused tile says the last two.
+VISIBILITY_KEYS = (
+    "screen_share_visibility",
+    "show_stream",
+    "stream_paused",
+    "watch_stream",
+)
+
+# Labels the merge retired, neither of which has a reader left in the tree: the
+# label of the single-item menu the bare eye button replaced, and the old
+# "stream hidden" status line the paused tile replaced.
+RETIRED_KEYS = ("hide_stream", "stream_hidden")
+
+# What the paused tile says, per locale. A paused stream is a state of the whole
+# tile, not an annotation on a participant who looks present.
+PAUSED_TEXT = {
+    LOCALE_EN: {"stream_paused": "Stream paused", "watch_stream": "Watch"},
+    LOCALE_RU: {"stream_paused": "Стрим приостановлен", "watch_stream": "Смотреть"},
+}
 
 # How the tile refers to them in the source.
 VISIBILITY_REFS = tuple(f"video_tile.{key}" for key in VISIBILITY_KEYS)
@@ -138,7 +163,34 @@ class PatchTests(unittest.TestCase):
         # Keyed by MXID plus source, in the same store the volume patch added.
         self.assertIn("streamVideoKey(inputs.userId)", added)
         self.assertIn("persistentVolumeStore()", added)
-        self.assertIn("store.getStreamVisible(videoKey) ?? true", added)
+        self.assertIn("store.getStreamVisible(videoKey)", added)
+        # The default is "hidden": the old `?? true` must not survive anywhere.
+        self.assertNotIn("?? true", added)
+
+    def test_the_default_is_hidden_not_shown(self) -> None:
+        """t_6d5f61b4: somebody else's stream starts hidden."""
+        added = "\n".join(added_lines(sections()[STORE]))
+        self.assertIn("public getStreamVisible(key: string): boolean {", added)
+        self.assertIn(
+            "return entry !== undefined && isStreamVideoEntry(entry) && entry.visible;",
+            added,
+        )
+        # A stream the viewer turned on lasts for the page session only, so a
+        # `true` is never written: hiding is the only synced choice.
+        self.assertIn("this.sessionShown.has(key)) return true;", added)
+        self.assertIn("this.sessionShown.add(key);", added)
+        self.assertIn("[key]: { visible: false, ts: this.clock() },", added)
+        # An explicit hide from another device ends a local "watch".
+        self.assertIn("this.sessionShown.delete(key);", added)
+        for stale in ("?? true", "boolean | null", 'The ViewModel treats null'):
+            self.assertNotIn(stale, added)
+
+    def test_a_local_share_is_never_subject_to_the_choice(self) -> None:
+        """The person sharing always sees their own stream (t_6d5f61b4)."""
+        tile = "\n".join(added_lines(sections()[TILE]))
+        self.assertIn("a local screen share is this viewer's own stream", tile)
+        ui_test = "\n".join(added_lines(sections()[TILE_TEST]))
+        self.assertIn("the viewer's own screen share is never hidden", ui_test)
 
     def test_the_publishers_state_is_not_reused_as_the_viewers_choice(self) -> None:
         section = sections()[SCREEN_SHARE]
@@ -150,19 +202,74 @@ class PatchTests(unittest.TestCase):
         self.assertIn("videoEnabled && videoVisible", tile)
         self.assertIn("video={videoVisible ? props.video : undefined}", tile)
 
-    def test_the_ui_is_a_menu_item_with_a_state(self) -> None:
+    def test_the_ui_is_a_bare_toggle_not_a_menu(self) -> None:
         tile = "\n".join(added_lines(sections()[TILE]))
-        self.assertIn("<ToggleMenuItem", tile)
-        self.assertIn("checked={!videoVisible}", tile)
+        # A plain button: the click itself is the action.
+        self.assertIn("onClick={onToggle}", tile)
+        self.assertIn("vm.setVideoVisible(!vm.videoVisible$.value)", tile)
+        # The state is readable without hovering or opening anything.
+        self.assertIn("aria-pressed={!videoVisible}", tile)
         for key in VISIBILITY_REFS:
             self.assertIn(key, tile)
+        # ...and the eye follows it.
+        self.assertIn(
+            "const Icon = videoVisible ? VisibilityOnIcon : VisibilityOffIcon;",
+            tile,
+        )
         # It sits next to the existing volume button, in the same corner.
         self.assertIn("ScreenShareVisibilityButton", tile)
         self.assertIn("ScreenShareVolumeButton", sections()[TILE])
-        # ...and the menu stays open while toggling.
-        self.assertIn("e.preventDefault();", tile)
+        # Nothing left of the one-item menu it used to be.
+        for gone in ("<Menu", "<ToggleMenuItem", "menuitemcheckbox"):
+            self.assertNotIn(gone, tile)
         ui_test = "\n".join(added_lines(sections()[TILE_TEST]))
-        self.assertIn('"menuitemcheckbox"', ui_test)
+        self.assertNotIn('"menuitemcheckbox"', ui_test)
+        self.assertIn('"aria-pressed"', ui_test)
+        self.assertIn('"Show screen share"', ui_test)
+
+    def test_a_hidden_stream_is_a_paused_tile_not_a_participant(self) -> None:
+        tile = "\n".join(added_lines(sections()[TILE]))
+        # A block of its own in the middle of the tile, with a stable hook.
+        self.assertIn('data-testid="stream-paused"', tile)
+        self.assertIn("video_tile.stream_paused", tile)
+        # The way back is a real button, labelled for screen readers.
+        self.assertIn("<button", tile)
+        self.assertIn('aria-label={t("video_tile.watch_stream")}', tile)
+        self.assertIn("onClick={onWatch}", tile)
+        self.assertIn("vm.setVideoVisible(true)", tile)
+        # It owns the tile instead of annotating it: the old corner status line
+        # is replaced, not kept alongside.
+        self.assertIn(
+            "overlay={videoVisible ? undefined : <StreamPaused vm={vm} />}",
+            tile,
+        )
+        self.assertNotIn("status={videoVisible ? undefined", tile)
+
+        # The overlay is a MediaView layer over the avatar and the video, and
+        # under the foreground chrome, so the volume and eye controls still work.
+        view = "\n".join(added_lines(sections()[MEDIA_VIEW]))
+        self.assertIn("overlay?: ReactNode;", view)
+        self.assertIn(
+            "{overlay && <div className={styles.overlay}>{overlay}</div>}",
+            view,
+        )
+
+        # A dark backing in both themes: the label sits on someone's avatar.
+        view_css = "\n".join(added_lines(sections()[MEDIA_VIEW_CSS]))
+        self.assertIn(".overlay {", view_css)
+        self.assertIn("background: rgb(0 0 0 / 55%);", view_css)
+        self.assertIn("place-items: center;", view_css)
+
+        # Readable without hovering: the tile hides its buttons until hover.
+        tile_css = "\n".join(added_lines(sections()[TILE_CSS]))
+        self.assertIn(".streamPaused {", tile_css)
+        self.assertIn(".tile .streamPaused button {", tile_css)
+        self.assertIn("opacity: 1;", tile_css)
+
+        ui_test = "\n".join(added_lines(sections()[TILE_TEST]))
+        # Both directions are covered in the browser tests.
+        self.assertIn('getByTestId("stream-paused")', ui_test)
+        self.assertIn('{ name: "Watch" }', ui_test)
 
     def test_a_viewer_choice_is_remembered_per_mxid(self) -> None:
         added = "\n".join(added_lines(sections()[SCREEN_SHARE_TEST]))
@@ -223,9 +330,13 @@ class StoreLogicTests(unittest.TestCase):
 
     expected = (
         "the stream visibility key is the mxid plus the source",
-        "a stream is shown until the viewer says otherwise",
+        "a stream nobody has chosen for is hidden",
+        "a stored choice to show a stream is honoured",
+        "a stored choice to hide a stream is still hidden",
         "hiding a stream is remembered",
         "showing a stream again is remembered",
+        "showing a stream is not written to the account",
+        "a stream the viewer showed is hidden again at the next start",
         "a visibility entry is not read back as a volume",
         "the microphone, the share's audio and its video are separate keys",
         "a hidden stream survives a restart",
@@ -371,12 +482,21 @@ class AppliedSourceTests(unittest.TestCase):
         self.assertIn("setSubscribed(visible)", source)
         self.assertIn("videoVisible$", source)
         self.assertIn("store.setStreamVisible(videoKey, visible)", source)
-        self.assertIn("store.getStreamVisible(videoKey) ?? true", source)
+        self.assertIn("store.getStreamVisible(videoKey)", source)
+        self.assertNotIn("?? true", source)
+
+    def test_the_default_is_hidden_in_the_applied_source(self) -> None:
+        # The docstring and the code both have to say "hidden by default".
+        store = self.read(STORE)
+        self.assertIn("hidden until the viewer turns it on", store)
+        self.assertIn("public getStreamVisible(key: string): boolean {", store)
+        self.assertNotIn("boolean | null", store.split("getStreamVisible")[1][:400])
 
     def test_the_tile_hides_the_track_not_just_the_pixels(self) -> None:
         source = self.read(TILE)
         self.assertIn("video={videoVisible ? props.video : undefined}", source)
-        self.assertIn("<ToggleMenuItem", source)
+        self.assertIn("aria-pressed={!videoVisible}", source)
+        self.assertNotIn("<ToggleMenuItem", source)
 
     def test_upstream_audio_controls_are_byte_identical(self) -> None:
         # Compare with the same file in the untouched archive.
@@ -399,6 +519,30 @@ class AppliedSourceTests(unittest.TestCase):
         for key in VISIBILITY_KEYS:
             self.assertIn(key, en)
             self.assertIn(key, ru)
+        # No dead keys: the retired menu label has no reader left in the tree.
+        source = "\n".join(
+            self.read(path) for path in (SCREEN_SHARE, TILE)
+        )
+        for key in RETIRED_KEYS:
+            self.assertNotIn(key, en, f"{key} is still in the English catalog")
+            self.assertNotIn(key, ru, f"{key} is still in the Russian catalog")
+            self.assertNotIn(
+                f"video_tile.{key}", source, f"{key} is still referenced"
+            )
+
+    def test_the_paused_state_says_what_it_is_in_both_locales(self) -> None:
+        for path, texts in PAUSED_TEXT.items():
+            keys = json.loads(self.read(path))["video_tile"]
+            for key, text in texts.items():
+                self.assertEqual(keys.get(key), text, f"{path}: {key}")
+            # The old status line is gone; no dead key left behind.
+            self.assertNotIn("stream_hidden", keys)
+
+    def test_the_applied_tile_renders_the_paused_block(self) -> None:
+        source = self.read(TILE)
+        self.assertIn('data-testid="stream-paused"', source)
+        self.assertIn('aria-label={t("video_tile.watch_stream")}', source)
+        self.assertNotIn('t("video_tile.stream_hidden")', source)
 
 
 if __name__ == "__main__":

@@ -1,42 +1,44 @@
 diff --git a/locales/en/app.json b/locales/en/app.json
-index f3d568b..f2a81d3 100644
+index f3d568b..8b765c5 100644
 --- a/locales/en/app.json
 +++ b/locales/en/app.json
-@@ -270,9 +270,12 @@
-     "camera_starting": "Video loading...",
-     "collapse": "Collapse",
+@@ -272,8 +272,12 @@
      "expand": "Expand",
-+    "hide_stream": "Don't show this stream",
      "mute_for_me": "Mute for me",
      "muted_for_me": "Muted for me",
 +    "screen_share_visibility": "Screen share visibility",
      "screen_share_volume": "Screen share volume",
-+    "stream_hidden": "Stream hidden",
++    "show_stream": "Show screen share",
++    "stream_paused": "Stream paused",
      "volume": "Volume",
-     "waiting_for_media": "Waiting for media..."
+-    "waiting_for_media": "Waiting for media..."
++    "waiting_for_media": "Waiting for media...",
++    "watch_stream": "Watch"
    }
+ }
 diff --git a/locales/ru/app.json b/locales/ru/app.json
-index ec68fd7..8600bd9 100644
+index ec68fd7..6e2e583 100644
 --- a/locales/ru/app.json
 +++ b/locales/ru/app.json
-@@ -250,9 +250,12 @@
-     "camera_starting": "Загрузка видео...",
-     "collapse": "Свернуть",
+@@ -252,8 +252,12 @@
      "expand": "Развернуть",
-+    "hide_stream": "Не показывать этот стрим",
      "mute_for_me": "Заглушить звук для меня",
      "muted_for_me": "Приглушить для меня",
 +    "screen_share_visibility": "Показ демонстрации экрана",
      "screen_share_volume": "Громкость демонстрации экрана",
-+    "stream_hidden": "Стрим скрыт",
++    "show_stream": "Показать демонстрацию экрана",
++    "stream_paused": "Стрим приостановлен",
      "volume": "Громкость",
-     "waiting_for_media": "В ожидании медиа..."
+-    "waiting_for_media": "В ожидании медиа..."
++    "waiting_for_media": "В ожидании медиа...",
++    "watch_stream": "Смотреть"
    }
+ }
 diff --git a/src/state/PersistentVolume.ts b/src/state/PersistentVolume.ts
-index 7424b0f..7c9663a 100644
+index 7424b0f..c24e304 100644
 --- a/src/state/PersistentVolume.ts
 +++ b/src/state/PersistentVolume.ts
-@@ -24,11 +24,15 @@ Please see LICENSE in the repository root for full details.
+@@ -24,11 +24,17 @@ Please see LICENSE in the repository root for full details.
   *
   *     {
   *       "@alice:example.org": { "volume": 0.7, "muted": false, "ts": 1730000000000 },
@@ -49,11 +51,13 @@ index 7424b0f..7c9663a 100644
   * `mxid#screenshare` for their screen share audio, so the two can differ.
 + * `mxid#screenshare-video` holds the viewer's own choice of whether that
 + * stream should be rendered and received at all: it is not a volume, so its
-+ * entry carries `visible` instead of `volume`/`muted`.
++ * entry carries `visible` instead of `volume`/`muted`. Somebody else's stream
++ * is hidden until the viewer turns it on, so a key with no entry and a key
++ * saying `visible: false` mean the same thing; only `true` means "show".
   *
   * `ts` is the writer's clock in milliseconds and decides which of two devices'
   * values wins for the same key (last write wins); the maps are otherwise
-@@ -52,6 +56,13 @@ export const ACCOUNT_DATA_TYPE = "cc.plotina.voice_volumes";
+@@ -52,6 +58,13 @@ export const ACCOUNT_DATA_TYPE = "cc.plotina.voice_volumes";
  /** Suffix distinguishing a participant's screen share audio from their mic. */
  export const SCREEN_SHARE_KEY_SUFFIX = "#screenshare";
  
@@ -67,13 +71,19 @@ index 7424b0f..7c9663a 100644
  /**
   * How many entries we are willing to keep. Account data is an ordinary state
   * event: unencrypted, visible to the homeserver, and bounded in size (servers
-@@ -75,6 +86,32 @@ export interface VoiceVolumeEntry {
+@@ -75,6 +88,38 @@ export interface VoiceVolumeEntry {
  
  export type VoiceVolumeMap = Record<string, VoiceVolumeEntry>;
  
 +/**
 + * The viewer's own choice about one participant's screen share video. It is
 + * not a volume, which is why it gets its own entry shape in the same map.
++ *
++ * A stream somebody else shares is **hidden until this viewer asks for it**, so
++ * a key with no entry is a "no", exactly like an entry saying `false`. Only
++ * `visible: true` means "show" — either written by a build that defaulted to
++ * showing (this client honours those, so upgrading does not hide a stream the
++ * viewer asked to watch) or delivered from a device that chose to show it.
 + */
 +export interface StreamVideoEntry {
 +  /** Whether this viewer wants the stream rendered and received. */
@@ -100,7 +110,7 @@ index 7424b0f..7c9663a 100644
  /** The value a ViewModel needs to apply, without the bookkeeping fields. */
  export interface SavedVoiceVolume {
    volume: number;
-@@ -86,18 +123,36 @@ export function screenShareVolumeKey(mxid: string): string {
+@@ -86,18 +131,36 @@ export function screenShareVolumeKey(mxid: string): string {
    return `${mxid}${SCREEN_SHARE_KEY_SUFFIX}`;
  }
  
@@ -142,7 +152,7 @@ index 7424b0f..7c9663a 100644
  /** Clamps a volume to 0..1 and rounds it to 3 decimals, or null if it is junk. */
  function clampVolume(value: unknown): number | null {
    if (typeof value !== "number" || !Number.isFinite(value)) return null;
-@@ -105,78 +160,113 @@ function clampVolume(value: unknown): number | null {
+@@ -105,78 +168,113 @@ function clampVolume(value: unknown): number | null {
  }
  
  /**
@@ -279,16 +289,22 @@ index 7424b0f..7c9663a 100644
  }
  
  interface StorageLike {
-@@ -225,7 +315,7 @@ export class PersistentVolumeStore {
+@@ -225,7 +323,13 @@ export class PersistentVolumeStore {
    private readonly debounceMs: number;
    private readonly onError: (error: unknown) => void;
  
 -  private entries: VoiceVolumeMap = {};
 +  private entries: StoreMap = {};
++  /**
++   * Streams this viewer turned on in this page session. Deliberately not part
++   * of the entry map: showing is not a standing choice, so it is neither
++   * cached nor synced (see `setStreamVisible`) and it dies with the page.
++   */
++  private readonly sessionShown = new Set<string>();
    private started = false;
    private client: VoiceVolumeClient | null = null;
    private accountId: string | null = null;
-@@ -246,10 +336,44 @@ export class PersistentVolumeStore {
+@@ -246,10 +350,60 @@ export class PersistentVolumeStore {
    public get(key: string): SavedVoiceVolume | null {
      if (!this.start()) return null;
      const entry = this.entries[key];
@@ -298,34 +314,50 @@ index 7424b0f..7c9663a 100644
    }
  
 +  /**
-+   * Whether this viewer wants the stream belonging to `key` shown, or null if
-+   * they never said. The ViewModel treats null as "show": hiding a stream is
-+   * an explicit choice, so the default must not need a stored entry.
++   * Whether this viewer wants the stream belonging to `key` shown. A stream is
++   * hidden until someone says otherwise: no entry means "hidden", and so does an
++   * entry saying `false`. Only `visible: true` — or a stream this viewer turned
++   * on in this page session — means "show".
 +   */
-+  public getStreamVisible(key: string): boolean | null {
-+    if (!this.start()) return null;
++  public getStreamVisible(key: string): boolean {
++    if (!this.start()) return false;
++    if (this.sessionShown.has(key)) return true;
 +    const entry = this.entries[key];
-+    return entry && isStreamVideoEntry(entry) ? entry.visible : null;
++    return entry !== undefined && isStreamVideoEntry(entry) && entry.visible;
 +  }
 +
 +  /**
-+   * Remembers whether the stream belonging to `key` should be shown. Junk keys
-+   * and no-op changes are ignored, so an unchanged choice is neither cached
-+   * nor synced.
++   * Records what this viewer chose for `key`.
++   *
++   * Hiding is remembered: it is cached and written to account data (debounced,
++   * like the volumes), so it follows the account to other devices and outlives
++   * the call. Showing is not: a stream is hidden by default, so "watch" is a
++   * choice about what this viewer is watching now. It lasts for the page
++   * session — a reconnect or a re-share keeps it — and the next visit, or the
++   * next share from that person, starts hidden again. A `true` that is already
++   * stored (an older build wrote one when showing was the default) still means
++   * "show"; hiding it writes `false`, which wins.
++   *
++   * Junk keys and no-op changes are ignored, so an unchanged choice is neither
++   * cached nor synced.
 +   */
 +  public setStreamVisible(key: string, visible: boolean): void {
 +    if (!this.start()) return;
 +    if (!isStreamVideoKey(key) || !isStoreKey(key)) return;
-+    const previous = this.entries[key];
-+    if (
-+      previous &&
-+      isStreamVideoEntry(previous) &&
-+      previous.visible === visible
-+    )
++    if (visible) {
++      if (this.sessionShown.has(key)) return;
++      this.sessionShown.add(key);
++      // Every tile showing this key has to hear about it, and there is nothing
++      // to write: the choice is this page session's alone.
++      this.notify([key]);
 +      return;
++    }
++    this.sessionShown.delete(key);
++    const previous = this.entries[key];
++    if (previous && isStreamVideoEntry(previous) && !previous.visible) return;
 +    this.entries = limitStoreMap({
 +      ...this.entries,
-+      [key]: { visible, ts: this.clock() },
++      [key]: { visible: false, ts: this.clock() },
 +    });
 +    this.persistLocal();
 +    this.scheduleWrite();
@@ -334,7 +366,7 @@ index 7424b0f..7c9663a 100644
    /**
     * Remembers the volume of `key`. Values outside 0..1 are clamped and junk is
     * ignored. `muted` is implied by a volume of 0; the level is kept so that
-@@ -263,7 +387,9 @@ export class PersistentVolumeStore {
+@@ -263,7 +417,9 @@ export class PersistentVolumeStore {
  
      const previous = this.entries[key];
      const previousVolume =
@@ -345,7 +377,7 @@ index 7424b0f..7c9663a 100644
      const entry: VoiceVolumeEntry =
        muted || clamped === 0
          ? {
-@@ -277,13 +403,14 @@ export class PersistentVolumeStore {
+@@ -277,13 +433,14 @@ export class PersistentVolumeStore {
      // between two devices that keep re-applying each other's value.
      if (
        previous &&
@@ -361,7 +393,15 @@ index 7424b0f..7c9663a 100644
      this.persistLocal();
      this.scheduleWrite();
    }
-@@ -337,7 +464,7 @@ export class PersistentVolumeStore {
+@@ -327,6 +484,7 @@ export class PersistentVolumeStore {
+     this.started = false;
+     this.accountId = null;
+     this.entries = {};
++    this.sessionShown.clear();
+   }
+ 
+   /**
+@@ -337,7 +495,7 @@ export class PersistentVolumeStore {
    private start(): boolean {
      if (!this.started) {
        this.started = true;
@@ -370,7 +410,15 @@ index 7424b0f..7c9663a 100644
        this.installFlushHooks();
      }
      return this.ensureClient() !== null;
-@@ -453,7 +580,7 @@ export class PersistentVolumeStore {
+@@ -362,6 +520,7 @@ export class PersistentVolumeStore {
+         account !== this.accountId
+       ) {
+         this.entries = {};
++        this.sessionShown.clear();
+         this.persistLocal();
+       }
+       this.accountId = account;
+@@ -453,7 +612,7 @@ export class PersistentVolumeStore {
    private handleAccountData(event: VoiceVolumeEvent): void {
      try {
        if (event.getType() !== ACCOUNT_DATA_TYPE) return;
@@ -379,7 +427,7 @@ index 7424b0f..7c9663a 100644
      } catch (error) {
        // Account data is written by other devices as well; anything unexpected
        // in it must not take the call down.
-@@ -461,18 +588,12 @@ export class PersistentVolumeStore {
+@@ -461,23 +620,29 @@ export class PersistentVolumeStore {
      }
    }
  
@@ -402,7 +450,25 @@ index 7424b0f..7c9663a 100644
      this.entries = merged;
      if (changed.length === 0) return;
      this.persistLocal();
-@@ -504,7 +625,7 @@ export class PersistentVolumeStore {
+-    // Deliberately no write back to account data: this value came from there.
++    // An explicit hide from another device is a choice, not a default: it ends
++    // a "watch" this page had applied, so the running call follows the account.
+     for (const key of changed) {
++      const entry = merged[key];
++      if (isStreamVideoEntry(entry) && !entry.visible)
++        this.sessionShown.delete(key);
++    }
++    // Deliberately no write back to account data: this value came from there.
++    this.notify(changed);
++  }
++
++  /** Tells the listeners of each key that its value changed. */
++  private notify(keys: readonly string[]): void {
++    for (const key of keys) {
+       const listeners = this.listeners.get(key);
+       if (!listeners) continue;
+       for (const listener of listeners) {
+@@ -504,7 +669,7 @@ export class PersistentVolumeStore {
      try {
        await client.setAccountData(
          ACCOUNT_DATA_TYPE,
@@ -413,10 +479,10 @@ index 7424b0f..7c9663a 100644
        // The server may refuse the write (size, rate limit) or the client may
 diff --git a/src/state/media/RemoteScreenShareViewModel.test.ts b/src/state/media/RemoteScreenShareViewModel.test.ts
 new file mode 100644
-index 0000000..c74d188
+index 0000000..35addd8
 --- /dev/null
 +++ b/src/state/media/RemoteScreenShareViewModel.test.ts
-@@ -0,0 +1,333 @@
+@@ -0,0 +1,403 @@
 +/*
 +Copyright 2026 Element Creations Ltd.
 +
@@ -543,7 +609,20 @@ index 0000000..c74d188
 +});
 +
 +describe("screen share video visibility", () => {
-+  test("a stream is shown, and received, by default", () => {
++  test("a stream is hidden, and not received, by default", () => {
++    // Somebody else's share arrives hidden: the viewer turns it on with the
++    // tile's button (t_6d5f61b4). Nothing is stored for "hidden", so a fresh
++    // account, a fresh share and a fresh call all start the same way.
++    const { publication, setSubscribed } = fakePublication();
++    const vm = screenShare(publication);
++    expect(vm.videoVisible$.value).toBe(false);
++    expect(setSubscribed).toHaveBeenCalledWith(false);
++  });
++
++  test("a stored choice to show a stream still shows it", () => {
++    // What an older build wrote when the default was "show": honoured, so the
++    // upgrade does not hide a stream this viewer asked to watch.
++    useAccount({ [streamVideoKey(ALICE)]: { visible: true, ts: 1_700_000 } });
 +    const { publication, setSubscribed } = fakePublication();
 +    const vm = screenShare(publication);
 +    expect(vm.videoVisible$.value).toBe(true);
@@ -553,18 +632,20 @@ index 0000000..c74d188
 +  test("hiding a stream unsubscribes its video track", () => {
 +    const { publication, setSubscribed } = fakePublication();
 +    const vm = screenShare(publication);
++    // The viewer asked for this stream, then hides it again: the video must be
++    // taken out of the subscription, not merely left for the renderer to skip.
++    vm.setVideoVisible(true);
 +    vm.setVideoVisible(false);
 +    expect(vm.videoVisible$.value).toBe(false);
 +    expect(setSubscribed).toHaveBeenLastCalledWith(false);
-+    // Disconnecting a viewer from the video is the point: it is not merely
-+    // left for the renderer to skip.
-+    expect(setSubscribed).toHaveBeenCalledTimes(2);
++    expect(setSubscribed.mock.calls.map(([subscribed]) => subscribed)).toEqual(
++      [false, true, false],
++    );
 +  });
 +
-+  test("showing it again resubscribes", () => {
++  test("showing it resubscribes", () => {
 +    const { publication, setSubscribed } = fakePublication();
 +    const vm = screenShare(publication);
-+    vm.setVideoVisible(false);
 +    vm.setVideoVisible(true);
 +    expect(vm.videoVisible$.value).toBe(true);
 +    expect(setSubscribed).toHaveBeenLastCalledWith(true);
@@ -573,6 +654,7 @@ index 0000000..c74d188
 +  test("the publisher's state is kept apart from the viewer's choice", () => {
 +    const { publication } = fakePublication();
 +    const vm = screenShare(publication);
++    vm.setVideoVisible(true);
 +    vm.setVideoVisible(false);
 +    // Hiding a stream must not look like the publisher stopped sharing.
 +    expect(vm.videoEnabled$.value).toBe(true);
@@ -591,6 +673,7 @@ index 0000000..c74d188
 +    const setVolume = participant.setVolume as ReturnType<typeof vi.fn>;
 +    const callsBefore = setVolume.mock.calls.length;
 +
++    vm.setVideoVisible(true);
 +    vm.setVideoVisible(false);
 +
 +    expect(setVolume).toHaveBeenCalledTimes(callsBefore);
@@ -604,10 +687,11 @@ index 0000000..c74d188
 +    const vm = screenShare(first.publication, ALICE);
 +    screenShare(second.publication, BOB);
 +
-+    vm.setVideoVisible(false);
++    vm.setVideoVisible(true);
 +
-+    expect(first.setSubscribed).toHaveBeenLastCalledWith(false);
-+    expect(second.setSubscribed).not.toHaveBeenCalledWith(false);
++    // Watching one person's stream does not start anybody else's.
++    expect(first.setSubscribed).toHaveBeenLastCalledWith(true);
++    expect(second.setSubscribed).not.toHaveBeenCalledWith(true);
 +  });
 +
 +  test("a reconnect applies the remembered choice to the new publication", () => {
@@ -623,12 +707,27 @@ index 0000000..c74d188
 +    expect(second.setSubscribed).toHaveBeenCalledWith(false);
 +  });
 +
-+  test("the choice survives a restart", () => {
++  test("a reconnect keeps a stream the viewer is watching", () => {
++    // The viewer pressed "watch" in this page session; a transient reconnect
++    // must not silently hide the stream again.
 +    const first = fakePublication();
-+    screenShare(first.publication).setVideoVisible(false);
-+    expect(window.localStorage.getItem(LOCAL_STORAGE_KEY)).toContain(
-+      streamVideoKey(ALICE),
-+    );
++    screenShare(first.publication).setVideoVisible(true);
++
++    const second = fakePublication();
++    const reconnected = screenShare(second.publication);
++
++    expect(reconnected.videoVisible$.value).toBe(true);
++    expect(second.setSubscribed).toHaveBeenCalledWith(true);
++  });
++
++  test("a hidden stream survives a restart", () => {
++    const first = fakePublication();
++    const vm = screenShare(first.publication);
++    vm.setVideoVisible(true);
++    vm.setVideoVisible(false);
++    expect(JSON.parse(window.localStorage.getItem(LOCAL_STORAGE_KEY)!)).toEqual({
++      [streamVideoKey(ALICE)]: { visible: false, ts: expect.any(Number) },
++    });
 +
 +    // Reopening the app: same account, same cache, brand new store and VM.
 +    persistentVolumeStore().dispose();
@@ -637,6 +736,21 @@ index 0000000..c74d188
 +
 +    expect(reopened.videoVisible$.value).toBe(false);
 +    expect(second.setSubscribed).toHaveBeenCalledWith(false);
++    expect(
++      persistentVolumeStore().getStreamVisible(streamVideoKey(ALICE)),
++    ).toBe(false);
++  });
++
++  test("a stream the viewer was watching is hidden again after a restart", () => {
++    // Showing is a choice for this page session, not a new default: hiding is
++    // the only thing worth writing to the account (see the store's docstring).
++    screenShare(fakePublication().publication).setVideoVisible(true);
++    expect(window.localStorage.getItem(LOCAL_STORAGE_KEY)).toBeNull();
++
++    persistentVolumeStore().dispose();
++    const reopened = screenShare(fakePublication().publication);
++
++    expect(reopened.videoVisible$.value).toBe(false);
 +  });
 +
 +  test("showing it again after the track ended does not throw", () => {
@@ -656,8 +770,12 @@ index 0000000..c74d188
 +      }
 +    ).emit("trackPublished", ended.publication, participant);
 +
++    // Hidden by default, then asked for and hidden again.
++    expect(ended.setSubscribed).toHaveBeenLastCalledWith(false);
++    vm.setVideoVisible(true);
++    expect(ended.setSubscribed).toHaveBeenLastCalledWith(true);
 +    vm.setVideoVisible(false);
-+    expect(ended.setSubscribed).toHaveBeenCalledWith(false);
++    expect(ended.setSubscribed).toHaveBeenLastCalledWith(false);
 +
 +    current = undefined;
 +    (
@@ -691,6 +809,7 @@ index 0000000..c74d188
 +    });
 +    const vm = mockRemoteScreenShare(rtcMembership, {}, participant);
 +
++    vm.setVideoVisible(true);
 +    vm.setVideoVisible(false);
 +    const { publication, setSubscribed } = fakePublication();
 +    current = publication;
@@ -707,8 +826,10 @@ index 0000000..c74d188
 +  test("a choice made on another device reaches the running call", () => {
 +    const { publication, setSubscribed } = fakePublication();
 +    const vm = screenShare(publication);
++    vm.setVideoVisible(true);
 +
-+    // This is what sync delivers when the account data is written elsewhere.
++    // This is what sync delivers when the account data is written elsewhere:
++    // an explicit hide wins over a stream this page had been watching.
 +    account.emit({
 +      [streamVideoKey(ALICE)]: { visible: false, ts: Date.now() },
 +    });
@@ -732,9 +853,11 @@ index 0000000..c74d188
 +    expect(store.get(ALICE)).toBeNull();
 +  });
 +
-+  test("the choice is written to account data once it settles", async () => {
++  test("hiding a stream is written to account data once it settles", async () => {
 +    vi.useFakeTimers();
-+    screenShare().setVideoVisible(false);
++    const vm = screenShare();
++    vm.setVideoVisible(true);
++    vm.setVideoVisible(false);
 +    await vi.advanceTimersByTimeAsync(500);
 +    vi.useRealTimers();
 +
@@ -743,15 +866,28 @@ index 0000000..c74d188
 +    });
 +  });
 +
++  test("showing a stream is not written to account data", async () => {
++    vi.useFakeTimers();
++    screenShare().setVideoVisible(true);
++    await vi.advanceTimersByTimeAsync(500);
++    vi.useRealTimers();
++
++    // "Watch" is for what this viewer is watching now; only hiding is a
++    // standing choice, which is why the account never sees a `true`.
++    expect(account.setAccountData).not.toHaveBeenCalled();
++    expect(window.localStorage.getItem(LOCAL_STORAGE_KEY)).toBeNull();
++  });
++
 +  test("junk keys and entries are ignored", () => {
 +    const store = persistentVolumeStore();
-+    store.setStreamVisible("alice", false);
++    store.setStreamVisible("alice", true);
++    store.setStreamVisible(`@alice:example.org#nonsense`, true);
 +    store.setStreamVisible(`@alice:example.org#nonsense`, false);
 +    expect(window.localStorage.getItem(LOCAL_STORAGE_KEY)).toBeNull();
 +  });
 +});
 diff --git a/src/state/media/RemoteScreenShareViewModel.ts b/src/state/media/RemoteScreenShareViewModel.ts
-index bf5fb24..492c049 100644
+index bf5fb24..170bd6d 100644
 --- a/src/state/media/RemoteScreenShareViewModel.ts
 +++ b/src/state/media/RemoteScreenShareViewModel.ts
 @@ -6,8 +6,12 @@ SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
@@ -780,7 +916,7 @@ index bf5fb24..492c049 100644
  } from "../PersistentVolume";
  import { observeTrackReference$ } from "../observeTrackReference";
  
-@@ -28,8 +34,21 @@ export interface RemoteScreenShareViewModel
+@@ -28,8 +34,25 @@ export interface RemoteScreenShareViewModel
    local: false;
    /**
     * Whether this screen share's video should be displayed.
@@ -792,36 +928,39 @@ index bf5fb24..492c049 100644
 +  /**
 +   * Whether this viewer wants the stream rendered and received.
 +   *
-+   * Plotina addition: local to the viewer, remembered by MXID and source, and
-+   * independent of `videoEnabled$` and of the share's audio.
++   * Plotina addition: local to the viewer, keyed by MXID and source, and
++   * independent of `videoEnabled$` and of the share's audio. It starts hidden
++   * for a stream nobody has asked to watch.
 +   */
 +  videoVisible$: Behavior<boolean>;
-+  /** Shows or hides this stream for this viewer only. */
++  /**
++   * Shows or hides this stream for this viewer only. Hiding is remembered;
++   * showing lasts for this page session (see `PersistentVolume`).
++   */
 +  setVideoVisible: (visible: boolean) => void;
 +  toggleVideoVisible: () => void;
    /**
     * Whether this screen share should be considered to have an audio track.
     */
-@@ -64,6 +83,47 @@ export function createRemoteScreenShare(
+@@ -64,6 +87,46 @@ export function createRemoteScreenShare(
      volumeControls,
    );
  
 +  // Plotina: whether this viewer wants the stream at all. Kept apart from
 +  // videoEnabled$ (which is the publisher's state) so hiding a stream never
-+  // looks like the publisher stopped sharing.
++  // looks like the publisher stopped sharing. A stream somebody else shares
++  // arrives hidden and this viewer turns it on with the tile's button.
 +  const store = persistentVolumeStore();
 +  const videoKey = streamVideoKey(inputs.userId);
 +  const videoVisibleSubject$ = new BehaviorSubject<boolean>(
-+    // Show by default: hiding is an explicit choice, so it needs an entry.
-+    store.getStreamVisible(videoKey) ?? true,
++    store.getStreamVisible(videoKey),
 +  );
 +  const videoVisible$ = scope.behavior<boolean>(videoVisibleSubject$);
 +  // A choice made on another device applies to a call that is already running.
 +  scope.onEnd(
 +    store.onChange(videoKey, () => {
 +      const saved = store.getStreamVisible(videoKey);
-+      if (saved !== null && saved !== videoVisibleSubject$.value)
-+        videoVisibleSubject$.next(saved);
++      if (saved !== videoVisibleSubject$.value) videoVisibleSubject$.next(saved);
 +    }),
 +  );
 +
@@ -850,7 +989,7 @@ index bf5fb24..492c049 100644
    return {
      ...createBaseScreenShare(scope, inputs),
      ...volumeControls,
-@@ -71,6 +131,9 @@ export function createRemoteScreenShare(
+@@ -71,6 +134,9 @@ export function createRemoteScreenShare(
      videoEnabled$: scope.behavior(
        pretendToBeDisconnected$.pipe(map((disconnected) => !disconnected)),
      ),
@@ -860,11 +999,134 @@ index bf5fb24..492c049 100644
      audioEnabled$: scope.behavior(
        inputs.participant$.pipe(
          switchMap((p) =>
+diff --git a/src/tile/MediaView.module.css b/src/tile/MediaView.module.css
+index 35cd63b..4ba7d7b 100644
+--- a/src/tile/MediaView.module.css
++++ b/src/tile/MediaView.module.css
+@@ -116,6 +116,22 @@ Please see LICENSE in the repository root for full details.
+   transition: opacity 0.2s;
+ }
+ 
++/* Plotina: a state that owns the whole tile (a stream this viewer paused).
++   It sits over the avatar and the video, which stay visible underneath, and
++   under the foreground chrome so the tile's own controls stay reachable. */
++.overlay {
++  grid-area: content;
++  /* Both .bg and .fg are paint containers (contain: strict) and therefore paint
++     in the positioned layer. A static overlay would be painted *under* them and
++     would be invisible even though every box and every style is right. */
++  position: relative;
++  display: grid;
++  place-items: center;
++  border-radius: inherit;
++  /* Dark backing in both themes: the label sits on top of someone's avatar. */
++  background: rgb(0 0 0 / 55%);
++}
++
+ .avatar[data-style="translucent"] {
+   opacity: 50%;
+ }
+diff --git a/src/tile/MediaView.tsx b/src/tile/MediaView.tsx
+index d574416..4061792 100644
+--- a/src/tile/MediaView.tsx
++++ b/src/tile/MediaView.tsx
+@@ -51,6 +51,12 @@ interface Props extends ComponentProps<typeof animated.div> {
+   videoEnabled: boolean;
+   unencryptedWarning: boolean;
+   status?: ReactNode;
++  /**
++   * Painted over the whole tile, between its background (avatar, video) and
++   * its foreground chrome (name tag, corner buttons). Used for states that
++   * own the tile rather than annotate it, such as a stream the viewer paused.
++   */
++  overlay?: ReactNode;
+   showNameTags: boolean;
+   nameTagLeadingIcon?: ReactNode;
+   displayName: string;
+@@ -99,6 +105,7 @@ export const MediaView: FC<Props> = ({
+   focusable,
+   primaryButton,
+   status,
++  overlay,
+   raisedHandTime,
+   currentReaction,
+   raisedHandOnClick,
+@@ -200,6 +207,7 @@ export const MediaView: FC<Props> = ({
+           />
+         )}
+       </div>
++      {overlay && <div className={styles.overlay}>{overlay}</div>}
+       <div className={styles.fg}>
+         <div className={styles.reactions}>
+           <RaisedHandIndicator
+diff --git a/src/tile/SpotlightTile.module.css b/src/tile/SpotlightTile.module.css
+index 22f62a9..cac9be7 100644
+--- a/src/tile/SpotlightTile.module.css
++++ b/src/tile/SpotlightTile.module.css
+@@ -209,3 +209,44 @@ Please see LICENSE in the repository root for full details.
+ .indicators > .item[data-visible="true"] {
+   background: var(--cpd-color-gray-1400);
+ }
++
++/* Plotina: the whole-tile state of a stream this viewer paused. It covers the
++   avatar and the video with a dark backing so the label reads on any avatar,
++   wallpaper or theme. */
++.streamPaused {
++  display: flex;
++  flex-direction: column;
++  align-items: center;
++  justify-content: center;
++  gap: var(--cpd-space-4x);
++  padding: var(--cpd-space-4x);
++  border-radius: inherit;
++  text-align: center;
++  /* The backing under this block is always dark, in both themes. */
++  color: #fff;
++}
++
++.watchButton {
++  appearance: none;
++  cursor: pointer;
++  display: inline-flex;
++  align-items: center;
++  gap: var(--cpd-space-2x);
++  padding: var(--cpd-space-2x) var(--cpd-space-4x);
++  border: none;
++  border-radius: var(--cpd-radius-pill-effect);
++  background: #fff;
++  color: #000;
++  font: var(--cpd-font-body-md-semibold);
++  box-shadow: var(--small-drop-shadow);
++}
++
++.watchButton > svg {
++  display: block;
++}
++
++/* The paused state has to be readable without hovering, so its button is not
++   hidden by the tile's hover-only button rule above. */
++.tile .streamPaused button {
++  opacity: 1;
++}
 diff --git a/src/tile/SpotlightTile.test.tsx b/src/tile/SpotlightTile.test.tsx
-index 854d853..b793a4a 100644
+index 854d853..0238c3e 100644
 --- a/src/tile/SpotlightTile.test.tsx
 +++ b/src/tile/SpotlightTile.test.tsx
-@@ -11,6 +11,7 @@ import { axe } from "vitest-axe";
+@@ -5,25 +5,42 @@ SPDX-License-Identifier: AGPL-3.0-only OR LicenseRef-Element-Commercial
+ Please see LICENSE in the repository root for full details.
+ */
+ 
+-import { test, expect, vi } from "vitest";
+-import { act, isInaccessible, render, screen } from "@testing-library/react";
++import { test, expect, vi, beforeEach } from "vitest";
++import {
++  act,
++  cleanup,
++  isInaccessible,
++  render,
++  screen,
++} from "@testing-library/react";
+ import { axe } from "vitest-axe";
  import userEvent from "@testing-library/user-event";
  import { TooltipProvider } from "@vector-im/compound-web";
  import { BehaviorSubject } from "rxjs";
@@ -872,11 +1134,93 @@ index 854d853..b793a4a 100644
  
  import { SpotlightTile } from "./SpotlightTile";
  import {
-@@ -171,6 +172,62 @@ test("Screen share volume UI is hidden when screen share has no audio", async ()
+   mockLocalParticipant,
++  mockLivekitRoom,
+   mockMediaDevices,
+   mockRtcMembership,
+   mockLocalMedia,
+   mockRemoteMedia,
+   mockRemoteParticipant,
+   mockRemoteScreenShare,
++  testScope,
+ } from "../utils/test";
+ import { SpotlightTileViewModel } from "../state/TileViewModel";
+ import { constant } from "../state/Behavior";
++import { createLocalScreenShare } from "../state/media/LocalScreenShareViewModel";
++import {
++  LOCAL_STORAGE_KEY,
++  persistentVolumeStore,
++  streamVideoKey,
++} from "../state/PersistentVolume";
++import { E2eeType } from "../e2ee/e2eeType";
++import { type RemoteScreenShareViewModel } from "../state/media/RemoteScreenShareViewModel";
+ import {
+   createRingingMedia,
+   type RingingMediaViewModel,
+@@ -35,6 +52,58 @@ global.IntersectionObserver = class MockIntersectionObserver {
+   public disconnect(): void {}
+ } as unknown as typeof IntersectionObserver;
+ 
++beforeEach(() => {
++  window.localStorage.clear();
++  persistentVolumeStore().dispose();
++});
++
++const ALICE = "@alice:example.org";
++
++/** Remembers a visibility choice for `mxid`, as a previous call or device would. */
++function seedStoredChoice(mxid: string, visible: boolean): void {
++  // The store only reads while an account is signed in; this is the smallest
++  // client it accepts.
++  (window as unknown as { matrixclient: unknown }).matrixclient = {
++    getUserId: (): string => "@viewer:example.org",
++    getAccountData: (): undefined => undefined,
++    setAccountData: vi.fn().mockResolvedValue({}),
++    on: (): void => {},
++    off: (): void => {},
++  };
++  // Written straight into the cache: a stored `true` is what an older build
++  // left behind when showing was the default, and the current API cannot write
++  // one at all (showing is a page-session choice now).
++  persistentVolumeStore().dispose();
++  window.localStorage.clear();
++  window.localStorage.setItem(
++    LOCAL_STORAGE_KEY,
++    JSON.stringify({ [streamVideoKey(mxid)]: { visible, ts: Date.now() } }),
++  );
++}
++
++/** Renders one screen share in the spotlight, the way a call would. */
++function renderTile(vm: RemoteScreenShareViewModel): HTMLElement {
++  return render(
++    <SpotlightTile
++      vm={
++        new SpotlightTileViewModel(
++          constant([vm]),
++          constant(false),
++          constant("solid"),
++        )
++      }
++      targetWidth={300}
++      targetHeight={200}
++      expanded={false}
++      onToggleExpanded={vi.fn()}
++      showIndicators
++      showNameTags
++      showRingingStatus
++      focusable
++    />,
++  ).container as HTMLElement;
++}
++
+ test("SpotlightTile is accessible", async () => {
+   const vm1 = mockRemoteMedia(
+     mockRtcMembership("@alice:example.org", "AAAA"),
+@@ -171,6 +240,288 @@ test("Screen share volume UI is hidden when screen share has no audio", async ()
    ).not.toBeInTheDocument();
  });
  
-+test("Screen share can be hidden and shown again from its menu", async () => {
++test("A stream somebody else shares arrives hidden, and the eye brings it up", async () => {
 +  const setSubscribed = vi.fn();
 +  const vm = mockRemoteScreenShare(
 +    mockRtcMembership("@alice:example.org", "AAAA"),
@@ -910,33 +1254,259 @@ index 854d853..b793a4a 100644
 +
 +  expect(await axe(container)).toHaveNoViolations();
 +
-+  // The toggle lives next to the volume button, so it is available for a
-+  // stream with no audio too.
-+  await user.click(
-+    screen.getByRole("button", { name: "Screen share visibility" }),
-+  );
-+  const hideItem = screen.getByRole("menuitemcheckbox", {
-+    name: "Don't show this stream",
-+  });
-+  expect(hideItem).toHaveAttribute("aria-checked", "false");
-+  await user.click(hideItem);
-+
++  // Nobody has asked to watch this stream, so it comes up hidden, its video is
++  // not subscribed, and the tile reads as a paused stream.
 +  expect(vm.videoVisible$.value).toBe(false);
-+  expect(setSubscribed).toHaveBeenLastCalledWith(false);
-+  // The tile stays in place so the stream can be shown again from here.
-+  screen.getByText("Stream hidden");
++  expect(setSubscribed).toHaveBeenCalledWith(false);
++  const paused = screen.getByTestId("stream-paused");
++  expect(paused).toHaveTextContent("Stream paused");
 +
-+  await user.click(hideItem);
++  // The way in is the corner eye: one click, no menu. It is there for a stream
++  // with no audio too (the volume button is not).
++  const eye = screen.getByRole("button", { name: "Show screen share" });
++  expect(eye).toHaveAttribute("aria-pressed", "true");
++  await user.click(eye);
++  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 +  expect(vm.videoVisible$.value).toBe(true);
 +  expect(setSubscribed).toHaveBeenLastCalledWith(true);
-+  expect(screen.queryByText("Stream hidden")).not.toBeInTheDocument();
++  expect(screen.queryByTestId("stream-paused")).not.toBeInTheDocument();
++
++  // The same button now says what it shows, and hides the stream again: the
++  // tile goes back to the paused view rather than losing the way back.
++  const shown = screen.getByRole("button", {
++    name: "Screen share visibility",
++  });
++  expect(shown).toHaveAttribute("aria-pressed", "false");
++  await user.click(shown);
++  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
++  expect(vm.videoVisible$.value).toBe(false);
++  expect(setSubscribed).toHaveBeenLastCalledWith(false);
++  screen.getByText("Stream paused");
++});
++
++test("The eye button toggles the stream on the first click, without a menu", async () => {
++  // A stream this account asked to watch: the previous build stored the choice,
++  // and a stored `true` still means "show".
++  seedStoredChoice(ALICE, true);
++
++  const setSubscribed = vi.fn();
++  const vm = mockRemoteScreenShare(
++    mockRtcMembership(ALICE, "AAAA"),
++    {},
++    mockRemoteParticipant({
++      getTrackPublication: () =>
++        ({ setSubscribed }) as unknown as RemoteTrackPublication,
++    }),
++  );
++
++  const user = userEvent.setup();
++  renderTile(vm);
++
++  // A visible stream: the button says what it shows, and it is not pressed.
++  const eye = screen.getByRole("button", { name: "Screen share visibility" });
++  expect(eye).toHaveAttribute("aria-pressed", "false");
++
++  // One click is the whole interaction: no menu in between, and the stream is
++  // gone by the time the click returns.
++  await user.click(eye);
++  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
++  expect(vm.videoVisible$.value).toBe(false);
++  expect(setSubscribed).toHaveBeenLastCalledWith(false);
++  // The tile stays in place, reading as a paused stream, so it can be shown
++  // again from here.
++  screen.getByText("Stream paused");
++
++  // The same button now reads as the way back, and it is pressed.
++  const show = screen.getByRole("button", { name: "Show screen share" });
++  expect(show).toHaveAttribute("aria-pressed", "true");
++  await user.click(show);
++  expect(screen.queryByRole("menu")).not.toBeInTheDocument();
++  expect(vm.videoVisible$.value).toBe(true);
++  expect(setSubscribed).toHaveBeenLastCalledWith(true);
++  expect(screen.queryByText("Stream paused")).not.toBeInTheDocument();
++});
++
++test("The eye shows a stream the store has hidden as already hidden", () => {
++  // A choice made earlier (another call, another device, a previous page load)
++  // is the initial state of the button: it is read from the store, not from
++  // anything this component remembers about clicks.
++  seedStoredChoice(ALICE, false);
++
++  const setSubscribed = vi.fn();
++  const vm = mockRemoteScreenShare(
++    mockRtcMembership(ALICE, "AAAA"),
++    {},
++    mockRemoteParticipant({
++      getTrackPublication: () =>
++        ({ setSubscribed }) as unknown as RemoteTrackPublication,
++    }),
++  );
++
++  renderTile(vm);
++
++  const show = screen.getByRole("button", { name: "Show screen share" });
++  expect(show).toHaveAttribute("aria-pressed", "true");
++  expect(setSubscribed).toHaveBeenLastCalledWith(false);
++  screen.getByText("Stream paused");
++
++  // Re-rendering the tile does not lose the state: it comes back from the VM.
++  cleanup();
++  renderTile(vm);
++  expect(
++    screen.getByRole("button", { name: "Show screen share" }),
++  ).toHaveAttribute("aria-pressed", "true");
++});
++
++test("A hidden stream reads as a paused stream, not as a participant", async () => {
++  const vm = mockRemoteScreenShare(
++    mockRtcMembership("@alice:example.org", "AAAA"),
++    { rawDisplayName: "Alice", getMxcAvatarUrl: () => "mxc://alice" },
++    mockRemoteParticipant({}),
++  );
++  // Start from the viewer's own choice: this stream is hidden.
++  vm.setVideoVisible(false);
++
++  const user = userEvent.setup();
++  const { container } = render(
++    <SpotlightTile
++      vm={
++        new SpotlightTileViewModel(
++          constant([vm]),
++          constant(false),
++          constant("solid"),
++        )
++      }
++      targetWidth={300}
++      targetHeight={200}
++      expanded={false}
++      onToggleExpanded={vi.fn()}
++      showIndicators
++      showNameTags
++      showRingingStatus
++      focusable
++    />,
++  );
++
++  expect(await axe(container)).toHaveNoViolations();
++
++  // The paused state is a block of its own in the middle of the tile...
++  const paused = screen.getByTestId("stream-paused");
++  expect(paused).toHaveTextContent("Stream paused");
++  // ...over the participant's own avatar, which is still there.
++  expect(
++    screen.getByRole("img", { name: "@alice:example.org" }),
++  ).toBeInTheDocument();
++  // ...and it is readable without hovering or opening a menu.
++  expect(paused).toBeVisible();
++
++  const watch = screen.getByRole("button", { name: "Watch" });
++  // Reachable from the keyboard, and it is not the eye button in the corner.
++  watch.focus();
++  expect(watch).toHaveFocus();
++  await user.keyboard("{Enter}");
++
++  expect(vm.videoVisible$.value).toBe(true);
++  expect(screen.queryByTestId("stream-paused")).not.toBeInTheDocument();
++  expect(screen.queryByText("Stream paused")).not.toBeInTheDocument();
++});
++
++test("A visible stream has no paused block", () => {
++  const vm = mockRemoteScreenShare(
++    mockRtcMembership("@alice:example.org", "AAAA"),
++    { rawDisplayName: "Alice" },
++    mockRemoteParticipant({}),
++  );
++  vm.setVideoVisible(true);
++
++  render(
++    <SpotlightTile
++      vm={
++        new SpotlightTileViewModel(
++          constant([vm]),
++          constant(false),
++          constant("solid"),
++        )
++      }
++      targetWidth={300}
++      targetHeight={200}
++      expanded={false}
++      onToggleExpanded={vi.fn()}
++      showIndicators
++      showNameTags
++      showRingingStatus
++      focusable
++    />,
++  );
++
++  expect(screen.queryByTestId("stream-paused")).not.toBeInTheDocument();
++  expect(screen.queryByText("Stream paused")).not.toBeInTheDocument();
++  expect(
++    screen.queryByRole("button", { name: "Watch" }),
++  ).not.toBeInTheDocument();
++});
++
++test("the viewer's own screen share is never hidden", async () => {
++  // The person sharing sees their own tile; a stored choice about their MXID
++  // (an older build could write one, and hides from other devices travel)
++  // must not hide it: only a remote share is subject to the visibility model.
++  const self = "@me:example.org";
++  // A client, so the entry is really stored rather than ignored for want of an
++  // account (the store does nothing at all without one).
++  (window as unknown as { matrixclient: unknown }).matrixclient = {
++    getUserId: (): string => self,
++    getAccountData: (): undefined => undefined,
++    setAccountData: vi.fn().mockResolvedValue({}),
++    on: (): void => {},
++  };
++  const store = persistentVolumeStore();
++  store.setStreamVisible(streamVideoKey(self), false);
++  expect(store.getStreamVisible(streamVideoKey(self))).toBe(false);
++
++  const localParticipant = mockLocalParticipant({});
++  const share = createLocalScreenShare(testScope(), {
++    id: "local-screenshare",
++    userId: self,
++    participant$: constant(localParticipant),
++    encryptionSystem: { kind: E2eeType.PER_PARTICIPANT },
++    livekitRoom$: constant(mockLivekitRoom({ localParticipant })),
++    focusUrl$: constant("https://rtc-example.org"),
++    displayName$: constant("Me"),
++    mxcAvatarUrl$: constant(undefined),
++  });
++
++  const { container } = render(
++    <SpotlightTile
++      vm={
++        new SpotlightTileViewModel(
++          constant([share]),
++          constant(false),
++          constant("solid"),
++        )
++      }
++      targetWidth={300}
++      targetHeight={200}
++      expanded={false}
++      onToggleExpanded={vi.fn()}
++      showIndicators
++      showNameTags
++      showRingingStatus
++      focusable
++    />,
++  );
++
++  expect(await axe(container)).toHaveNoViolations();
++  expect(screen.queryByText("Stream paused")).not.toBeInTheDocument();
++  expect(
++    screen.queryByRole("button", { name: "Screen share visibility" }),
++  ).not.toBeInTheDocument();
++  screen.getByText("Me");
 +});
 +
  test("SpotlightTile displays ringing media", async () => {
    const pickupState$ = new BehaviorSubject<
      RingingMediaViewModel["pickupState$"]["value"]
 diff --git a/src/tile/SpotlightTile.tsx b/src/tile/SpotlightTile.tsx
-index 97e1f4a..3548f20 100644
+index 97e1f4a..33a77d9 100644
 --- a/src/tile/SpotlightTile.tsx
 +++ b/src/tile/SpotlightTile.tsx
 @@ -8,6 +8,7 @@ Please see LICENSE in the repository root for full details.
@@ -956,29 +1526,60 @@ index 97e1f4a..3548f20 100644
    VolumeOffIcon,
    VolumeOnIcon,
    VolumeOffSolidIcon,
-@@ -31,7 +34,7 @@ import { useObservableRef } from "observable-hooks";
- import { useTranslation } from "react-i18next";
- import classNames from "classnames";
- import { type TrackReferenceOrPlaceholder } from "@livekit/components-core";
--import { Menu, MenuItem, Text } from "@vector-im/compound-web";
-+import { Menu, MenuItem, Text, ToggleMenuItem } from "@vector-im/compound-web";
- 
- import FullScreenMaximiseIcon from "../icons/FullScreenMaximise.svg?react";
- import FullScreenMinimiseIcon from "../icons/FullScreenMinimise.svg?react";
-@@ -146,6 +149,8 @@ SpotlightUserMediaItem.displayName = "SpotlightUserMediaItem";
+@@ -146,6 +149,11 @@ SpotlightUserMediaItem.displayName = "SpotlightUserMediaItem";
  interface SpotlightScreenShareItemProps extends SpotlightMemberMediaItemBaseProps {
    vm: ScreenShareViewModel;
    videoEnabled: boolean;
-+  /** Shown over the tile, e.g. when the viewer has hidden this stream. */
-+  status?: ReactNode;
++  /**
++   * Painted over the whole tile, above the video and its chrome: the state
++   * that owns the tile instead of annotating it (a stream the viewer paused).
++   */
++  overlay?: ReactNode;
  }
  
  const SpotlightScreenShareItem: FC<SpotlightScreenShareItemProps> = ({
-@@ -162,9 +167,19 @@ interface SpotlightRemoteScreenShareItemProps extends SpotlightMemberMediaItemBa
- const SpotlightRemoteScreenShareItem: FC<
+@@ -155,6 +163,38 @@ const SpotlightScreenShareItem: FC<SpotlightScreenShareItemProps> = ({
+   return <MediaView videoFit="contain" mirror={false} {...props} />;
+ };
+ 
++interface StreamPausedProps {
++  vm: RemoteScreenShareViewModel;
++}
++
++/**
++ * Plotina: what a stream looks like once this viewer has paused it. The tile
++ * keeps the participant's own avatar, dimmed under a dark scrim, and says in
++ * the middle of the tile that the stream is paused, with a button that brings
++ * it back. That is the same action as the corner eye toggle, but it is where
++ * the viewer is already looking and it does not need a hover or a menu.
++ */
++const StreamPaused: FC<StreamPausedProps> = ({ vm }) => {
++  const { t } = useTranslation();
++  const onWatch = useCallback(() => vm.setVideoVisible(true), [vm]);
++  return (
++    <div className={styles.streamPaused} data-testid="stream-paused">
++      <Text as="span" size="lg" weight="medium">
++        {t("video_tile.stream_paused")}
++      </Text>
++      <button
++        type="button"
++        className={styles.watchButton}
++        aria-label={t("video_tile.watch_stream")}
++        onClick={onWatch}
++      >
++        <VisibilityOnIcon aria-hidden width={20} height={20} />
++        {t("video_tile.watch_stream")}
++      </button>
++    </div>
++  );
++};
++
+ interface SpotlightRemoteScreenShareItemProps extends SpotlightMemberMediaItemBaseProps {
+   vm: RemoteScreenShareViewModel;
+ }
+@@ -163,8 +203,17 @@ const SpotlightRemoteScreenShareItem: FC<
    SpotlightRemoteScreenShareItemProps
  > = ({ vm, ...props }) => {
-+  const { t } = useTranslation();
    const videoEnabled = useBehavior(vm.videoEnabled$);
 +  const videoVisible = useBehavior(vm.videoVisible$);
    return (
@@ -990,12 +1591,22 @@ index 97e1f4a..3548f20 100644
 +      // hand it to the player while the viewer has hidden the stream.
 +      video={videoVisible ? props.video : undefined}
 +      videoEnabled={videoEnabled && videoVisible}
-+      status={videoVisible ? undefined : t("video_tile.stream_hidden")}
++      overlay={videoVisible ? undefined : <StreamPaused vm={vm} />}
 +    />
    );
  };
  
-@@ -380,6 +395,60 @@ const ScreenShareVolumeButton: FC<ScreenShareVolumeButtonProps> = ({ vm }) => {
+@@ -190,6 +239,9 @@ const SpotlightMemberMediaItem: FC<SpotlightMemberMediaItemProps> = ({
+ 
+   if (vm.type === "user")
+     return <SpotlightUserMediaItem vm={vm} {...baseProps} />;
++  // Plotina: a local screen share is this viewer's own stream. It is never
++  // subject to the remembered visibility choice — only remote shares are — so
++  // the person who shares always sees what they are sharing.
+   return vm.local ? (
+     <SpotlightScreenShareItem vm={vm} videoEnabled {...baseProps} />
+   ) : (
+@@ -380,6 +432,46 @@ const ScreenShareVolumeButton: FC<ScreenShareVolumeButtonProps> = ({ vm }) => {
    );
  };
  
@@ -1007,56 +1618,42 @@ index 97e1f4a..3548f20 100644
 + * Plotina: lets this viewer stop receiving and showing one participant's
 + * screen share. The publisher, the other streams and all audio are untouched;
 + * the choice is remembered per MXID and source.
++ *
++ * It is a plain toggle, not a menu: the owner asked for one click, and a menu
++ * with a single item made a two-step job out of a one-step one. The icon and
++ * the label carry the state, so the outcome is readable without hovering.
 + */
 +const ScreenShareVisibilityButton: FC<ScreenShareVisibilityButtonProps> = ({
 +  vm,
 +}) => {
 +  const { t } = useTranslation();
 +  const videoVisible = useBehavior(vm.videoVisible$);
-+  const latestVideoVisible = useLatest(videoVisible);
-+  const [visibilityMenuOpen, setVisibilityMenuOpen] = useState(false);
-+  const onSelectVisibility = useCallback(
-+    (e: Event) => {
-+      // Keep the menu open: the item is a toggle, and its checked state is the
-+      // feedback that the choice was applied.
-+      e.preventDefault();
-+      vm.setVideoVisible(!latestVideoVisible.current);
-+    },
-+    [vm, latestVideoVisible],
-+  );
++  const onToggle = useCallback(() => {
++    vm.setVideoVisible(!vm.videoVisible$.value);
++  }, [vm]);
 +
-+  const label = t("video_tile.screen_share_visibility");
++  // A hidden stream gets the "off" eye and the label that offers to bring it
++  // back; a shown one gets the opposite pair.
++  const Icon = videoVisible ? VisibilityOnIcon : VisibilityOffIcon;
++  const label = videoVisible
++    ? t("video_tile.screen_share_visibility")
++    : t("video_tile.show_stream");
 +  return (
-+    <Menu
-+      open={visibilityMenuOpen}
-+      onOpenChange={setVisibilityMenuOpen}
-+      title={label}
-+      side="top"
-+      align="end"
-+      trigger={
-+        <button className={styles.expand} aria-label={label}>
-+          {videoVisible ? (
-+            <VisibilityOnIcon aria-hidden width={20} height={20} />
-+          ) : (
-+            <VisibilityOffIcon aria-hidden width={20} height={20} />
-+          )}
-+        </button>
-+      }
++    <button
++      className={styles.expand}
++      aria-label={label}
++      aria-pressed={!videoVisible}
++      onClick={onToggle}
 +    >
-+      <ToggleMenuItem
-+        Icon={videoVisible ? VisibilityOnIcon : VisibilityOffIcon}
-+        label={t("video_tile.hide_stream")}
-+        checked={!videoVisible}
-+        onSelect={onSelectVisibility}
-+      />
-+    </Menu>
++      <Icon aria-hidden width={20} height={20} />
++    </button>
 +  );
 +};
 +
  interface Props {
    ref?: Ref<HTMLDivElement>;
    vm: SpotlightTileViewModel;
-@@ -536,6 +605,9 @@ export const SpotlightTile: FC<Props> = ({
+@@ -536,6 +628,9 @@ export const SpotlightTile: FC<Props> = ({
        </div>
  
        <div className={styles.bottomRightButtons}>
