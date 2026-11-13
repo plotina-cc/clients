@@ -1,0 +1,101 @@
+<!doctype html>
+<!--
+  Parent harness for the PiP viewport probe, run by
+  tests/test_pip_hides_controls.py under headless chromium.
+
+  Each case is an iframe of an exact CSS size, because a window size cannot be
+  asked for directly below 500px wide (chromium clamps --window-size) and the
+  picture-in-picture window we care about is 320x180 and smaller. An iframe's
+  document gets the iframe's own viewport, so media queries inside it answer
+  for that size — which is exactly what the rule under test keys on.
+
+  Sizes and what they stand for:
+    phone-portrait   390x844  a full-screen call on a phone, upright
+    phone-landscape  844x390  the same call, sideways (screen sharing)
+    desktop-window  1280x800  the call in a browser window
+    pip-window       320x180  an Android PiP window around the call WebView
+    tablet-pip       480x270  the widest PiP window we expect to see
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>running</title>
+</head>
+<body>
+<pre id="out">running</pre>
+<div id="frames"></div>
+<script>
+(function () {
+  "use strict";
+
+  var CASES = [
+    ["phone-portrait", 390, 844],
+    ["phone-landscape", 844, 390],
+    ["desktop-window", 1280, 800],
+    ["pip-window", 320, 180],
+    ["tablet-pip", 480, 270],
+  ];
+
+  var frames = CASES.map(function (c) {
+    var f = document.createElement("iframe");
+    f.width = c[1];
+    f.height = c[2];
+    f.style.border = "0";
+    f.setAttribute("scrolling", "no");
+    f.src = "/room/index.html";
+    document.getElementById("frames").appendChild(f);
+    return { name: c[0], width: c[1], height: c[2], frame: f };
+  });
+
+  function lineOf(entry, report) {
+    if (!report) return "case " + entry.name + " " + entry.width + "x" + entry.height + " no-report";
+    return (
+      "case " +
+      entry.name +
+      " " +
+      entry.width +
+      "x" +
+      entry.height +
+      " viewport=" +
+      report.width +
+      "x" +
+      report.height +
+      " noise=" +
+      report.noiseDisplay +
+      " eye=" +
+      report.eyeDisplay +
+      " noiseHit=" +
+      report.noiseHit +
+      " eyeHit=" +
+      report.eyeHit +
+      " cardOpen=" +
+      report.cardOpen
+    );
+  }
+
+  var ticks = 0;
+  var timer = setInterval(function () {
+    ticks++;
+    var lines = [];
+    var pending = 0;
+    frames.forEach(function (entry) {
+      var report = null;
+      try {
+        report = entry.frame.contentWindow.__pipReport || null;
+      } catch (e) {
+        report = null;
+      }
+      if (!report) pending++;
+      lines.push(lineOf(entry, report));
+    });
+    document.getElementById("out").textContent =
+      "reported=" + (frames.length - pending) + "/" + frames.length + " ticks=" + ticks + "\n" + lines.join("\n") + "\n";
+    if (pending === 0 || ticks >= 40) {
+      clearInterval(timer);
+      document.title = pending === 0 ? "TESTS OK" : "TESTS FAILED";
+    }
+  }, 100);
+})();
+</script>
+</body>
+</html>
