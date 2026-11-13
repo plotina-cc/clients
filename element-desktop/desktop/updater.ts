@@ -284,6 +284,14 @@ export function acceptCandidate(candidate: string, current: string, allowDowngra
     return isVersionNewer(candidate, current);
 }
 
+/** True when both versions share the published Plotina base (same N), dev or not. */
+function isSamePlotinaBase(candidate: string, current: string): boolean {
+    const a = parseVersion(candidate);
+    const b = parseVersion(current);
+    if (!a || !b) return false;
+    return a.major === b.major && a.minor === b.minor && a.patch === b.patch && a.build === b.build;
+}
+
 interface UpdateFeed {
     owner: string;
     repo: string;
@@ -576,7 +584,21 @@ async function checkDevFeed(feed: UpdateFeed, allowDowngrade: boolean, manual: b
     if (!ymlRes.ok) throw new Error(`Dev feed ${devFile} responded HTTP ${ymlRes.status}`);
     const yml = parseLatestYml(await ymlRes.text());
     if (!yml) throw new Error(`Dev feed ${devFile} is not parseable`);
-    if (!acceptCandidate(yml.version, app.getVersion(), allowDowngrade)) {
+    // Same-base channel permission, the dev-channel counterpart of the stable
+    // branch's sameBuildSwitch: semver ranks the stable release ABOVE its own
+    // dev prerelease, so acceptCandidate alone refuses .N-dev.M when the app
+    // stands on the published stable .N — yet that is exactly the step the
+    // dev channel exists for (the channel choice is the user's explicit opt-in,
+    // so no extra channelSwitch flag is required). The permission is scoped to
+    // one base and to the stable -> dev direction only: another base is still
+    // compared normally (.48-dev.1 over .49 stays refused), and a dev build
+    // never walks back inside its own base (.49-dev.2 over .49-dev.3 stays
+    // refused). allowDowngrade is untouched.
+    const sameBuildDev =
+        !isDevVersion(app.getVersion()) &&
+        isDevVersion(yml.version) &&
+        isSamePlotinaBase(yml.version, app.getVersion());
+    if (!acceptCandidate(yml.version, app.getVersion(), allowDowngrade || sameBuildDev)) {
         if (manual) sendUpdateStatus(false);
         return;
     }
