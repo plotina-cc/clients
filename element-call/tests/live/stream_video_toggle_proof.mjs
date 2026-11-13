@@ -5,8 +5,22 @@ Three browser contexts in one Element Call (Synapse + LiveKit + lk-jwt-service
 behind the upstream docker-compose-dev.yml nginx, *.m.localhost):
 
   sharer  - publishes a synthetic screen share (canvas video + 440 Hz audio)
-  viewer  - hides that stream with the new toggle
+  viewer  - gets that stream hidden, turns it on with the eye, hides it again
   control - stays untouched (negative control)
+
+Both halves of the patch are measured in the same run, on the same build:
+
+  1. the stream arrives hidden: the viewer's tile is the paused tile
+     ("Stream paused" + Watch), the share's video never reaches its peer
+     connection, and nothing is written to account data or the cache;
+  2. the corner eye shows it on the first click — no menu — and that choice is
+     not written either (showing is a page-session choice);
+  3. hiding again with the same eye turns the tile into the paused tile, and
+     Watch brings the stream back from the keyboard;
+  4. hiding is remembered: after a reload the stream is hidden again, and it is
+     written to account data;
+  5. the sharer's own tile is never a paused stream, and the control viewer
+     never loses the share.
 
 "Hidden" is measured with WebRTC getStats() on every RTCPeerConnection the page
 creates, so it means the SFU stopped sending the share, not that a div was
@@ -285,42 +299,28 @@ try {
   say("sharer is publishing a screen share");
 
   // EC puts a lone remote share in the spotlight by itself; the toggle lives in
-  // that tile's corner, next to upstream's volume button.
+  // that tile's corner, next to upstream's volume button. It arrives hidden, so
+  // its name is the "show" one until somebody asks for the stream.
+  const visibilityButton = (page) =>
+    page.getByRole("button", {
+      name: /^(Screen share visibility|Show screen share)$/,
+    });
   for (const p of [viewer, control]) {
-    await p.page
-      .getByRole("button", { name: "Screen share visibility" })
-      .waitFor({ state: "attached", timeout: 90_000 });
+    await visibilityButton(p.page).waitFor({ state: "attached", timeout: 90_000 });
   }
   await viewer.page.waitForTimeout(4000);
 
-  const beforeHideViewer = await measure(viewer.page, "viewer/before-hide");
-  const beforeHideControl = await measure(control.page, "control/before-hide");
-  const beforeHideSharer = await measure(sharer.page, "sharer/before-hide");
-
-  if (videoCount(beforeHideViewer) < 3)
-    throw new Error(
-      `viewer does not receive the share plus both cameras before hiding: ${JSON.stringify(beforeHideViewer.tracks)}`,
-    );
-
-  await viewer.page.screenshot({ path: join(OUT, "01-viewer-receiving.png") });
-
-  // Hide it: one click on the eye in the tile's corner. No menu in between.
-  await viewer.page.mouse.move(640, 360);
-  await viewer.page.mouse.move(660, 380);
-  // The accessible name changes with the state, so each look-up happens while
-  // the stream is in the state that name describes.
-  const showingEye = viewer.page.getByRole("button", {
-    name: "Screen share visibility",
-  });
-  const pressedBefore = await showingEye.getAttribute("aria-pressed");
-  await showingEye.click();
-  await viewer.page.waitForTimeout(3000);
-  const hiddenEye = viewer.page.getByRole("button", {
+  // The control viewer is the one that never touches the toggle — but with
+  // hidden by default it does have to ask for the stream once, or it would have
+  // nothing to keep. After that click it is left alone for the whole run.
+  const controlShow = control.page.getByRole("button", {
     name: "Show screen share",
   });
-  const pressedAfter = await hiddenEye.getAttribute("aria-pressed");
-  const menusAfterClick = await viewer.page.getByRole("menu").count();
-  say("eye after the click", { pressedBefore, pressedAfter, menus: menusAfterClick });
+  if ((await controlShow.count()) > 0) {
+    await controlShow.click();
+    say("control viewer asked for the stream once, and is left alone");
+    await control.page.waitForTimeout(3000);
+  }
 
   // What the viewer sees: not a participant who happens to be present, but a
   // paused stream that owns the tile.
@@ -432,6 +432,83 @@ try {
     };
   };
 
+  const storedState = () =>
+    viewer.page.evaluate(() => ({
+      cache: localStorage.getItem("plotina_voice_volumes_v1"),
+    }));
+  const accountDataPuts = () =>
+    viewer.logs.filter((l) => /account_data\/cc\.plotina/.test(l)).length;
+
+  // Scenario 1: nobody has asked for this stream, so it arrives hidden. The
+  // video must not reach the peer connection at all, and asking for it must not
+  // write anything: showing is a choice about this page session.
+  const viewerOnJoin = await measure(viewer.page, "viewer/on-join");
+  const pausedOnJoin = await readPausedTile(viewer.page);
+  const storedOnJoin = await storedState();
+  const putsOnJoin = accountDataPuts();
+  await viewer.page.screenshot({ path: join(OUT, "01-viewer-arrives-hidden.png") });
+  say("viewer on join", {
+    paused: pausedOnJoin.visible,
+    stored: storedOnJoin,
+    accountDataPuts: putsOnJoin,
+  });
+
+  // The way in is the corner eye: one click, no menu.
+  const showingEye = viewer.page.getByRole("button", {
+    name: "Show screen share",
+  });
+  const pressedOnJoin = await showingEye.getAttribute("aria-pressed");
+  await showingEye.click();
+  await viewer.page.waitForTimeout(3000);
+  const menusAfterClick = await viewer.page.getByRole("menu").count();
+  const shownEye = viewer.page.getByRole("button", {
+    name: "Screen share visibility",
+  });
+  const pressedAfterShowing = await shownEye.getAttribute("aria-pressed");
+  const storedAfterWatch = await storedState();
+  const putsAfterWatch = accountDataPuts();
+  say("eye on join", {
+    pressedOnJoin,
+    pressedAfterShowing,
+    menus: menusAfterClick,
+    stored: storedAfterWatch,
+    accountDataPuts: putsAfterWatch,
+  });
+
+  // The sharer's own tile is never a paused stream, whatever is stored.
+  const sharerPaused = await readPausedTile(sharer.page);
+
+  const beforeHideViewer = await measure(viewer.page, "viewer/before-hide");
+  const beforeHideControl = await measure(control.page, "control/before-hide");
+  const beforeHideSharer = await measure(sharer.page, "sharer/before-hide");
+
+  if (videoCount(beforeHideViewer) < 3)
+    throw new Error(
+      `viewer does not receive the share plus both cameras once it asked for them: ${JSON.stringify(beforeHideViewer.tracks)}`,
+    );
+
+  await viewer.page.screenshot({ path: join(OUT, "02-viewer-receiving.png") });
+
+  // Scenario 2: hide it again — one click on the eye in the tile's corner,
+  // no menu in between.
+  await viewer.page.mouse.move(640, 360);
+  await viewer.page.mouse.move(660, 380);
+  // The accessible name changes with the state, so each look-up happens while
+  // the stream is in the state that name describes.
+  const pressedBefore = await shownEye.getAttribute("aria-pressed");
+  await shownEye.click();
+  await viewer.page.waitForTimeout(3000);
+  const hiddenEye = viewer.page.getByRole("button", {
+    name: "Show screen share",
+  });
+  const pressedAfter = await hiddenEye.getAttribute("aria-pressed");
+  const menusAfterClickHide = await viewer.page.getByRole("menu").count();
+  say("eye after hiding", {
+    pressedBefore,
+    pressedAfter,
+    menus: menusAfterClickHide,
+  });
+
   const pausedAfterHide = await readPausedTile(viewer.page);
   say("viewer tile is a paused stream", pausedAfterHide);
   await viewer.page.screenshot({ path: join(OUT, "03-viewer-paused.png") });
@@ -526,6 +603,7 @@ try {
   );
 
   evidence.result = {
+    viewerOnJoin,
     viewerBeforeHide: beforeHideViewer,
     viewerAfterHide: afterHideViewer,
     controlBeforeHide: beforeHideControl,
@@ -535,15 +613,40 @@ try {
     viewerAfterShow: afterShowViewer,
     viewerAfterReload: reloadMeasure,
     ui: {
+      pausedOnJoin,
       pausedAfterToggle: pausedAfterHide,
       pausedAfterReload,
+      pausedAfterWatch,
+      sharerPaused,
       watchFocusedFromKeyboard: watchFocused,
-      menusOpenedByTheEye: menusAfterClick,
+      menusOpenedByTheEye: menusAfterClick + menusAfterClickHide,
+      pressedOnJoin,
+      pressedAfterShowing,
+      pressedBefore,
+      pressedAfter,
     },
+    written: { storedOnJoin, putsOnJoin, storedAfterWatch, putsAfterWatch },
     stored,
     livekitLogs,
     checks: {
+      // Scenario 1: it arrives hidden (t_6d5f61b4).
+      streamHiddenOnJoin:
+        videoCount(viewerOnJoin) === videoCount(beforeHideControl) - 1,
+      pausedTileOnJoin:
+        pausedOnJoin.visible === true &&
+        /Stream paused/.test(pausedOnJoin.text ?? "") &&
+        pausedOnJoin.watchVisible === true,
+      nothingStoredOnJoin: storedOnJoin.cache === null && putsOnJoin === 0,
+      // ...and the corner eye shows it on the first click, without a menu or a
+      // write (t_61fd5dc1).
+      eyeShowsOnFirstClick:
+        pressedOnJoin === "true" &&
+        pressedAfterShowing === "false" &&
+        menusAfterClick === 0,
+      watchWroteNothing:
+        storedAfterWatch.cache === null && putsAfterWatch === 0,
       viewerReceivedBefore: videoCount(beforeHideViewer) >= 3,
+      // Scenario 2: hiding it turns the tile into the paused stream.
       viewerStoppedAfterHide:
         videoCount(afterHideViewer) === videoCount(beforeHideViewer) - 1,
       viewerShareTrackGone:
@@ -554,6 +657,7 @@ try {
         videoCount(afterHideControl) === videoCount(beforeHideControl) &&
         totalVideoFrames(afterHideControl) > 0,
       sharerUnaffected: totalVideoFrames(afterHideSharer) > 0,
+      sharerOwnStreamVisible: sharerPaused.visible === false,
       viewerResumedAfterShow:
         videoCount(afterShowViewer) === videoCount(beforeHideViewer),
       pausedTileOnHide:
@@ -577,8 +681,8 @@ try {
       livekitLoggedResubscribe: livekitLogs.some((l) =>
         /Subscribed: video screen_share/.test(l),
       ),
-      // The eye toggles on the first click: it opens nothing.
-      eyeOpensNoMenu: menusAfterClick === 0,
+      // The eye toggles on the first click, both ways: it opens nothing.
+      eyeOpensNoMenu: menusAfterClick === 0 && menusAfterClickHide === 0,
       accountDataWrite: livekitLogs.some((l) =>
         /account_data\/cc\.plotina/.test(l),
       ),

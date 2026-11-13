@@ -136,10 +136,10 @@ Run from `element-call/` with the sources of the pinned tag plus the patch serie
 `build.py --mode source` does):
 
 ```bash
-npx vitest run --project=unit        # 808 passed | 9 skipped, 99 files
+npx vitest run --project=unit        # 812 passed | 9 skipped, 99 files
 npx tsc --noEmit                     # clean
 npx oxlint src/state src/tile src/utils/test.ts   # 2 pre-existing no-meaningless-void-operator in Publisher.ts (0001), no new ones
-python3 -m unittest discover -s element-call/tests   # 86 tests, OK
+python3 -m unittest discover -s element-call/tests   # 89 tests, OK
 NODE_OPTIONS=--max-old-space-size=16384 npx vite build   # exit 0
 ```
 
@@ -177,92 +177,79 @@ pinned tag before running it, so the probe runs against the file that ships.
 
 ## Live proof
 
-Run on 2026-11-10 against a local stand — Synapse + `lk-jwt-service` + LiveKit SFU
-behind the upstream `docker-compose-dev.yml` nginx (`synapse.m.localhost`,
-`matrix-rtc.m.localhost`), with Element Call from `build.py --mode source` on this
-branch (`plotina-element-call.tar.gz`, sha256
-`f2214baccc7c18597c10712bd084155309421e9d06fbdafc74a13bbe612bd490`) served by
-`tests/live/serve_bundle.mjs`, and three browser contexts in one call: a sharer, a
-viewer and a control viewer that never touches the toggle. Numbers are WebRTC
-`getStats()` deltas over a 2.5 s window, not screenshots. The share is identified
-by difference, not by pixel size: LiveKit picks the simulcast layer per subscriber,
-so the same share came as 640x360 here and as 320x180 for the control viewer in one
-run (the camera layers are 320x180 @ 20 fps).
+One run of `tests/live/stream_video_toggle_proof.mjs` covers both halves of this
+patch on one build, because they are one behaviour now. The stand is the upstream
+`docker-compose-dev.yml` one — Synapse + `lk-jwt-service` + LiveKit SFU behind its
+nginx (`synapse.m.localhost`, `matrix-rtc.m.localhost`) — with a `vite build` of
+the pinned tag plus patches `0001`–`0006` served by `tests/live/serve_bundle.mjs`
+on `https://localhost:3443`. Three browser contexts join one call: a **sharer**
+that publishes a synthetic share (canvas 640x360 @ 10 fps + 440 Hz audio), a
+**viewer** that is the subject, and a **control** viewer that asks for the stream
+once and is then left alone.
 
-| measurement | viewer, before hiding | viewer, while hidden | control viewer, same moment | viewer, after showing again |
-| :-- | :-- | :-- | :-- | :-- |
-| video streams received | 3 (share + 2 cameras) | **2 — the share is gone** | 3 (share + 2 cameras) | 3 again |
-| share (`640x360`, 10 fps) | 25 frames, 77.8 KB | — (no such stream) | 25 frames, 76.0 KB | 25 frames, 81.1 KB |
-| audio (3 streams) | 6.8 / 18.9 / 6.0 KB | 9.2 / 18.9 / 6.0 KB | 9.2 / 18.9 / 11.6 KB | 11.5 / 18.9 / 11.6 KB |
-| cameras (`320x180`, 20 fps) | 2 streams, 51 frames each | unchanged, 50 frames | unchanged | unchanged |
+Numbers are WebRTC `getStats()` deltas over a 2.5 s window, on every
+`RTCPeerConnection` the page created, so "hidden" means the SFU never sent the
+share — not that a div was hidden. The share is identified by difference, not by
+pixel size: LiveKit picks the simulcast layer per subscriber.
 
-So hiding removes the track from the subscription — the inbound stream disappears
-from the peer connection entirely (it is not a paused or blanked video element) —
-while every audio stream and the other viewer's copy of the same share keep
-flowing. Showing it again brings the share back inside the same call, on a new
-inbound stream (new SSRC), without leaving or reconnecting.
+| measurement | viewer, on join | viewer, after one eye click | viewer, hidden again | control, same moments | sharer, own tile |
+| :-- | :-- | :-- | :-- | :-- | :-- |
+| video streams received | **2 (both cameras)** | 3 (cameras + share `640x360` @ 10 fps, 25 frames) | **2 — the share is gone** | 3 throughout (25 frames each window) | own camera + own share, 50 frames each |
+| audio bytes / 2.5 s | 37.7 KB | 37.9 KB | 37.9 KB | 38.0–38.4 KB | 22.0–22.3 KB |
+| tile | paused: "Stream paused" + **Watch** | video | paused again | video | no paused block, ever |
+| account data writes so far | **0** | **0 — showing is not written** | 1 (`visible: false`) | 0 | — |
 
-The client's own LiveKit log in the viewer's page, in order:
+What the run established, check by check (22 checks, all `true`, `EXIT=0`):
 
-```
-[RemoteTracks] Subscribed:   video screen_share TR_VSEWTHmuuLPwcE of @<sharer>:synapse.m.localhost
-[RemoteTracks] Unsubscribed: video screen_share TR_VSEWTHmuuLPwcE of @<sharer>:synapse.m.localhost
-PUT .../account_data/cc.plotina.voice_volumes 200
-[RemoteTracks] Subscribed:   video screen_share TR_...  (after showing again)
-```
+- `streamHiddenOnJoin`, `pausedTileOnJoin`, `nothingStoredOnJoin` — the stream is
+  not received at all until the viewer asks for it, the tile says "Stream paused"
+  with a **Watch** button, and nothing was written to account data or to the cache
+  in the process;
+- `eyeShowsOnFirstClick`, `watchWroteNothing`, `eyeOpensNoMenu` — one click on the
+  corner eye brings the share in (3 streams, `Subscribed: video screen_share` in
+  the page log), it opens no menu, and it writes nothing: `localStorage` stays
+  empty and there is no `PUT …/account_data/cc.plotina.voice_volumes`;
+- `pausedTileOnHide`, `watchBroughtItBack`, `watchReachableFromKeyboard` — hiding
+  again turns the tile into the paused block: "Stream paused | Watch", the
+  participant's avatar under `rgba(0, 0, 0, 0.55)`, the Watch button at
+  `opacity: 1` with no hover, and `pausedAboveBackground: true` from
+  `document.elementsFromPoint` (the paint-order check the branch that added the
+  block needed: `.bg` is a paint container, so a static overlay would be invisible
+  while every style assertion passed). Tab focuses Watch, Enter brings the stream
+  back;
+- `viewerAudioKeptAfterHide`, `controlUnaffected`, `sharerUnaffected` — hiding one
+  stream changes nothing for the audio, for the other viewer, or for the publisher;
+- `hiddenAfterReload`, `stillHiddenAfterReload`, `accountDataWrite` — hiding is
+  remembered: after a reload the tile is paused again, the share is not received,
+  and the cache holds
+  `{"@<sharer>:synapse.m.localhost#screenshare-video":{"visible":false,"ts":…}}`,
+  the same account data event as the volumes;
+- `sharerOwnStreamVisible` — a local share never consults the visibility model.
 
-Restart: after reloading the viewer's page and rejoining the lobby, the tile came
-back as "Stream hidden" with no 640x360 inbound track at all, and the choice was
-in the cache as
-`{"@<sharer>:synapse.m.localhost#screenshare-video":{"visible":false,"ts":...}}`
-— the same account data event as the volumes, so a second device applies it too.
+The negative control for this harness is a build of the same tree with one line
+changed — `getStreamVisible` returning `true` for a key with no entry, i.e. the
+behaviour before "hidden by default" — served on a second port and driven by the
+same script. It exits non-zero: the viewer receives the share on join, the paused
+tile is absent, and there is no "Show screen share" button to click. So the checks
+above reject the old default rather than passing for any build.
 
-`tests/live/stream_video_toggle_proof.mjs` is the harness that produced this (it
-asserts all of the above and exits non-zero on a mismatch);
-`tests/live/serve_bundle.mjs` is the static HTTPS server it needs:
+Command:
 
 ```bash
 # 1. a bundle of the pinned tag with the whole series applied
 #    (build.py --mode source does this; any production build of it works)
 # 2. serve it over HTTPS with the stand's certificate
 node element-call/tests/live/serve_bundle.mjs <dist> 3443 <cert dir>   # key.pem + cert.pem
-# 3. drive three browsers through the toggle
-BASE_URL=https://localhost:3443/ EVIDENCE_DIR=/tmp/stream-proof \
+# 3. drive three browsers through both scenarios (the room comes from
+#    ec-live-room.py: the stand's Synapse refuses EC's own room creation)
+BASE_URL="https://localhost:3443/room/#?roomId=<url-encoded id>" EVIDENCE_DIR=/tmp/stream-proof \
   PLAYWRIGHT_FROM=<ec source tree>/package.json \
   node element-call/tests/live/stream_video_toggle_proof.mjs
-
-# ...or two browsers through the "hidden by default" behaviour (t_6d5f61b4);
-# the room comes from ec-live-room.py because the stand's Synapse refuses EC's
-# own room creation
-BASE_URL="https://localhost:3443/room/#?roomId=<url-encoded id>" EVIDENCE_DIR=/tmp/hidden-proof \
-  PLAYWRIGHT_FROM=<ec source tree>/package.json \
-  node element-call/tests/live/stream_hidden_default_proof.mjs
 ```
 
-The evidence file and screenshots from the run are attached to the task
-(`t_f1c04868`): `evidence.json`, `01-viewer-receiving.png`, `03-viewer-hidden.png`,
-`04-viewer-shown-again.png`, `05-viewer-after-reload.png`. That run predates the eye
-button: its `02-viewer-menu.png` shows the single-item menu the button replaced.
-
-### Hidden by default — live run, 2026-11-13 (t_6d5f61b4)
-
-Same stand, same two-layer build, two browser contexts (`Sharer`, `Viewer`) in one
-call, and the room created out of band because the stand's Synapse refuses EC's own
-room creation. Harness: `tests/live/stream_hidden_default_proof.mjs`; evidence in
-`live-run2/` under the task's report directory. Numbers are `getStats()` deltas over
-2.5 s windows, so "hidden" means no share video arrived, not that a div was hidden.
-
-| measurement | viewer, before the share | viewer, share running | viewer, after "watch" | viewer, after leaving and the share restarting |
-| :-- | :-- | :-- | :-- | :-- |
-| video streams received | 1 (the other camera) | **1 — the share is not there** | 2 (camera + share `640x360` @ 10 fps, 25 frames) | **1 — the share is not there again** |
-| tile says "Stream hidden" | — | yes | no | yes |
-| account data writes for `cc.plotina.voice_volumes` | 0 | 0 | **0 — "watch" stored nothing** | 0 |
-| `plotina_voice_volumes_v1` cache | absent | absent | absent | absent |
-
-The sharer's own tile never said "Stream hidden", and the negative control held:
-hiding a stream from the menu wrote `{"visible":false,"ts":…}` to the cache and PUT
-`cc.plotina.voice_volumes` twice, so the "nothing was written" rows above are not
-vacuous.
+Screenshots from the run: `01-viewer-arrives-hidden.png`, `02-viewer-receiving.png`,
+`03-viewer-paused.png`, `04-viewer-shown-again.png`, `05-viewer-after-reload.png`,
+plus `evidence.json` with every number above.
 
 ### What the live run showed about the UI
 
@@ -278,6 +265,15 @@ vacuous.
 - In the grid layout the control is not shown: the tile chrome in grid is not the
   spotlight tile. Upstream's own per-share volume button is grid-less for the same
   reason, and this patch follows it rather than inventing a second control there.
+
+### Earlier runs
+
+The runs behind the three changes merged here are recorded in their own task
+reports, and the numbers above were re-measured on the merged build; the older
+record of the 2026-11-10 run is kept in `tests/live/EVIDENCE-2026-11-10.md`. It
+predates the eye button and the paused tile, so its screenshots show the
+single-item menu and the "Stream hidden" status line that this build no longer
+has.
 
 ## Manual check, if the stand has to be rebuilt
 
