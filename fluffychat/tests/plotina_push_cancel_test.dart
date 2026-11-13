@@ -5,30 +5,40 @@
 // Regression test for patches/0025-plotina-cancel-on-read.patch.
 //
 // The bug: a message arrives in a room, the notification shows up in the
-// Android shade, the user opens that room in the app and reads it — and the
-// notification stays there until it is tapped. The same happens when the room
-// was read on another device: the notification is never dismissed either.
+// Android shade, the user reads the room — in the app or on another device —
+// and the notification stays there until it is tapped.
 //
-// Upstream context: upstream cancels notifications from the sync stream
-// (`cancelNotificationsOnSync`, commit ceb1331 "clear up active notifications
-// on sync on all platforms"). That commit is in the upstream tags v2.11.2 and
-// v2.11.5 and absent from v2.11.3 — the tag in `fluffychat/UPSTREAM_TAG` we
-// build on — where the walk over the shade existed only in the push helper's
-// clearing branch and nothing drove it from a sync. So this is not a Plotina
-// patch that broke it; the base tag never had the path.
+// The defect `.35-dev.1` shipped with is not "the path is not reached": QA
+// (`t_ece478f5` §3-§5) saw `cancelNotificationsOfReadRooms()` run and cancel
+// zero notifications. The shade held the notification under `roomId.hashCode`
+// (672513629 for room A) while the cancel walk searched
+// `'${clientName}_$roomId'.hashCode` (711748308), because the id a notification
+// is *posted* under depends on the push payload: `devices[0].data.client_name`
+// present → prefixed id, absent (UnifiedPush strips `devices`, FCM counts
+// pushes have none) → the room id's own hash.
 //
-// What this file pins, on a real `Client` fed with sync responses and a fake
+// So this file prepares the shade the way a device does: every notification is
+// posted **through `plotinaShowRoomNotification()`**, the function the push
+// helper itself calls, and the id it returns is the id asserted on. The test
+// cannot invent an id that the production show path does not produce — the
+// first version of this patch did exactly that and stayed green on a build that
+// dismissed nothing (QA §6).
+//
+// What is pinned, on a real `Client` fed with sync responses and a fake
 // notifications platform:
 //  * read inside the app (the chat page's read marker comes back in the sync):
 //    that room's notification is cancelled, the other room's is not;
 //  * read on another device (only the sync says so, no local action): same;
 //  * a cold start, where the app never set a read marker and the first sync
 //    already reports the room as read: same;
+//  * a notification posted from a payload that *does* carry a client name
+//    (desktop-style push) is dismissed as well — both id shapes are matched;
 //  * a room that is still unread is never cancelled;
 //  * the same state arriving again cancels nothing and rebuilds nothing
 //    (idempotent, one `getActiveNotifications` walk, no repeat of the work);
 //  * the Android summary notification is recalculated from what is left;
-//  * the app is wired to this path and the tap handler is not the trigger.
+//  * show, the messaging-style lookup and the cancel walk derive the id from
+//    one function, and the app is wired to the sync stream.
 //
 // How to run (inside a fully patched upstream checkout):
 //   flutter pub get
@@ -55,14 +65,15 @@ import 'package:material_ui/material_ui.dart';
 import 'package:matrix/matrix.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
-const _clientName = 'plotina';
+/// The account's `clientName`: what a payload carrying `devices` puts in
+/// `client_name` and what the Android notification group key is.
+const _clientName = 'Plotina Mobile android';
 const _me = '@plotina:homeserver.test';
-const _roomA = '!room-a:homeserver.test';
-const _roomB = '!room-b:homeserver.test';
 
-/// The id a room's notification is shown and cancelled under, exactly as
-/// `FluffyChatPushPayload` and `local_notifications_extension.dart` compute it.
-int _notificationId(String roomId) => '${_clientName}_$roomId'.hashCode;
+/// The two rooms QA used on the emulator (`t_ece478f5` §2), so the ids in a
+/// failing run are the ids from the device report.
+const _roomA = '!-CFM_KhCIY4gX2nBTlmzP2zxKg5TYp4QQvCFcyd8MLY';
+const _roomB = '!54EO0BMbBqT2nVNX6s4hYFwiyjE0bbmxOHDCJaoOKc8';
 
 /// Answers every request with `{}` so `Client.init` can run its own bookkeeping
 /// without a homeserver; the syncs that matter are injected with `handleSync`.
@@ -77,8 +88,9 @@ class _QuietHttpClient extends http.BaseClient {
       );
 }
 
-/// Stands in for the Android notifications plugin: keeps the list of
-/// notifications that are in the shade and records every call.
+/// Stands in for the Android notifications plugin: `show` puts the notification
+/// into the shade exactly as posted, `cancel` takes it out, every call is
+/// recorded.
 class _FakeNotifications extends AndroidFlutterLocalNotificationsPlugin {
   final active = <ActiveNotification>[];
   final cancelled = <int>[];
@@ -112,22 +124,28 @@ class _FakeNotifications extends AndroidFlutterLocalNotificationsPlugin {
     String? payload,
   }) async {
     shown.add(id);
+    active.add(
+      ActiveNotification(
+        id: id,
+        groupKey: _clientName,
+        title: title,
+        body: body,
+      ),
+    );
   }
 
   /// Cancels that target a room's notification, i.e. everything but the group
-  /// summary, which `updateSummaryNotification` cancels under the client name's
-  /// id when the last notification of that account is gone.
+  /// summary, which `updateSummaryNotification` shows and cancels under the
+  /// client name's id.
   List<int> get roomCancels =>
       cancelled.where((id) => id != _clientName.hashCode).toList();
-}
 
-ActiveNotification _notification(String roomId, String body) =>
-    ActiveNotification(
-      id: _notificationId(roomId),
-      groupKey: _clientName,
-      title: 'Chat',
-      body: body,
-    );
+  /// The room notifications still in the shade, the same way.
+  List<int?> get shadeRoomIds => active
+      .where((notification) => notification.id != _clientName.hashCode)
+      .map((notification) => notification.id)
+      .toList();
+}
 
 /// One room in a `/sync` response: [unread] notifications left, and an
 /// `m.receipt` event if [receiptFromMe] is set — the shape the server sends
@@ -205,6 +223,27 @@ void main() {
   late L10n l10n;
   late Client client;
 
+  /// Posts a room's notification through the function the push helper calls.
+  ///
+  /// [clientName] is the `devices[0].data.client_name` of the payload: `null`
+  /// is the shape the device actually receives (QA §5.1: `{room_id, event_id,
+  /// prio, unread}`, no `devices`), a value is a payload that kept it.
+  Future<int> post(
+    String roomId,
+    String body, {
+    String? clientName,
+  }) => plotinaShowRoomNotification(
+    flutterLocalNotificationsPlugin: plugin,
+    clientName: clientName,
+    roomId: roomId,
+    notificationDetails: NotificationDetails(
+      android: AndroidNotificationDetails('messages', 'Messages'),
+    ),
+    title: 'Chat',
+    body: body,
+    payload: FluffyChatPushPayload(clientName, roomId, r'$event').toString(),
+  );
+
   setUp(() async {
     // Android is the only platform we ship; it also makes the plugin dispatch
     // `show`/`cancel` to the Android implementation, which the fake is.
@@ -237,10 +276,18 @@ void main() {
   test('a room read inside the app is dismissed from the shade', () async {
     final subscription = listenLikeTheApp();
     addTearDown(subscription.cancel);
-    platform.active.addAll([
-      _notification(_roomA, 'message in A'),
-      _notification(_roomB, 'message in B'),
-    ]);
+    // The payload the device gets has no `devices`, so the notification is
+    // posted under the room id's own hash — not under the prefixed id.
+    final idA = await post(_roomA, 'message in A');
+    final idB = await post(_roomB, 'message in B');
+    expect(
+      idA,
+      _roomA.hashCode,
+      reason:
+          'QA t_ece478f5 §4: the shade held 672513629 for this room, the '
+          'room id hash, not the prefixed 711748308',
+    );
+    expect(idA, isNot('${_clientName}_$_roomA'.hashCode));
 
     // The read marker the chat page sent for room A comes back in our sync.
     await client.handleSync(
@@ -251,12 +298,9 @@ void main() {
     );
     await pumpEventQueue();
 
-    expect(platform.roomCancels, [_notificationId(_roomA)]);
-    expect(platform.cancelled, isNot(contains(_notificationId(_roomB))));
-    expect(
-      platform.active.map((notification) => notification.id),
-      [_notificationId(_roomB)],
-    );
+    expect(platform.roomCancels, [idA]);
+    expect(platform.cancelled, isNot(contains(idB)));
+    expect(platform.shadeRoomIds, [idB]);
     // The summary is rebuilt from what is left, not from what was dismissed.
     expect(platform.shown, contains(_clientName.hashCode));
   });
@@ -264,7 +308,7 @@ void main() {
   test('a room read on another device is dismissed too', () async {
     final subscription = listenLikeTheApp();
     addTearDown(subscription.cancel);
-    platform.active.add(_notification(_roomA, 'message in A'));
+    final idA = await post(_roomA, 'message in A');
 
     // Nothing happened on this device: no `setReadMarker`, no tap. The only
     // thing that arrives is the sync saying the room is read — the receipt can
@@ -277,8 +321,8 @@ void main() {
     );
     await pumpEventQueue();
 
-    expect(platform.roomCancels, [_notificationId(_roomA)]);
-    expect(platform.active, isEmpty);
+    expect(platform.roomCancels, [idA]);
+    expect(platform.shadeRoomIds, isEmpty);
   });
 
   test('a cold start dismisses a room that is already read', () async {
@@ -287,21 +331,35 @@ void main() {
     // The notification was posted while the app was closed; by the time it
     // starts, the message has been read on the desktop and the first sync
     // already reports the room as read. No local read marker ever ran.
-    platform.active.add(_notification(_roomA, 'message in A'));
+    final idA = await post(_roomA, 'message in A');
 
-    await client.handleSync(
-      _syncUpdate({_roomA: _joinedRoom(unread: 0)}),
-    );
+    await client.handleSync(_syncUpdate({_roomA: _joinedRoom(unread: 0)}));
     await pumpEventQueue();
 
     expect(client.rooms.single.notificationCount, 0);
-    expect(platform.roomCancels, [_notificationId(_roomA)]);
+    expect(platform.roomCancels, [idA]);
+  });
+
+  test('a notification posted with a client name is dismissed too', () async {
+    // A payload that still carries `devices` posts the prefixed id. The cancel
+    // walk cannot know which payload posted what is in the shade, so it has to
+    // match this shape as well.
+    final subscription = listenLikeTheApp();
+    addTearDown(subscription.cancel);
+    final idA = await post(_roomA, 'message in A', clientName: _clientName);
+    expect(idA, '${_clientName}_$_roomA'.hashCode);
+
+    await client.handleSync(_syncUpdate({_roomA: _joinedRoom(unread: 0)}));
+    await pumpEventQueue();
+
+    expect(platform.roomCancels, [idA]);
+    expect(platform.shadeRoomIds, isEmpty);
   });
 
   test('a room that is still unread keeps its notification', () async {
     final subscription = listenLikeTheApp();
     addTearDown(subscription.cancel);
-    platform.active.add(_notification(_roomB, 'message in B'));
+    final idB = await post(_roomB, 'message in B');
 
     await client.handleSync(
       _syncUpdate({
@@ -312,19 +370,14 @@ void main() {
     await pumpEventQueue();
 
     expect(platform.roomCancels, isEmpty);
-    expect(
-      platform.active.map((notification) => notification.id),
-      [_notificationId(_roomB)],
-    );
+    expect(platform.shadeRoomIds, [idB]);
   });
 
   test('the same read state arriving again does nothing twice', () async {
     final subscription = listenLikeTheApp();
     addTearDown(subscription.cancel);
-    platform.active.addAll([
-      _notification(_roomA, 'message in A'),
-      _notification(_roomB, 'message in B'),
-    ]);
+    await post(_roomA, 'message in A');
+    await post(_roomB, 'message in B');
 
     await client.handleSync(
       _syncUpdate({
@@ -361,7 +414,10 @@ void main() {
     final chatPage = File('lib/pages/chat/chat.dart').readAsStringSync();
 
     test('MatrixState listens on every client sync stream', () {
-      expect(matrixState, contains('onReadRooms[name] ??= c.onSync.stream.listen('));
+      expect(
+        matrixState,
+        contains('onReadRooms[name] ??= c.onSync.stream.listen('),
+      );
       expect(matrixState, contains('cancelNotificationsOfReadRooms('));
     });
 
@@ -382,6 +438,21 @@ void main() {
       );
       expect(pushHelper, contains('await cancelNotificationsOfReadRooms('));
       expect(pushHelper, isNot(contains('needsUpdateForSummaryNotification')));
+    });
+
+    test('the show path and the cancel path use one id function', () {
+      // The defect of `.35-dev.1`: the show call and the cancel walk each had
+      // their own formula, so the shade held an id nothing cancelled. The show
+      // call goes through the helper, and no second formula is left behind.
+      expect(pushHelper, contains('await plotinaShowRoomNotification('));
+      expect(
+        pushHelper,
+        isNot(contains(r"'${clientName}_${room.id}'.hashCode")),
+      );
+      expect(
+        pushHelper,
+        isNot(contains(r"'${client.clientName}_${notification.roomId}'.hashCode")),
+      );
     });
 
     test('the chat page still sets a read marker on its own', () {
