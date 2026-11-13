@@ -73,6 +73,8 @@ jobs:
   dev-base-guard:
     name: dev base guard
     runs-on: ubuntu-24.04
+    # Four API calls; anything slower than this is a hung runner, not a check.
+    timeout-minutes: 5
     steps:
       - name: Guard — a dev tag sits on a published base release
         # A dev build sorts ABOVE the stable of the same base
