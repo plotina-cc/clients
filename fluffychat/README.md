@@ -19,7 +19,7 @@ listened to a call on a device yet.
 | Tag | `v2.11.3` (`UPSTREAM_TAG`), commit `6fc4920` |
 | Flutter | `3.47.8` (upstream `.fvmrc`) |
 | Call stack | `livekit_client` 2.13.1, `flutter_webrtc` 1.6.2+hotfix.4 (both from `pubspec.lock`) |
-| Patch | twenty-three: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.mobile`, `0008`-`0011` Plotina name/label/links/visible strings, `0012` intro buttons, `0013` OIDC scheme, `0014` no upstream support, `0015` About dialog, `0016` in-app updater, `0018` no donation/support prompts, `0019` one "Обновления" settings tab, `0020` build number in the update status, `0021` UTF-8 update manifests, `0023` personal names for contacts, `0024` live refresh of the preview author line, `0025` notification of a room is cancelled when the room is read (`patches/`); numbers are per directory, so nothing may reuse one. `0017` is retired: it was the room-keyed personal-name model, removed in favour of `0023`, and its number stays unused |
+| Patch | twenty-four: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.mobile`, `0008`-`0011` Plotina name/label/links/visible strings, `0012` intro buttons, `0013` OIDC scheme, `0014` no upstream support, `0015` About dialog, `0016` in-app updater, `0018` no donation/support prompts, `0019` one "Обновления" settings tab, `0020` build number in the update status, `0021` UTF-8 update manifests, `0023` personal names for contacts, `0024` live refresh of the preview author line, `0025` notification of a room is cancelled when the room is read, `0026` the push helper's fallback notification is dismissed as well (`patches/`); numbers are per directory, so nothing may reuse one. `0017` is retired: it was the room-keyed personal-name model, removed in favour of `0023`, and its number stays unused |
 
 ## What is in this directory
 
@@ -52,6 +52,8 @@ patches/0024-plotina-preview-live-refresh.patch  live refresh of the preview
                                  author line (see below)
 patches/0025-plotina-cancel-on-read.patch  notification of a room is cancelled
                                  when the room is read (see below)
+patches/0026-plotina-cancel-fallback.patch  the push helper's fallback
+                                 notification is dismissed too (see below)
 scripts/version-code.py          the versionCode formula, used by CI and by
                                  scripts/build-android.sh
 tests/intro_plotina_test.dart    Flutter widget regression test for 0012
@@ -61,8 +63,10 @@ tests/plotina_contact_name_entry_test.dart  Dart test for the two 0023 entry
                                  points, chat list and invite banner
 tests/plotina_contact_name_refresh_test.dart  Dart test for 0024: the preview
                                  author line follows a live rename/reset
-tests/plotina_push_cancel_test.dart  Dart test for 0025: reading a room clears
-                                 its notification, an unread room keeps its own
+tests/plotina_push_cancel_test.dart  Dart test for 0025 and 0026: reading a
+                                 room clears its notification, an unread room
+                                 keeps its own, the push helper's fallback is
+                                 cleared as well
 ```
 
 The patch adds only this to `pubspec.yaml`:
@@ -404,7 +408,7 @@ messaging-style lookup that runs before the show now uses
 `notification.notificationId` too — it used a second, prefixed formula and so
 never found its own notification.
 
-`fluffychat/tests/plotina_push_cancel_test.dart`, 11 cases, shipped into the
+`fluffychat/tests/plotina_push_cancel_test.dart`, 14 cases, shipped into the
 checkout as `test/plotina_push_cancel_test.dart` and run by the workflow before
 the Gradle build. Every notification in the test is posted **through
 `plotinaShowRoomNotification()`** — the function the push helper calls — with
@@ -428,6 +432,53 @@ definition of the walk and no copy of the old inline loop, that the show path an
 the cancel path share one id function and no second id formula is left in the
 file, and that the chat page still sets its own read marker and does not cancel
 anything itself.
+
+## The notification that survived everything: the push helper's fallback (`0026`)
+
+`.35-dev.2` shipped `0025` and still left one notification in the shade. QA
+(`t_5d226c8d`) dumped the shade while it hung: it was **not** a room
+notification posted by the normal path. Id `143996333`, tag `null`, channel
+`fluffychat_push`, `category=msg`, and — the field that matters — **no
+`groupKey` at all**. Its text was «💬 New message in Plotina Mobile / Open app to
+read messages», the wording of the fallback `push_helper()` shows from its
+`catch` when the event cannot be fetched inside the timeout (slow network, a 5xx
+or a cold start reproduce it; QA induced it deterministically behind a proxy).
+The ordinary path cancelled 7/7; the fallback hung 3/3 and survived four app
+launches.
+
+The fallback posts with `groupKey: notification.clientName`, and our gateway
+delivers `event_id_only` — the payload has no `devices`, so there is no
+`client_name`, so the group key is `null`. The cancel walk of `0025` opened with
+
+```dart
+activeNotifications.removeWhere((n) => n.groupKey != clientName || …);
+```
+
+which drops every ungrouped entry before it ever asks which room that entry
+belongs to. The id was never the problem here: show and cancel both used
+`roomId.hashCode`, which is why the `.35-dev.1` id fix could not help.
+
+`0026` changes what that filter means. Another account's notifications are
+grouped under **its** client name and stay untouched; a `null` group key is not
+another account — it is our own fallback, and it belongs to whichever room its
+id names. So the walk keeps ungrouped entries, and the existing room lookup
+(`plotinaNotificationIdIsForRoom`) decides: a room of this client that is not
+unread is cancelled, everything else — still unread, unknown room, another
+account — is left alone. The fallback show moved into
+`plotinaShowFallbackNotification()`, the body of that `catch`, so the test posts
+the notification through production instead of hand-building one, and it returns
+the id it posted under.
+
+The test fake also stopped lying about the group key: it used to stamp
+`_clientName` on everything it was shown, which hid exactly this class of
+notification. It now records the key the details carry, which is why the new
+case fails on `.35-dev.2`'s code with `Expected: [672513629] Actual: []` — the
+id from the device report.
+
+Three cases are added, 14 in total: the fallback of a room that is read is
+cancelled; the fallback of a room that is still unread stays in the shade; and
+an ungrouped notification of **another account** is never touched, which is what
+keeps the widened filter from reaching into someone else's shade.
 
 ## Building
 
