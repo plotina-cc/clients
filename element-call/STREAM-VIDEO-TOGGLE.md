@@ -12,14 +12,19 @@ publisher's `Stop sharing` button belongs to the publisher.
 ## What the patch adds
 
 Every remote screen share in the spotlight gets a second button in the bottom-right corner, next to
-the volume button (and, unlike the volume button, it is there for a stream with no audio too). It
-opens a menu with one toggle: **"Don't show this stream"** / **«Не показывать этот стрим»**.
+the volume button (and, unlike the volume button, it is there for a stream with no audio too). It is
+a **single eye button**, not a menu: one click hides the stream, another click brings it back.
 
-- Toggled on: the video track is taken out of the subscription
+- A shown stream: the eye-open icon and the label **"Screen share visibility"** /
+  «Показ демонстрации экрана», `aria-pressed="false"`.
+- A hidden stream: the eye-struck-through icon and the label **"Show screen share"** /
+  «Показать демонстрацию экрана», `aria-pressed="true"`. Neither state needs a hover: the icon and
+  the accessible name say which way the next click goes.
+- Hiding: the video track is taken out of the subscription
   (`RemoteTrackPublication.setSubscribed(false)`), the tile stops rendering it, and the tile shows
   "Stream hidden" / «Стрим скрыт» in its place.
-- Toggled off: `setSubscribed(true)` and the normal render come back, without renegotiating the call
-  or reconnecting.
+- Showing again: `setSubscribed(true)` and the normal render come back, without renegotiating the
+  call or reconnecting.
 - Each stream has its own toggle, keyed by the participant's MXID. There is deliberately **no**
   "hide all streams" switch.
 
@@ -32,8 +37,8 @@ stream must not remove the only way to unhide it.
 | :-- | :-- |
 | `src/state/media/RemoteScreenShareViewModel.ts` | new `videoVisible$` (the viewer's choice) next to upstream's `videoEnabled$` (whether the publisher is sharing and connected). `setVideoVisible` / `toggleVideoVisible` change it; a `combineLatest` of the screen share publication and `videoVisible$` calls `setSubscribed`. |
 | `src/state/PersistentVolume.ts` | the store from `0004` gains a `#screenshare-video` key namespace and `getStreamVisible` / `setStreamVisible`; the map, debounce, merge and limit are shared with the volumes. |
-| `src/tile/SpotlightTile.tsx` | `ScreenShareVisibilityButton` (a `Menu` with a `ToggleMenuItem`) next to `ScreenShareVolumeButton`; `SpotlightRemoteScreenShareItem` does not hand the track to `MediaView` while hidden. |
-| `locales/{en,ru}/app.json` | `screen_share_visibility`, `hide_stream`, `stream_hidden`. |
+| `src/tile/SpotlightTile.tsx` | `ScreenShareVisibilityButton` (one `<button>` with `VisibilityOnIcon`/`VisibilityOffIcon`, `aria-pressed` and a state-dependent label) next to `ScreenShareVolumeButton`; `SpotlightRemoteScreenShareItem` does not hand the track to `MediaView` while hidden. |
+| `locales/{en,ru}/app.json` | `screen_share_visibility`, `show_stream`, `stream_hidden`. The old menu label `hide_stream` was removed with the menu. |
 | `src/utils/test.ts` | the shared remote-participant mock's publication stub understands `setSubscribed`. |
 
 `videoEnabled$` is not changed or reused: it still means "this share is being published and we are
@@ -88,9 +93,13 @@ python3 -m unittest discover -s element-call/tests   # 83 tests, OK
 NODE_OPTIONS=--max-old-space-size=16384 npx vite build   # exit 0
 ```
 
-The new coverage, in `src/state/media/RemoteScreenShareViewModel.test.ts` and one case in
+The new coverage, in `src/state/media/RemoteScreenShareViewModel.test.ts` and two cases in
 `src/tile/SpotlightTile.test.tsx`:
 
+- one click on the eye hides the stream and opens no menu; the next click brings it back;
+- `aria-pressed` and the accessible name follow the state ("Screen share visibility" /
+  "Show screen share"), and a stream the store has hidden renders as hidden from the first frame and
+  stays hidden across a re-render;
 - a fresh stream is visible and subscribed;
 - hiding calls `setSubscribed(false)`, showing calls `setSubscribed(true)`;
 - `videoEnabled$` stays `true` while the viewer hides the stream;
@@ -168,8 +177,9 @@ BASE_URL=https://localhost:3443/ EVIDENCE_DIR=/tmp/stream-proof \
 ```
 
 The evidence file and screenshots from the run are attached to the task
-(`t_f1c04868`): `evidence.json`, `01-viewer-receiving.png`, `02-viewer-menu.png`,
-`03-viewer-hidden.png`, `04-viewer-shown-again.png`, `05-viewer-after-reload.png`.
+(`t_f1c04868`): `evidence.json`, `01-viewer-receiving.png`, `03-viewer-hidden.png`,
+`04-viewer-shown-again.png`, `05-viewer-after-reload.png`. That run predates the eye
+button: its `02-viewer-menu.png` shows the single-item menu the button replaced.
 
 ### What the live run showed about the UI
 
@@ -177,9 +187,10 @@ The evidence file and screenshots from the run are attached to the task
   so the corner button is there without the viewer changing layout. The button is
   next to the volume button and is present even when the share has no audio (the
   volume button is not, because it is gated on `audioEnabled`).
-- The toggle menu stays open after a click — it is a `ToggleMenuItem`, and the
-  checked state is the feedback. Hiding keeps the tile in place with the avatar
-  and "Stream hidden", so the same menu is always reachable to bring it back.
+- The control is one eye button: a click hides the stream and the same button
+  (now the eye with the strike-through, labelled "Show screen share") brings it
+  back. Hiding keeps the tile in place with the avatar and "Stream hidden", so
+  the way back is always on screen.
 - In the grid layout the control is not shown: the tile chrome in grid is not the
   spotlight tile. Upstream's own per-share volume button is grid-less for the same
   reason, and this patch follows it rather than inventing a second control there.
@@ -187,7 +198,7 @@ The evidence file and screenshots from the run are attached to the task
 ## Manual check, if the stand has to be rebuilt
 
 1. two accounts in one call, A shares a screen with audio;
-2. as B, open the stream's corner menu → "Don't show this stream";
+2. as B, click the eye button in the stream tile's corner — once, no menu;
 3. B's tile shows "Stream hidden", B's console logs `Unsubscribed: video
    screen_share`, and `chrome://webrtc-internals` shows the share's inbound video
    stream gone;
