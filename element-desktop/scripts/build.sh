@@ -49,8 +49,8 @@ pnpm exec asar list webapp.asar | grep -q '^/LICENSE-AGPL-3.0$'
 pnpm exec asar list webapp.asar | grep -q '^/NOTICE$'
 # The call widget must be ours *in the asar*, not just in .build/webapp: the
 # packed bytes are what users install. --asar reads the archive directly (no
-# extraction) and fails on the upstream widget (no hide_stream / voice volumes)
-# and on leftover root-absolute asset URLs.
+# extraction) and fails on the upstream widget (no stream_paused / voice
+# volumes) and on leftover root-absolute asset URLs.
 python3 "$ROOT/scripts/element-call-widget.py" --asar webapp.asar
 # Check the packed file, not the directory it came from: the whole point is
 # that the Sentry block ends up inside the artifact users install.

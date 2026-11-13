@@ -23,8 +23,9 @@ What it does, and why each step is not optional:
   * injects the account-data sender (element-call/plotina-account-data.js)
     unless the bundle already sends cc.plotina.set_account_data itself, so a
     future archive that carries the action natively retires the shim;
-  * refuses to install an archive that is not ours: hide_stream,
-    screen_share_visibility and cc.plotina.voice_volumes must be in the bundle.
+  * refuses to install an archive that is not ours: stream_paused,
+    screen_share_visibility and cc.plotina.voice_volumes must be in the bundle,
+    and the superseded hide_stream menu must not be.
 
 The loader/verifier half is adapted from element-desktop/scripts/
 element-call-widget.py (same archive, same rebasing defects); lock handling and
@@ -53,10 +54,14 @@ ACTION = "cc.plotina.set_account_data"
 
 # Every marker is a feature the card names; upstream 0.20.1 has none of them.
 BUNDLE_MARKERS = (
-    "video_tile.hide_stream",
+    "video_tile.stream_paused",
     "screen_share_visibility",
     "cc.plotina.voice_volumes",
 )
+# Keys the superseded build carried. Build .16 hides other people's streams by
+# default and shows a paused tile, so a frame that still ships the hide_stream
+# submenu is the previous archive, not the one the lock pins.
+SUPERSEDED_MARKERS = ("video_tile.hide_stream",)
 NOISE_REQUIRED = (
     "noise/plotina-dfn.js",
     "noise/dfn/v3/pkg/df_bg.wasm",
@@ -176,12 +181,18 @@ def check_frame(frame: Path) -> list:
     for marker in BUNDLE_MARKERS:
         if marker not in bundle:
             failures.append(f"frame bundle has no {marker}")
+    for marker in SUPERSEDED_MARKERS:
+        if marker in bundle:
+            failures.append(
+                f"frame bundle still carries {marker} (superseded build: streams are "
+                "hidden by default and the paused tile replaced the submenu)"
+            )
 
     labels = list((frame / "assets").glob("ru-app-*.json"))
     if not labels:
         failures.append("ru-app-*.json label file is missing")
-    elif not any("hide_stream" in p.read_text(encoding="utf-8", errors="replace") for p in labels):
-        failures.append("ru label has no hide_stream key")
+    elif not any("stream_paused" in p.read_text(encoding="utf-8", errors="replace") for p in labels):
+        failures.append("ru label has no stream_paused key")
 
     for rel in NOISE_REQUIRED:
         if not (frame / rel).is_file():

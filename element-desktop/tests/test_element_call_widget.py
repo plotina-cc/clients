@@ -53,8 +53,14 @@ OUR_INDEX = (
     "<title>Plotina Call</title></head><body><div id=\"root\"></div></body></html>"
 )
 OUR_BUNDLE = (
+    "var a=\"video_tile.stream_paused\",b=\"video_tile.watch_stream\","
+    "c=\"video_tile.screen_share_visibility\",d=\"cc.plotina.voice_volumes\","
+    "e=\"/assets/ringtone-OURS.mp3\";"
+)
+# The previous build carries the hide_stream submenu the card removed.
+SUPERSEDED_BUNDLE = (
     "var a=\"video_tile.hide_stream\",b=\"video_tile.screen_share_visibility\","
-    "c=\"cc.plotina.voice_volumes\",d=\"/assets/ringtone-OURS.mp3\";"
+    "c=\"cc.plotina.voice_volumes\";"
 )
 UPSTREAM_INDEX = (
     "<!doctype html><html><head><meta charset=\"UTF-8\">"
@@ -77,7 +83,7 @@ def make_archive(root: Path, *, ours: bool = True, with_noise: bool = True,
         "body{background:url(/assets/bg.png)}", encoding="utf-8"
     )
     (stage / "assets" / "ru-app-CTBNJ8GR.json").write_text(
-        json.dumps({"video_tile": {"hide_stream": "Не показывать этот стрим"}} if ru_label else {"a": "b"},
+        json.dumps({"video_tile": {"stream_paused": "Стрим приостановлен"}} if ru_label else {"a": "b"},
                    ensure_ascii=False),
         encoding="utf-8",
     )
@@ -128,7 +134,7 @@ class VerifyRejectsUpstreamTest(unittest.TestCase):
             failures = ecw.check_widget(widget)
             text = "\n".join(failures)
             # Every advertised feature marker is missing in the upstream bundle.
-            self.assertIn("video_tile.hide_stream", text)
+            self.assertIn("video_tile.stream_paused", text)
             self.assertIn("screen_share_visibility", text)
             self.assertIn("cc.plotina.voice_volumes", text)
             self.assertIn("ru-app", text)
@@ -422,9 +428,22 @@ class AsarCheckTest(unittest.TestCase):
             asar = self._asar(root, webapp / MOUNT)
             failures = ecw.check_asar(asar)
             text = "\n".join(failures)
-            self.assertIn("video_tile.hide_stream", text)
+            self.assertIn("video_tile.stream_paused", text)
             self.assertIn("cc.plotina.voice_volumes", text)
             self.assertIn("plotina-icon.svg", text)
+
+    def test_packed_asar_with_the_superseded_widget_fails(self) -> None:
+        """The build .16 replaces must not pass: it still has the hide_stream menu."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            webapp = make_webapp(root)
+            ecw.install_widget(make_archive(root), webapp)
+            (webapp / MOUNT / "assets" / "index-OURS.js").write_text(
+                SUPERSEDED_BUNDLE, encoding="utf-8")
+            asar = self._asar(root, webapp / MOUNT)
+            text = "\n".join(ecw.check_asar(asar))
+            self.assertIn("hide_stream", text)
+            self.assertIn("superseded", text)
 
     def test_packed_asar_missing_the_widget_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
