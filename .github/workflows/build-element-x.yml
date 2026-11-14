@@ -621,6 +621,21 @@ jobs:
             element-x/scripts/check-markers.sh "$apk" plotina-markers.txt
           done
 
+      - name: Gate — the registration logo is ours and Element's is gone
+        # A marker gate proves what arrived, never what should have left. Plotina X registered with
+        # MAS as https://element.io/mobile-icon.png for a whole stable series because `URL_LOGO` was
+        # null and Gradle's default filled the value in — every gate we had was green, since the
+        # artifact was right about everything the patches did and wrong about the one thing none of
+        # them set. 0017 sets it; this step is what keeps it set (and catches a pin bump that makes
+        # 0017 stop applying, exactly like the call URL check above).
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          for apk in Plotina-X*.apk; do
+            echo "-- $apk"
+            element-x/scripts/check-dex-strings.sh "$apk" \
+              "https://plotina.cc/dl/plotina-purple.png" "https://element.io/mobile-icon.png"
+          done
+
       - name: Check the APK carries Firebase and our push project
         run: |
           cd "$GITHUB_WORKSPACE"

@@ -1,0 +1,25 @@
+# Plotina-Patch: the logo this client registers with (the logo_uri of the OAuth client metadata
+#   the homeserver stores, which MAS shows in «Sessions / Other sessions» and in the clients list)
+#   is our own icon on plotina.cc instead of upstream's https://element.io/mobile-icon.png.
+# Plotina-Marker: https://plotina.cc/dl/plotina-purple.png
+# Plotina-Note: the value only has to be public and stable; MAS applies no host restriction for
+#   Element X beyond the public suffix. plotina.cc/dl/plotina-purple.png answers 200 image/png and
+#   redirects nowhere, and Plotina Mobile already registers against the same file.
+
+diff --git a/plugins/src/main/kotlin/config/BuildTimeConfig.kt b/plugins/src/main/kotlin/config/BuildTimeConfig.kt
+index 6f9df71a..5fbe0a06 100644
+--- a/plugins/src/main/kotlin/config/BuildTimeConfig.kt
++++ b/plugins/src/main/kotlin/config/BuildTimeConfig.kt
+@@ -14,7 +14,11 @@ object BuildTimeConfig {
+     val METADATA_HOST_REVERSED: String? = null
+     val OAUTH_CLIENT_URL_PATH: String? = "apps/android"
+     val URL_WEBSITE: String? = null
+-    val URL_LOGO: String? = null
++    // Plotina: the logo this client sends to the homeserver during client registration (the
++    // logo_uri of the OAuth client metadata MAS records). Upstream leaves it null, so the Gradle
++    // default https://element.io/mobile-icon.png becomes the value - Element's mark in our
++    // clients list. Ours lives on our own host: public, stable, served as image/png.
++    val URL_LOGO: String? = "https://plotina.cc/dl/plotina-purple.png"
+     val URL_COPYRIGHT: String? = null
+     val URL_ACCEPTABLE_USE: String? = null
+     val URL_PRIVACY: String? = null
