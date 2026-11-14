@@ -877,6 +877,41 @@ class RepositoryTest(unittest.TestCase):
                 self.assertEqual(sha256(copy), sha256(canonical),
                                  msg=f"{copy} drifted from {canonical}")
 
+    # The bytes of /vector-icons/1024.png in the pinned upstream image
+    # (vectorim/element-web:v1.12.32@sha256:f8700633…, read with `sha256sum`
+    # inside the container). Element Web advertises this path as its OIDC logo,
+    # so a build that still serves these bytes leaves the Element mark in the
+    # homeserver's auth service — the very bug this test exists to keep shut.
+    UPSTREAM_VECTOR_ICON_SHA256 = (
+        "7fa9ae5834b896c8c51545c6b368564bb164aec523729d180865e62f6bcf8524")
+
+    def test_vector_icon_path_serves_our_mark(self) -> None:
+        # BasePlatform sends `logo_uri = new URL("vector-icons/1024.png",
+        # baseUrl)` when config.json carries no oidc_metadata.logo_uri, and MAS
+        # only stores what the client registers. The path is therefore fixed
+        # (and must stay on chat.plotina.cc: js-sdk drops a logo whose host does
+        # not share client_uri's base), so the fix is the file behind it.
+        dockerfile = (WEBAPP / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("COPY plotina-512.png /app/vector-icons/1024.png", dockerfile)
+        # It has to stay a PNG: MAS renders an <img> and the image serves
+        # image/png from that extension, and init.js reuses the same path for
+        # the desktop-builds toast.
+        mark = (WEBAPP / "plotina-512.png").read_bytes()
+        self.assertEqual(mark[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertNotEqual(hashlib.sha256(mark).hexdigest(),
+                            self.UPSTREAM_VECTOR_ICON_SHA256)
+        # The build asserts the overwrite on the final bytes, not just the COPY.
+        self.assertIn("cmp /app/plotina-512.png /app/vector-icons/1024.png", dockerfile)
+
+    def test_vector_icon_must_revalidate(self) -> None:
+        # Same URL, new bytes: a long-cached copy is the one way an already
+        # logged-in MAS session keeps showing the Element mark. The nginx
+        # template the entrypoint re-renders has to say so.
+        dockerfile = (WEBAPP / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("location = /vector-icons/1024.png", dockerfile)
+        self.assertIn('grep -q "/vector-icons/1024.png" /etc/nginx/templates/',
+                      dockerfile)
+
     def test_dockerfile_delegates_branding_to_script(self) -> None:
         dockerfile = (WEBAPP / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn("branding.py --app /app", dockerfile)

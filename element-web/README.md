@@ -55,7 +55,11 @@ config/element/
   plotina-icon-192.png    apple-touch-icon target (branding/icons/png/green-192.png)
   plotina-bg.png          welcome background (branding/icons/png/green-256.png)
   plotina-512.png         PWA/OG image; also overwrites
-                          themes/element/img/logos/element-app-logo.png
+                          themes/element/img/logos/element-app-logo.png and
+                          vector-icons/1024.png — the logo this client
+                          registers as its OIDC logo_uri, which is what the
+                          homeserver's auth service (MAS) draws next to the
+                          session
   noise/
     logic.js              pure decisions: what is call audio, level clamping, strings
     boot.js               browser wiring: getUserMedia wrapper + settings slider

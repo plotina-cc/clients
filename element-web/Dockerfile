@@ -107,6 +107,20 @@ COPY manifest.json /app/manifest.json
 # error-view chunk to load /plotina-512.png directly.
 COPY plotina-512.png /app/themes/element/img/logos/element-app-logo.png
 
+# /vector-icons/1024.png is the logo Element Web advertises to the homeserver's
+# authentication service: BasePlatform.ts sends
+#   logo_uri: new URL("vector-icons/1024.png", this.baseUrl).href
+# whenever config.json carries no oidc_metadata.logo_uri, MAS stores whatever the
+# client registered, and its session list renders an <img src=logo_uri> straight
+# from the browser. The URL is therefore fixed (and must stay on chat.plotina.cc:
+# js-sdk 44 drops a logo_uri whose host shares no base with client_uri), so the
+# fix is the file behind it: upstream ships the Element triskele there (12870 B,
+# sha256 7fa9ae58…) and this overwrite serves our mark instead. Existing MAS
+# sessions change their icon because nothing in the MAS database moves — only the
+# bytes at that path. init.js reuses the same path for the desktop-builds toast,
+# so the format stays PNG; the assert RUN below compares the final bytes.
+COPY plotina-512.png /app/vector-icons/1024.png
+
 # Assumptions about the stock layout, checked before the brand pass: a new
 # upstream release that moves any of these fails here with a readable message,
 # which is exactly what the "Bumping upstream" section of README.md wants.
@@ -115,6 +129,7 @@ RUN set -eux; \
       /app/plotina-icon-192.png /app/plotina-bg.png /app/manifest.json \
       /app/plotina-theme.js \
       /app/plotina-dm-aliases.js \
+      /app/vector-icons/1024.png \
       /app/themes/element/img/logos/element-app-logo.png; \
     grep -q '</head>' /app/index.html; \
     test -s /app/LICENSE-AGPL-3.0; \
@@ -127,14 +142,23 @@ RUN set -eux; \
     test -e /app/themes/element/img/logos/element-logo.svg; \
     test -e /app/themes/element/img/logos/opengraph.png; \
     test -d /app/mobile_guide; \
+    cmp /app/plotina-512.png /app/vector-icons/1024.png; \
+    test "$(stat -c%s /app/vector-icons/1024.png)" -ne 12870; \
+    ls /app/vector-icons/24.png /app/vector-icons/512.png >/dev/null; \
     echo "upstream layout ok"
 
 # The entrypoint regenerates conf.d/default.conf from templates/default.conf.template
 # via envsubst on every start, so the template is what has to change here.
 # Long cache for model assets, no cache for the wrapper itself: a fix must reach
-# browsers without a hard reload.
+# browsers without a hard reload. That last rule is also why /vector-icons/1024.png
+# gets an explicit no-cache: the auth-service logo keeps its URL forever (see the
+# COPY above), so without it a session that already loaded the Element mark could
+# keep it until the heuristic cache expired.
 RUN set -eux; \
     sed -i '/location = \/index.html/i\
+    location = /vector-icons/1024.png {\
+        add_header Cache-Control "no-cache";\
+    }\
     location /noise/dfn/ {\
         gzip_static on;\
         add_header Cache-Control "public, max-age=2592000";\
@@ -151,6 +175,7 @@ RUN set -eux; \
         add_header Cache-Control "no-cache";\
     }\
 ' /etc/nginx/templates/default.conf.template; \
+    grep -q "/vector-icons/1024.png" /etc/nginx/templates/default.conf.template; \
     grep -q "/noise/dfn/" /etc/nginx/templates/default.conf.template; \
     grep -q "/noise/vendor/ort/" /etc/nginx/templates/default.conf.template; \
     grep -q "/noise/vendor/dpdfnet/" /etc/nginx/templates/default.conf.template
