@@ -16,6 +16,9 @@ patch depends on a later one, so the alphabetical order needs no manifest.
 
 After the build, `element-x/scripts/check-markers.sh <apk> <markers-file>` looks for every marker in
 the APK. A patch that is applied but absent from the artifact fails the build instead of shipping.
+`element-x/scripts/check-dex-strings.sh <apk> <must-be-present> <must-be-absent>` is the other half
+of that idea, for values a *default* can silently supply: it proves one literal is in `classes*.dex`
+and another is not (0017 uses it to keep `https://element.io/mobile-icon.png` out of the dex).
 
 ## Adding a patch
 
@@ -54,6 +57,7 @@ the APK. A patch that is applied but absent from the artifact fails the build in
 | 0014 | The in-app updater: an «Обновления» row at the root of Settings right above About, opening `PlotinaUpdatesActivity` («Проверить обновления» on top, the Stable/Dev channel section beneath), which fetches `https://plotina.cc/dl/update-x.json`, downloads the APK with `DownloadManager`, verifies sha256 and size, and hands it to the system `PackageInstaller`; `MainActivity` runs a silent once-a-day check. The same patch derives the versionCode from the release tag (`vYY.MM.p-plotina-x.N` → `(2000+YY)*100000 + MM*1000 + N`) and carries the dev channel (`-PplotinaDevBuild=M` grows only the `-dev.M` versionName and reads `update-x-dev.json` from the GitHub `dev-latest` release). | `https://plotina.cc/dl/update-x.json` |
 | 0015 | Personal names for personal dialogues: the name belongs to the account, lives in the `cc.plotina.contact_names` account data event (the same contract Element Web and Mobile write), and is laid over `RoomInfo.name` in Kotlin for the room list, the open chat and the room details header. `m.room.name` and `m.room.member` are never written; DM only, a group keeps its name. See `../PERSONAL-NAMES.md`. | `Plotina: could not read the personal names of this account` |
 | 0016 | Contact names for people everywhere a person is named: the room list row, the chat title, the room details header and the notification show the personal name of the person on the other side (heroes and the inviter included), not only the room's name. | `Plotina: could not read the personal names for a notification` |
+| 0017 | The registration logo is our icon on `plotina.cc` — the `logo_uri` of the OAuth client metadata the homeserver stores, which MAS shows in the client and session lists — instead of upstream's `https://element.io/mobile-icon.png`. Nothing else changes: the same constant also feeds the OAuth client metadata, and the value is only required to be public and stable (MAS applies no host restriction to Element X beyond the public suffix). | `https://plotina.cc/dl/plotina-purple.png` |
 
 `0001` and `0003` (the native call build) and `0003`-era numbering are gone: the native-call
 experiment was removed from the tree and survives only in git history. Gaps in the numbering are

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Tests for the two element-x scripts that decide whether a patch reaches the APK:
-#   apply-patches.sh  — applies every patches/*.patch, refuses to finish on a short count
-#   check-markers.sh  — looks for each applied patch's marker inside the built APK
+# Tests for the three element-x scripts that decide whether a patch reaches the APK:
+#   apply-patches.sh      — applies every patches/*.patch, refuses to finish on a short count
+#   check-markers.sh      — looks for each applied patch's marker inside the built APK
+#   check-dex-strings.sh  — one literal must be in classes*.dex, another must not be
 #
-# Both are run against throwaway fixtures, so this needs no upstream checkout, no Android SDK
+# All are run against throwaway fixtures, so this needs no upstream checkout, no Android SDK
 # and no network. Run it with: element-x/scripts/tests/run-tests.sh
 #
 # Every case prints ok/FAIL; the script exits non-zero if any case failed, which is what makes it
@@ -15,6 +16,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 scripts_dir="$(dirname "$here")"
 apply_script="$scripts_dir/apply-patches.sh"
 gate_script="$scripts_dir/check-markers.sh"
+dex_gate_script="$scripts_dir/check-dex-strings.sh"
 
 work_root="${TMPDIR:-/tmp}/plotina-patch-tests.$$"
 if ! mkdir -p "$work_root"; then
@@ -37,6 +39,7 @@ new_case() {
   mkdir -p "$CASE_DIR/client/scripts" "$CASE_DIR/client/patches" "$CASE_DIR/upstream"
   cp "$apply_script" "$CASE_DIR/client/scripts/" 2>/dev/null || true
   cp "$gate_script" "$CASE_DIR/client/scripts/" 2>/dev/null || true
+  cp "$dex_gate_script" "$CASE_DIR/client/scripts/" 2>/dev/null || true
   printf 'alpha\nbeta\n' > "$CASE_DIR/upstream/a.txt"
   printf 'one\ntwo\n' > "$CASE_DIR/upstream/b.txt"
   git init -q "$CASE_DIR/upstream"
@@ -71,6 +74,12 @@ run_apply() {
 run_gate() {
   gate_out="$("$CASE_DIR/client/scripts/check-markers.sh" "$CASE_DIR/app.apk" "$MARKERS" 2>&1)"
   gate_rc=$?
+}
+
+# run_dex_gate <must-be-present> <must-be-absent>
+run_dex_gate() {
+  dex_gate_out="$("$CASE_DIR/client/scripts/check-dex-strings.sh" "$CASE_DIR/app.apk" "$1" "$2" 2>&1)"
+  dex_gate_rc=$?
 }
 
 # fake_apk <path> <dex-text> [<utf16-arsc-text>] — a zip with the entries a real APK has, holding
@@ -276,6 +285,51 @@ case_gate_empty_markers() {
   pass "$name"
 }
 
+# --- check-dex-strings.sh ------------------------------------------------------------------------
+
+case_dex_gate_present_and_absent() {
+  new_case
+  fake_apk "$CASE_DIR/app.apk" 'noise https://plotina.cc/dl/plotina-purple.png more noise'
+  run_dex_gate 'https://plotina.cc/dl/plotina-purple.png' 'https://element.io/mobile-icon.png'
+  local name="dex gate: our literal present and Element's absent passes"
+  [ "$dex_gate_rc" -eq 0 ] || { fail "$name (exit $dex_gate_rc: $dex_gate_out)"; return; }
+  case "$dex_gate_out" in *"is in classes*.dex"*) ;; *) fail "$name (present literal not confirmed)"; return ;; esac
+  case "$dex_gate_out" in *"is absent from classes*.dex"*) ;; *) fail "$name (absence not confirmed)"; return ;; esac
+  pass "$name"
+}
+
+case_dex_gate_surviving_default() {
+  new_case
+  # The .33 stable APK's shape: Element's default is in the dex no matter what else is there.
+  fake_apk "$CASE_DIR/app.apk" 'https://plotina.cc/dl/plotina-purple.png https://element.io/mobile-icon.png'
+  run_dex_gate 'https://plotina.cc/dl/plotina-purple.png' 'https://element.io/mobile-icon.png'
+  local name="dex gate: a literal that must be absent fails the build when it survived"
+  if [ "$dex_gate_rc" -eq 0 ]; then fail "$name (exit 0)"; return; fi
+  case "$dex_gate_out" in *"element.io/mobile-icon.png is still in"*) ;; *) fail "$name (the surviving literal is not named: $dex_gate_out)"; return ;; esac
+  case "$dex_gate_out" in *"survived the patch"*) ;; *) fail "$name (not reported as a surviving default: $dex_gate_out)"; return ;; esac
+  pass "$name"
+}
+
+case_dex_gate_missing_literal() {
+  new_case
+  fake_apk "$CASE_DIR/app.apk" 'noise only'
+  run_dex_gate 'https://plotina.cc/dl/plotina-purple.png' 'https://element.io/mobile-icon.png'
+  local name="dex gate: a literal that must be present fails when it is missing"
+  if [ "$dex_gate_rc" -eq 0 ]; then fail "$name (exit 0)"; return; fi
+  case "$dex_gate_out" in *"plotina-purple.png is not in any classes*.dex"*) ;; *) fail "$name (no reason given: $dex_gate_out)"; return ;; esac
+  pass "$name"
+}
+
+case_dex_gate_no_dex() {
+  new_case
+  printf 'not a zip\n' > "$CASE_DIR/app.apk"
+  run_dex_gate 'present-token' 'absent-token'
+  local name="dex gate: an artifact with no readable dex is refused, not passed"
+  if [ "$dex_gate_rc" -eq 0 ]; then fail "$name (exit 0)"; return; fi
+  case "$dex_gate_out" in *"no readable classes*.dex"*) ;; *) fail "$name (no reason given: $dex_gate_out)"; return ;; esac
+  pass "$name"
+}
+
 case_apply_two_patches
 case_apply_c_locale_order
 case_apply_broken_patch
@@ -288,6 +342,10 @@ case_gate_missing_marker
 case_gate_utf16_resources
 case_gate_not_an_apk
 case_gate_empty_markers
+case_dex_gate_present_and_absent
+case_dex_gate_surviving_default
+case_dex_gate_missing_literal
+case_dex_gate_no_dex
 
 printf '\n%s case(s), %s failure(s)\n' "$case_no" "$failures"
 [ "$failures" -eq 0 ]
