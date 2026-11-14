@@ -514,6 +514,124 @@ void main() {
     expect(platform.walks, walksAfterFirst + 1);
   });
 
+  // While the app is in the background no sync runs — `MatrixState` turns
+  // background sync off when it is not in the foreground — so the read path
+  // above never fires: a room read in Element X or on the desktop keeps its
+  // notification in the shade until the app is opened. Returning to the
+  // foreground is the moment that has to dismiss it, through the same walk
+  // (patches/0027-plotina-cancel-on-resume.patch).
+  group('returning from the background', () {
+    /// The `resumed` handler `MatrixState` calls for every client of the
+    /// session, driven here the way the lifecycle listener drives it.
+    Future<int> resume({
+      AppLifecycleState state = AppLifecycleState.resumed,
+      AppLifecycleState? previousState = AppLifecycleState.paused,
+    }) => cancelNotificationsOfReadRoomsOnResume(
+      state: state,
+      previousState: previousState,
+      clientName: client.clientName,
+      rooms: client.rooms,
+      l10n: l10n,
+      flutterLocalNotificationsPlugin: plugin,
+      updateSummary: true,
+    );
+
+    test('a room read while the app was in the background is dismissed', () async {
+      final idA = await post(_roomA, 'message in A');
+      final idB = await post(_roomB, 'message in B');
+      // The room is already read in what the client knows — the receipt came in
+      // before the app was backgrounded, or in the background isolate — but no
+      // foreground listener ever walked the shade, because there was no sync.
+      await client.handleSync(
+        _syncUpdate({
+          _roomA: _joinedRoom(unread: 0, receiptFromMe: true),
+          _roomB: _joinedRoom(unread: 2),
+        }),
+      );
+      await pumpEventQueue();
+      expect(platform.roomCancels, isEmpty);
+      expect(platform.shadeRoomIds, [idA, idB]);
+
+      final cancelled = await resume();
+
+      expect(cancelled, 1);
+      expect(platform.roomCancels, [idA]);
+      expect(platform.shadeRoomIds, [idB]);
+      // The summary is rebuilt from what is left, like on the sync path.
+      expect(platform.shown, contains(_clientName.hashCode));
+    });
+
+    test('a room that is still unread keeps its notification', () async {
+      final idB = await post(_roomB, 'message in B');
+      await client.handleSync(
+        _syncUpdate({
+          _roomA: _joinedRoom(unread: 0),
+          _roomB: _joinedRoom(unread: 3),
+        }),
+      );
+      await pumpEventQueue();
+      final shownBefore = platform.shown.length;
+
+      final cancelled = await resume();
+
+      expect(cancelled, 0);
+      expect(platform.roomCancels, isEmpty);
+      expect(platform.shadeRoomIds, [idB]);
+      // Nothing was dismissed, so the summary is not re-posted either.
+      expect(platform.shown.length, shownBefore);
+    });
+
+    test('a second resumed without changes does nothing again', () async {
+      final idA = await post(_roomA, 'message in A');
+      await client.handleSync(
+        _syncUpdate({_roomA: _joinedRoom(unread: 0, receiptFromMe: true)}),
+      );
+      await pumpEventQueue();
+
+      expect(await resume(), 1);
+      final cancelsAfterFirst = platform.cancelled.length;
+      final shownAfterFirst = platform.shown.length;
+      final walksAfterFirst = platform.walks;
+
+      // Fast app switching: the lifecycle fires `resumed` again while the app
+      // never left the foreground. The shade has nothing left to dismiss, and
+      // it is not even walked again.
+      expect(
+        await resume(previousState: AppLifecycleState.resumed),
+        0,
+      );
+      expect(platform.cancelled.length, cancelsAfterFirst);
+      expect(platform.shown.length, shownAfterFirst);
+      expect(platform.walks, walksAfterFirst);
+
+      // A real round trip through the background, where still nothing changed:
+      // one walk, no cancel, no summary.
+      expect(await resume(previousState: AppLifecycleState.paused), 0);
+      expect(platform.cancelled.length, cancelsAfterFirst);
+      expect(platform.shown.length, shownAfterFirst);
+      expect(platform.walks, walksAfterFirst + 1);
+      expect(platform.shadeRoomIds, isEmpty);
+      expect(idA, isNotNull);
+    });
+
+    test('leaving the foreground dismisses nothing', () async {
+      await post(_roomA, 'message in A');
+      await client.handleSync(_syncUpdate({_roomA: _joinedRoom(unread: 0)}));
+      await pumpEventQueue();
+
+      // `paused`/`inactive` are not a return to the app: nothing may be
+      // cancelled before the user is actually back.
+      expect(
+        await resume(
+          state: AppLifecycleState.paused,
+          previousState: AppLifecycleState.resumed,
+        ),
+        0,
+      );
+      expect(platform.cancelled, isEmpty);
+    });
+  });
+
   // The service above is only half the fix: if `MatrixState` does not subscribe
   // to the sync stream, nothing calls it on a device. Assert the wiring at the
   // source, the way the 0023 tests pin their two entry points.
@@ -533,6 +651,20 @@ void main() {
     test('the subscription is dropped with the client, not leaked', () {
       expect(matrixState, contains('onReadRooms[name]?.cancel();'));
       expect(matrixState, contains('onReadRooms.clear();'));
+    });
+
+    test('MatrixState dismisses read rooms on the return to the foreground', () {
+      // The lifecycle listener is the entry point: on `resumed` it hands every
+      // client of the session to the walk the sync listener uses, and it knows
+      // which state the app came from so a repeated `resumed` is skipped.
+      expect(
+        matrixState,
+        contains('_cancelNotificationsOfReadRoomsAfterResume(previousState)'),
+      );
+      expect(matrixState, contains('cancelNotificationsOfReadRoomsOnResume('));
+      expect(matrixState, contains('previousState: previousState'));
+      // Reuse, not a second walk: the resume handler returns the existing one.
+      expect(pushHelper, contains('return cancelNotificationsOfReadRooms('));
     });
 
     test('there is one walk over the shade, not two', () {

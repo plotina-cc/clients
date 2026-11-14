@@ -19,7 +19,7 @@ listened to a call on a device yet.
 | Tag | `v2.11.3` (`UPSTREAM_TAG`), commit `6fc4920` |
 | Flutter | `3.47.8` (upstream `.fvmrc`) |
 | Call stack | `livekit_client` 2.13.1, `flutter_webrtc` 1.6.2+hotfix.4 (both from `pubspec.lock`) |
-| Patch | twenty-four: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.mobile`, `0008`-`0011` Plotina name/label/links/visible strings, `0012` intro buttons, `0013` OIDC scheme, `0014` no upstream support, `0015` About dialog, `0016` in-app updater, `0018` no donation/support prompts, `0019` one "Обновления" settings tab, `0020` build number in the update status, `0021` UTF-8 update manifests, `0023` personal names for contacts, `0024` live refresh of the preview author line, `0025` notification of a room is cancelled when the room is read, `0026` the push helper's fallback notification is dismissed as well (`patches/`); numbers are per directory, so nothing may reuse one. `0017` is retired: it was the room-keyed personal-name model, removed in favour of `0023`, and its number stays unused |
+| Patch | twenty-five: `0001` pubspec (DFN), `0002` plotina.cc defaults, `0003` push gateway, `0004` ABI splits vs `abiFilters`, `0005` GlitchTip, `0006` noise level, `0007` application id `cc.plotina.mobile`, `0008`-`0011` Plotina name/label/links/visible strings, `0012` intro buttons, `0013` OIDC scheme, `0014` no upstream support, `0015` About dialog, `0016` in-app updater, `0018` no donation/support prompts, `0019` one "Обновления" settings tab, `0020` build number in the update status, `0021` UTF-8 update manifests, `0023` personal names for contacts, `0024` live refresh of the preview author line, `0025` notification of a room is cancelled when the room is read, `0026` the push helper's fallback notification is dismissed as well, `0027` read rooms are dismissed when the app returns from the background (`patches/`); numbers are per directory, so nothing may reuse one. `0017` is retired: it was the room-keyed personal-name model, removed in favour of `0023`, and its number stays unused |
 
 ## What is in this directory
 
@@ -54,6 +54,9 @@ patches/0025-plotina-cancel-on-read.patch  notification of a room is cancelled
                                  when the room is read (see below)
 patches/0026-plotina-cancel-fallback.patch  the push helper's fallback
                                  notification is dismissed too (see below)
+patches/0027-plotina-cancel-on-resume.patch  read rooms are dismissed when
+                                 the app returns from the background (see
+                                 below)
 scripts/version-code.py          the versionCode formula, used by CI and by
                                  scripts/build-android.sh
 tests/intro_plotina_test.dart    Flutter widget regression test for 0012
@@ -63,10 +66,12 @@ tests/plotina_contact_name_entry_test.dart  Dart test for the two 0023 entry
                                  points, chat list and invite banner
 tests/plotina_contact_name_refresh_test.dart  Dart test for 0024: the preview
                                  author line follows a live rename/reset
-tests/plotina_push_cancel_test.dart  Dart test for 0025 and 0026: reading a
-                                 room clears its notification, an unread room
-                                 keeps its own, the push helper's fallback is
-                                 cleared as well
+tests/plotina_push_cancel_test.dart  Dart test for 0025, 0026 and 0027:
+                                 reading a room clears its notification, an
+                                 unread room keeps its own, the push helper's
+                                 fallback is cleared as well, and the return
+                                 to the foreground clears what was read while
+                                 the app was in the background
 ```
 
 The patch adds only this to `pubspec.yaml`:
@@ -479,6 +484,35 @@ Three cases are added, 14 in total: the fallback of a room that is read is
 cancelled; the fallback of a room that is still unread stays in the shade; and
 an ungrouped notification of **another account** is never touched, which is what
 keeps the widened filter from reaching into someone else's shade.
+
+## Read while the app was in the background (`0027`)
+
+`0025` and `0026` both hang off the sync: the client learns a room is read
+because a sync says so. In the background there is no sync — `MatrixState` sets
+`client.backgroundSync = false` the moment the app leaves the foreground — so a
+room read in Element X or on the desktop keeps its notification in the shade
+until the next foreground sync, or forever if nothing arrives to trigger one.
+
+`0027` does not add another walk over the shade. It adds the missing moment: the
+`resumed` lifecycle event in `MatrixState.didChangeAppLifecycleState` hands every
+client of the session to `cancelNotificationsOfReadRoomsOnResume()`, which is a
+thin guard over the very same `cancelNotificationsOfReadRooms()` the sync
+listener calls. One place walks the shade, two things drive it.
+
+The guard is the previous lifecycle state: a `resumed` that follows another
+`resumed` means the app never left the foreground, so nothing about the rooms can
+have changed and the shade is not walked at all — fast app switching does not
+turn into a cancel/summary storm. A real round trip through the background still
+walks it, and the walk itself already cancels only what is read and rebuilds the
+summary only when something was cancelled.
+
+Five cases are added, 19 in total: a room read while the app was in the
+background is dismissed (and the other room's notification is not); a room that
+is still unread keeps its own and the summary is not re-posted; a second
+`resumed` without changes cancels nothing, re-posts nothing and does not even
+walk the shade, while a genuine background round trip walks once and cancels
+nothing; leaving the foreground dismisses nothing; and the lifecycle listener is
+wired at the source, for every client of the session.
 
 ## Building
 

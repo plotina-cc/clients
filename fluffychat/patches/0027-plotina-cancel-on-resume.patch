@@ -1,0 +1,259 @@
+# Plotina-Patch: plotina cancels the notifications of read rooms when the app returns from the background (0027)
+# Plotina-Marker: plotina-patch-0027-cancel-on-resume
+
+diff --git a/lib/utils/push_helper.dart b/lib/utils/push_helper.dart
+index 61bfdd5..a0a8e51 100644
+--- a/lib/utils/push_helper.dart
++++ b/lib/utils/push_helper.dart
+@@ -489,6 +489,48 @@ Future<int> cancelNotificationsOfReadRooms({
+   return cancelled;
+ }
+ 
++/// The `resumed` handler: dismisses the notifications of rooms that are not
++/// unread any more when the app comes back to the foreground.
++///
++/// While the app is paused no sync runs — `MatrixState` sets
++/// `backgroundSync = false` off the foreground — so the sync listener never
++/// fires, and a room read in Element X or on the desktop keeps its notification
++/// in the shade until the app is opened. The return to the foreground is the
++/// moment that knows about it, and it dismisses through the very same walk the
++/// sync listener uses: there is one place that walks the shade, not two.
++///
++/// [previousState] is the state the app was in before this event. A `resumed`
++/// that follows another `resumed` means the app never left the foreground —
++/// nothing about the rooms can have changed, so the shade is not walked again
++/// and nothing is re-posted. A real round trip through the background still
++/// walks it, and the walk itself only cancels what is read and only rebuilds
++/// the summary when something was cancelled.
++///
++/// Anything but `resumed` is not a return to the app and does nothing.
++///
++/// Returns how many notifications were cancelled, 0 when the event is skipped.
++///
++/// See patches/0027-plotina-cancel-on-resume.patch.
++Future<int> cancelNotificationsOfReadRoomsOnResume({
++  required AppLifecycleState state,
++  required AppLifecycleState? previousState,
++  required String clientName,
++  required Iterable<Room> rooms,
++  required L10n l10n,
++  required FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin,
++  bool? updateSummary,
++}) async {
++  if (state != AppLifecycleState.resumed) return 0;
++  if (previousState == AppLifecycleState.resumed) return 0;
++  return cancelNotificationsOfReadRooms(
++    clientName: clientName,
++    rooms: rooms,
++    l10n: l10n,
++    flutterLocalNotificationsPlugin: flutterLocalNotificationsPlugin,
++    updateSummary: updateSummary,
++  );
++}
++
+ /// The Android notification id of a room's message notification.
+ ///
+ /// This is the only place the id is derived. `push_helper.dart` shows under it,
+diff --git a/lib/widgets/matrix.dart b/lib/widgets/matrix.dart
+index 82f5090..ee11311 100644
+--- a/lib/widgets/matrix.dart
++++ b/lib/widgets/matrix.dart
+@@ -376,6 +376,7 @@ class MatrixState extends State<Matrix> {
+   }
+ 
+   void didChangeAppLifecycleState(AppLifecycleState state) {
++    final previousState = _lifecycleState;
+     final wasDetached = _lifecycleState == AppLifecycleState.detached;
+     _lifecycleState = state;
+     if (wasDetached) {
+@@ -392,6 +393,40 @@ class MatrixState extends State<Matrix> {
+         Logs().v('Set background sync to', foreground);
+       }
+     }
++    if (foreground) {
++      unawaited(_cancelNotificationsOfReadRoomsAfterResume(previousState));
++    }
++  }
++
++  /// plotina-patch-0027: a room read on another device while this app was in
++  /// the background has no sync listener to dismiss its notification — the
++  /// sync is off while we are paused — so the return to the foreground does it,
++  /// once per client of the session, through the same walk the sync listener
++  /// uses. A `resumed` that follows another `resumed` is skipped by the handler.
++  Future<void> _cancelNotificationsOfReadRoomsAfterResume(
++    AppLifecycleState? previousState,
++  ) async {
++    final l10n = L10n.of(context);
++    final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
++    for (final client in widget.clients) {
++      try {
++        await cancelNotificationsOfReadRoomsOnResume(
++          state: AppLifecycleState.resumed,
++          previousState: previousState,
++          clientName: client.clientName,
++          rooms: client.rooms,
++          l10n: l10n,
++          flutterLocalNotificationsPlugin: flutterLocalNotificationsPlugin,
++        );
++      } catch (e, s) {
++        Logs().w(
++          'plotina-patch-0027-cancel-on-resume: cancelling the notifications '
++          'of read rooms on resume failed',
++          e,
++          s,
++        );
++      }
++    }
+   }
+ 
+   @override
+diff --git a/test/plotina_push_cancel_test.dart b/test/plotina_push_cancel_test.dart
+index 65e9ea3..6f5f29b 100644
+--- a/test/plotina_push_cancel_test.dart
++++ b/test/plotina_push_cancel_test.dart
+@@ -514,6 +514,124 @@ void main() {
+     expect(platform.walks, walksAfterFirst + 1);
+   });
+ 
++  // While the app is in the background no sync runs — `MatrixState` turns
++  // background sync off when it is not in the foreground — so the read path
++  // above never fires: a room read in Element X or on the desktop keeps its
++  // notification in the shade until the app is opened. Returning to the
++  // foreground is the moment that has to dismiss it, through the same walk
++  // (patches/0027-plotina-cancel-on-resume.patch).
++  group('returning from the background', () {
++    /// The `resumed` handler `MatrixState` calls for every client of the
++    /// session, driven here the way the lifecycle listener drives it.
++    Future<int> resume({
++      AppLifecycleState state = AppLifecycleState.resumed,
++      AppLifecycleState? previousState = AppLifecycleState.paused,
++    }) => cancelNotificationsOfReadRoomsOnResume(
++      state: state,
++      previousState: previousState,
++      clientName: client.clientName,
++      rooms: client.rooms,
++      l10n: l10n,
++      flutterLocalNotificationsPlugin: plugin,
++      updateSummary: true,
++    );
++
++    test('a room read while the app was in the background is dismissed', () async {
++      final idA = await post(_roomA, 'message in A');
++      final idB = await post(_roomB, 'message in B');
++      // The room is already read in what the client knows — the receipt came in
++      // before the app was backgrounded, or in the background isolate — but no
++      // foreground listener ever walked the shade, because there was no sync.
++      await client.handleSync(
++        _syncUpdate({
++          _roomA: _joinedRoom(unread: 0, receiptFromMe: true),
++          _roomB: _joinedRoom(unread: 2),
++        }),
++      );
++      await pumpEventQueue();
++      expect(platform.roomCancels, isEmpty);
++      expect(platform.shadeRoomIds, [idA, idB]);
++
++      final cancelled = await resume();
++
++      expect(cancelled, 1);
++      expect(platform.roomCancels, [idA]);
++      expect(platform.shadeRoomIds, [idB]);
++      // The summary is rebuilt from what is left, like on the sync path.
++      expect(platform.shown, contains(_clientName.hashCode));
++    });
++
++    test('a room that is still unread keeps its notification', () async {
++      final idB = await post(_roomB, 'message in B');
++      await client.handleSync(
++        _syncUpdate({
++          _roomA: _joinedRoom(unread: 0),
++          _roomB: _joinedRoom(unread: 3),
++        }),
++      );
++      await pumpEventQueue();
++      final shownBefore = platform.shown.length;
++
++      final cancelled = await resume();
++
++      expect(cancelled, 0);
++      expect(platform.roomCancels, isEmpty);
++      expect(platform.shadeRoomIds, [idB]);
++      // Nothing was dismissed, so the summary is not re-posted either.
++      expect(platform.shown.length, shownBefore);
++    });
++
++    test('a second resumed without changes does nothing again', () async {
++      final idA = await post(_roomA, 'message in A');
++      await client.handleSync(
++        _syncUpdate({_roomA: _joinedRoom(unread: 0, receiptFromMe: true)}),
++      );
++      await pumpEventQueue();
++
++      expect(await resume(), 1);
++      final cancelsAfterFirst = platform.cancelled.length;
++      final shownAfterFirst = platform.shown.length;
++      final walksAfterFirst = platform.walks;
++
++      // Fast app switching: the lifecycle fires `resumed` again while the app
++      // never left the foreground. The shade has nothing left to dismiss, and
++      // it is not even walked again.
++      expect(
++        await resume(previousState: AppLifecycleState.resumed),
++        0,
++      );
++      expect(platform.cancelled.length, cancelsAfterFirst);
++      expect(platform.shown.length, shownAfterFirst);
++      expect(platform.walks, walksAfterFirst);
++
++      // A real round trip through the background, where still nothing changed:
++      // one walk, no cancel, no summary.
++      expect(await resume(previousState: AppLifecycleState.paused), 0);
++      expect(platform.cancelled.length, cancelsAfterFirst);
++      expect(platform.shown.length, shownAfterFirst);
++      expect(platform.walks, walksAfterFirst + 1);
++      expect(platform.shadeRoomIds, isEmpty);
++      expect(idA, isNotNull);
++    });
++
++    test('leaving the foreground dismisses nothing', () async {
++      await post(_roomA, 'message in A');
++      await client.handleSync(_syncUpdate({_roomA: _joinedRoom(unread: 0)}));
++      await pumpEventQueue();
++
++      // `paused`/`inactive` are not a return to the app: nothing may be
++      // cancelled before the user is actually back.
++      expect(
++        await resume(
++          state: AppLifecycleState.paused,
++          previousState: AppLifecycleState.resumed,
++        ),
++        0,
++      );
++      expect(platform.cancelled, isEmpty);
++    });
++  });
++
+   // The service above is only half the fix: if `MatrixState` does not subscribe
+   // to the sync stream, nothing calls it on a device. Assert the wiring at the
+   // source, the way the 0023 tests pin their two entry points.
+@@ -535,6 +653,20 @@ void main() {
+       expect(matrixState, contains('onReadRooms.clear();'));
+     });
+ 
++    test('MatrixState dismisses read rooms on the return to the foreground', () {
++      // The lifecycle listener is the entry point: on `resumed` it hands every
++      // client of the session to the walk the sync listener uses, and it knows
++      // which state the app came from so a repeated `resumed` is skipped.
++      expect(
++        matrixState,
++        contains('_cancelNotificationsOfReadRoomsAfterResume(previousState)'),
++      );
++      expect(matrixState, contains('cancelNotificationsOfReadRoomsOnResume('));
++      expect(matrixState, contains('previousState: previousState'));
++      // Reuse, not a second walk: the resume handler returns the existing one.
++      expect(pushHelper, contains('return cancelNotificationsOfReadRooms('));
++    });
++
+     test('there is one walk over the shade, not two', () {
+       // One definition, used by the push helper's clearing branch — and the
+       // inline copy it replaced is gone, so the read path cannot drift from the
