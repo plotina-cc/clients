@@ -15,9 +15,11 @@ NAME="plotina-web-smoke-$$"
 PAGE="$(mktemp)"
 BUNDLE="$(mktemp)"
 LICENCE="$(mktemp)"
+LOGO="$(mktemp)"
+MARK="$(mktemp)"
 cleanup() {
   docker rm -f "$NAME" >/dev/null 2>&1 || true
-  rm -f "$PAGE" "$BUNDLE" "${LICENCE:-}"
+  rm -f "$PAGE" "$BUNDLE" "${LICENCE:-}" "${LOGO:-}" "${MARK:-}"
 }
 trap cleanup EXIT
 
@@ -57,6 +59,40 @@ for path in \
   /plotina-icon-192.png \
   /manifest.json; do
   curl -fsS -o /dev/null "http://127.0.0.1:${PORT}${path}"
+done
+
+# The logo Element Web advertises to the homeserver's auth service. BasePlatform
+# sends `logo_uri = new URL("vector-icons/1024.png", baseUrl)`, so MAS stores
+# https://chat.plotina.cc/vector-icons/1024.png and its session list renders
+# whatever this image serves at that path — the picture is fetched by the
+# browser, not by MAS. Upstream ships the Element triskele there (12870 B,
+# sha256 7fa9ae58…), so a build that still serves it leaves the Element icon in
+# MAS, including for sessions that already exist (the URL in the database does
+# not move; only the bytes behind it change).
+LOGO_URL="http://127.0.0.1:${PORT}/vector-icons/1024.png"
+curl -fsSI "$LOGO_URL" > "$PAGE"
+grep -qi '^content-type: image/png' "$PAGE"
+curl -fsS -o "$LOGO" "$LOGO_URL"
+logo_size="$(wc -c < "$LOGO")"
+logo_sha="$(sha256sum "$LOGO" | cut -d' ' -f1)"
+echo "vector-icons/1024.png: ${logo_size} B sha256=${logo_sha}"
+test "$logo_size" -ne 12870
+test "$logo_sha" != "7fa9ae5834b896c8c51545c6b368564bb164aec523729d180865e62f6bcf8524"
+# Not just "some other file": the bytes must be our mark, byte-identical to the
+# /plotina-512.png this same image serves.
+curl -fsS -o "$MARK" "http://127.0.0.1:${PORT}/plotina-512.png"
+cmp "$LOGO" "$MARK"
+# The file must revalidate: an unchanged URL is exactly why a long-cached copy
+# would keep the Element mark in an already-open session.
+grep -qi '^cache-control: no-cache' "$PAGE"
+
+# The rest of vector-icons/ stays upstream's: the bundle and the stock manifest
+# still name these sizes, and a size-zero or 404 icon would break the browser
+# chrome (PWA install, taskbar icon) while nobody looks at MAS.
+for icon in 24.png 120.png 144.png 152.png 180.png 512.png; do
+  curl -fsSI "http://127.0.0.1:${PORT}/vector-icons/${icon}" > "$PAGE"
+  grep -qi '^content-type: image/png' "$PAGE"
+  curl -fsS -o /dev/null "http://127.0.0.1:${PORT}/vector-icons/${icon}"
 done
 
 # Our Element Call. Element Web opens the call widget at ./widgets/element-call/
