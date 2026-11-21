@@ -207,10 +207,14 @@ jobs:
           flutter gen-l10n
 
       - name: Lint
-        # `dart` on PATH is the Flutter SDK's, put there by flutter-action; the gate wants the path
-        # explicitly because it may not run under that shell's PATH.
-        run: scripts/lint-patches.sh --stack dart \
-          --tree "fluffychat=$GITHUB_WORKSPACE/fluffychat/upstream"
+        # A block scalar, not a folded `\` continuation: in YAML a plain multiline `run:` folds the
+        # newline into a space, so `... dart \<newline>  --tree ...` reaches the shell as the single
+        # argument " --tree" (caught by the first CI run of this workflow). `dart` on PATH is the
+        # Flutter SDK's, put there by flutter-action.
+        run: |
+          set -euo pipefail
+          scripts/lint-patches.sh --stack dart \
+            --tree "fluffychat=$GITHUB_WORKSPACE/fluffychat/upstream"
 
   # Our Kotlin. detekt is a jar and the patched tree is a sparse clone: no Gradle, no Android SDK.
   kotlin:

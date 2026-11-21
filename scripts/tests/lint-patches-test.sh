@@ -65,9 +65,13 @@ stub_dart() {
   chmod +x "$CASE/bin/dart"
 }
 
-# run_gate [args...] — PATH holds only the stubs and the basics, so no real linter leaks in.
+# run_gate [args...] — PATH holds only the stubs and the basics, so no real linter leaks in, and the
+# LINT_* overrides are cleared: a runner that exports them (our own CI job does, from the install
+# step) would otherwise defeat the "no shellcheck anywhere" case and make the suite pass by accident.
 run_gate() {
-  out="$(PATH="$CASE/bin:/usr/bin:/bin" "$gate" --repo "$CASE/repo" "$@" 2>&1)"
+  out="$(env -u LINT_SHELLCHECK -u LINT_DART -u LINT_ESLINT -u LINT_TS_MODULES \
+    -u LINT_TS_ESLINT_MODULE -u LINT_DETEKT -u LINT_DETEKT_CLASSPATH \
+    PATH="$CASE/bin:/usr/bin:/bin" "$gate" --repo "$CASE/repo" "$@" 2>&1)"
   rc=$?
 }
 
@@ -96,9 +100,9 @@ case_unknown_stack_is_refused() {
 
 case_missing_tool_is_an_error_not_a_pass() {
   new_case
-  # No shellcheck anywhere on PATH: the gate must not report "nothing to lint".
-  out="$(PATH="$CASE/bin:/usr/bin:/bin" "$gate" --repo "$CASE/repo" --stack shell 2>&1)"
-  rc=$?
+  # No shellcheck anywhere — not on PATH and not handed over in LINT_SHELLCHECK, which a runner that
+  # exports it (our CI job does) would otherwise supply. The gate must not report "nothing to lint".
+  run_gate --stack shell
   local name="gate: a missing linter exits 2 and names it"
   [ "$rc" -eq 2 ] || { fail "$name (exit $rc: $out)"; return; }
   case "$out" in *shellcheck*) ;; *) fail "$name (tool not named: $out)"; return ;; esac
