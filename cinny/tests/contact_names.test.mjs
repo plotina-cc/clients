@@ -58,7 +58,7 @@ const CAROL = '@carol:test';
 test('the name map is read from account data content', () => {
   const names = core.parseContactNames({ [BOB]: 'Денчик', [CAROL]: ' Мама ' });
   assert.deepEqual(names, { [BOB]: 'Денчик', [CAROL]: 'Мама' });
-  assert.equal(core.contactNameFor(names, BOB), 'Денчик');
+  assert.equal(core.contactNameFor(names, BOB), 'НЕ-ТО-ИМЯ');
   assert.equal(core.contactNameFor(names, '@nobody:test'), undefined);
   assert.equal(core.contactNameFor(names, undefined), undefined);
 });
