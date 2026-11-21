@@ -229,14 +229,19 @@ class PrecheckTest(unittest.TestCase):
         result = self.fx.precheck()
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_fails_when_l10n_was_not_generated(self):
-        # Our tests import package:fluffychat, which reaches lib/l10n/l10n.dart;
-        # without gen-l10n the whole run fails to compile.
+    def test_rejects_nothing_about_the_generated_l10n(self):
+        # This runs before `flutter gen-l10n` in the workflow, so a tree without
+        # lib/l10n/l10n.dart is *correct* here — the first CI run of the step was
+        # red exactly because an earlier version of precheck demanded it. gen-l10n
+        # reports its own failures.
         self.fx.with_asset()
         (self.fx.upstream / "lib" / "l10n" / "l10n.dart").unlink()
         result = self.fx.precheck()
-        self.assertNotEqual(result.returncode, 0, "a tree without generated l10n must fail")
-        self.assertIn("gen-l10n", result.stderr)
+        self.assertEqual(
+            result.returncode,
+            0,
+            "precheck must not require the generated l10n: it runs before gen-l10n",
+        )
 
 
 class GateTest(unittest.TestCase):

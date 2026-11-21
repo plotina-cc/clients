@@ -159,18 +159,16 @@ def cmd_precheck(args: argparse.Namespace) -> int:
     # pubspec.yaml lists the denoiser model as a package asset, so flutter builds
     # the asset bundle before it runs a single test — and the bundle fails when
     # the file is absent. It is 7.6 MiB of binary, fetched by fetch-model.sh.
+    #
+    # Deliberately nothing else: this runs before `flutter gen-l10n`, so a check
+    # for the generated l10n here would reject every correct tree. gen-l10n's own
+    # exit status is what reports a broken localisation step.
     model = repo / "plotina_dfn" / "assets" / "DeepFilterNet3_onnx.tar.gz"
     if not model.is_file() or model.stat().st_size == 0:
         fail(
             f"the denoiser model {model} is missing or empty, and `flutter test` cannot build "
             "the asset bundle without it. Run fluffychat/scripts/fetch-model.sh (the apk job "
             "does this in 'Fetch DeepFilterNet3 model') before the test step."
-        )
-
-    if not (upstream / "lib" / "l10n" / "l10n.dart").is_file():
-        fail(
-            f"{upstream}/lib/l10n/l10n.dart is missing: our tests import package:fluffychat, "
-            "which reaches the generated localisations. Run `flutter gen-l10n` in the tree first."
         )
     return 0
 
