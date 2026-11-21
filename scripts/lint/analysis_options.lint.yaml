@@ -1,0 +1,46 @@
+# Lint rules for the code our patches add to fluffychat.
+#
+# scripts/lint-patches.sh copies this over the throwaway patched checkout's analysis_options.yaml,
+# so it does not ship in the app and does not edit upstream's file in place. It carries the rules
+# that catch our defect classes and nothing else.
+#
+# Why not upstream's analysis_options.yaml: it enables ~30 rules plus a `dart_code_linter` analyzer
+# plugin whose `latest` version constraint fails to resolve on a cold run. On the 35 files we patch
+# it produces findings about upstream's style — quotes, ordering, trailing commas — on lines we did
+# not write.
+#
+# Rule -> the defect it catches:
+#   unawaited_futures     a Future dropped inside an async body: the fire-and-forget whose failure
+#                         never reaches anybody
+#   discarded_futures     a Future-returning call dropped inside a sync body — the same failure one
+#                         step earlier; Dart needs both rules, neither covers the other
+#   cancel_subscriptions  a StreamSubscription nobody cancels: a listener outliving its screen
+#   close_sinks           a StreamController/Sink nobody closes: a stream that never ends
+#   empty_catches         a catch with an empty body — the exception is gone and nothing says why.
+#                         This is the class behind the updater sitting at "100 %" forever.
+#
+# Considered and deliberately not enabled:
+#   avoid_catches_without_on_clauses
+#       The card named this rule, and it was measured before deciding: 18 findings on our own lines,
+#       and every one is `catch (e, s) { Logs().w(..., e, s); return fallback; }` — a catch that logs
+#       the error and the stack on purpose, which is exactly what an updater wants. The rule cannot
+#       tell that from a swallow; empty_catches can, and reports zero on our code. Keeping both would
+#       mean eighteen baseline entries describing correct code, and a baseline nobody reads is a gate
+#       nobody reads.
+#   avoid_catching_errors
+#       Flags `on Error catch`, which is right where it is used. Excluded on the card's instruction:
+#       high noise, no defect class of ours.
+#   avoid_print
+#       Our code does not print, upstream does — findings would be upstream's, in files we opened for
+#       other reasons.
+#   the rest of flutter_lints (directives_ordering, prefer_single_quotes, require_trailing_commas,
+#   omit_local_variable_types, …)
+#       Style. On a file we edited three lines of they report hundreds of findings on lines we did
+#       not write. Style is a formatter's job; this gate is for defects.
+linter:
+  rules:
+    - unawaited_futures
+    - discarded_futures
+    - cancel_subscriptions
+    - close_sinks
+    - empty_catches

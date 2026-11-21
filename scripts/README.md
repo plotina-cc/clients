@@ -1,16 +1,29 @@
-# Patch application and the artifact gate
+# Patch application, the artifact gate, and the lint gate
 
-Two scripts, used by every client that carries patches. Both are called from CI, never copied into
-a workflow, so the path from `patches/` to a shipped artifact is one path:
+Three entry points, used by every client that carries patches. All are called from CI, never copied
+into a workflow, so each path is one path:
 
 ```sh
-scripts/apply-patches.sh <client-dir> <upstream-dir> [markers-file]
+scripts/apply-patches.sh  <client-dir> <upstream-dir> [markers-file]
 scripts/check-markers.sh  <artifact>   <markers-file>
+scripts/lint-patches.sh   --stack shell|dart|ts|kotlin [--tree CLIENT=DIR ...]
 ```
 
-`cinny`, `fluffychat` and `element-call` call them from their build workflows. `element-x` keeps its
-own copies (`element-x/scripts/…`) as the reference implementation this one was generalized from;
-they are the same contract and are folded in here the next time Element X changes.
+`cinny`, `fluffychat` and `element-call` call the first two from their build workflows. `element-x`
+keeps its own copies (`element-x/scripts/…`) as the reference implementation this one was generalized
+from; they are the same contract and are folded in here the next time Element X changes.
+
+## What `lint-patches.sh` guarantees
+
+- Lints the lines **our patches add**, not the files they land in: `scripts/lint/findings.py` reads
+  the diff the applied patches produced and splits each linter's findings by line. A finding on an
+  untouched line of a patched file is printed and counted, never failed.
+- A missing linter is exit 2 with the tool named. `command -v shellcheck || exit 0` is how a gate
+  becomes decoration.
+- Tolerated findings live in `scripts/lint/baseline.txt`, one `<stack>|<path>:<line> <rule>` per
+  line with the reason above it. A finding that is not in it fails the run, and so does an entry
+  that stopped occurring, so the list can only shrink. Nothing is silenced by switching a rule off.
+- Rules per stack, and why each was chosen or excluded, are in `scripts/lint/README.md`.
 
 ## What `apply-patches.sh` guarantees
 

@@ -1,0 +1,60 @@
+# Findings the diff-scoped lint gate tolerates, and why.
+#
+# Format: <stack>|<path>:<line> <rule>
+#
+# This file is not a place to silence a rule — a rule switched off cannot catch the next occurrence,
+# and that is the whole failure this gate exists to prevent. Every entry here is:
+#   * a finding the rule reports correctly, on a line where the flagged shape is deliberate; and
+#   * keyed by file and line, so it stops matching the moment the code moves; and
+#   * required to keep occurring: an entry that no longer appears fails the gate, so the list can
+#     only shrink. A baseline nobody prunes stops describing the code and starts hiding it.
+#
+# Everything else the gate finds on our lines fails the run and has to be fixed or argued about in
+# review — including new findings on the same lines, because a key covers one rule at one position.
+
+# --------------------------------------------------------------------------------------------------
+# shell
+# --------------------------------------------------------------------------------------------------
+# cd into the script's own directory: the path is computed from BASH_SOURCE two lines above, so the
+# cd can only fail if the directory was removed while the script runs. Guarding it would add a
+# branch nobody can test.
+shell|cinny-electron/scripts/qa-dev-channel.sh:25 SC2164
+# `i` is the retry counter of `for i in $(seq 1 120)`: it paces the wait for the window to appear
+# and its value is never read. shellcheck's suggestion is to export it, which is not what a sleep
+# counter is for.
+shell|cinny-electron/scripts/qa-linux-package.sh:64 SC2034
+
+# --------------------------------------------------------------------------------------------------
+# dart — fluffychat
+# --------------------------------------------------------------------------------------------------
+# The denoiser's future is deliberately not awaited: this is the widget path, the call must not wait
+# for the model, and the failure is reported by the plugin itself. Making it async would put audio
+# startup behind a model load.
+dart|lib/utils/plotina_sentry.dart:77 DISCARDED_FUTURES
+# checkForUpdate is a UI entry point: the dialog is dismissed and the update check runs on. Awaiting
+# it would freeze the dialog until the network answers.
+dart|lib/utils/platform_infos.dart:113 DISCARDED_FUTURES
+# Test fake: the close future of a StreamController only settles once somebody listens, and this
+# fake is read by production code that has not listened yet at this point. Both the non-await and
+# the discarded future are what the comment above them says they are.
+dart|test/utils/updater/updater_fakes.dart:166 UNAWAITED_FUTURES
+dart|test/utils/updater/updater_fakes.dart:176 UNAWAITED_FUTURES
+dart|test/utils/updater/updater_fakes.dart:195 DISCARDED_FUTURES
+
+# --------------------------------------------------------------------------------------------------
+# ts — our own JavaScript overlays
+# --------------------------------------------------------------------------------------------------
+# noise/boot.js tears down WebAudio and WebRTC objects in `try { … } catch (e) {}`. Every one of
+# these is a release of a resource that may already be gone (disconnect on a closed node, close on a
+# closed context, stop on an ended track): the exception means "already released", which is the
+# desired state. Logging it would report a normal teardown as a problem; the alternative shape,
+# a chain of typeof checks, cannot cover every browser's throw. The count is capped by this list: a
+# ninth empty catch, anywhere, fails the gate.
+ts|noise/boot.js:325 no-empty
+ts|noise/boot.js:344 no-empty
+ts|noise/boot.js:345 no-empty
+ts|noise/boot.js:346 no-empty
+ts|noise/boot.js:347 no-empty
+ts|noise/boot.js:348 no-empty
+ts|noise/boot.js:358 no-empty
+ts|noise/boot.js:360 no-empty
