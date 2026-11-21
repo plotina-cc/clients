@@ -132,6 +132,14 @@ jobs:
   # `patches` job: runners do not share a filesystem, and passing a patched upstream tree between
   # jobs would mean an artifact in the hundreds of MB. Duplicating three parallel minutes is the
   # cheaper way to keep the release path at its old length.
+  #
+  # The Gradle User Home is NOT duplicated. `setup-gradle` builds its cache key from the *job id*
+  # (`gradle-home-v1|<os>|${GRADLE_BUILD_ACTION_CACHE_KEY_JOB or job id}[<matrix hash>]-<sha>`), so
+  # with the default configuration this job wrote a second, independent entry — 114 MB next to
+  # `build`'s 211 MB, both created by the same run. Worse than the wasted space: the restore ladder
+  # tries the job-level prefix before the OS-level one, so this job's own entry shadowed the shared
+  # one for good. The key is therefore pinned to `build` here and the job is read-only, which leaves
+  # one writer and one entry: whatever `build` saved, this job reads.
   kotlin-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -176,7 +184,18 @@ jobs:
 
       # Caches the Gradle distribution and the dependency cache. Without it every run re-downloads
       # the toolchain; with it the second and later runs are dominated by Kotlin compilation.
+      #
+      # `GRADLE_BUILD_ACTION_CACHE_KEY_JOB` replaces the job id in the key, which is the only way to
+      # share an entry with another job: without it the restore ladder prefers this job's own
+      # `kotlin-tests[…]` entry and never falls back to the shared one. `cache-read-only` then stops
+      # this job writing a second copy of what `build` already saved. Reading `build`'s entry is
+      # safe: the Gradle User Home holds downloaded dependencies, wrapper distributions and the
+      # local build cache, not the app's build outputs.
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+        env:
+          GRADLE_BUILD_ACTION_CACHE_KEY_JOB: build
 
       - name: Plotina X, patched
         run: |
@@ -200,7 +219,7 @@ jobs:
         # red on arrival for something it did not cause.
         run: |
           element-x/scripts/run-unit-tests.sh element-x-upstream \
-            "$RUNNER_TEMP/plotina-test-expectations.txt" --stacktrace
+            "$RUNNER_TEMP/plotina-test-expectations.txt" --stacktrace --rerun
 
       - name: Gate — every Plotina test class really ran
         # Gradle is green about a test task that collected nothing. This reads the JUnit XML the run
