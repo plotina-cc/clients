@@ -291,6 +291,31 @@ def apply_patch_set(here: Path, src: Path, markers: Path, say=print) -> None:
         raise BuildError("applying the Plotina patches failed; the script named the patch above")
 
 
+# The string #5522 adds to matrix-js-sdk's src/matrixrtc/MembershipManager.ts
+# (updateExpiryOnJoinedEvent -> deferExpiryUpdate). It is the literal that says
+# the manager refuses to extend `expires` while no delayed leave event is
+# scheduled -- the guard that stops the ghost membership from being re-sent.
+# A bundle without it does not carry the fix, whatever our lock says.
+JS_SDK_FIX_MARKER = "no delayed leave event is scheduled"
+
+
+def assert_js_sdk_fix(dist: Path, marker: str = JS_SDK_FIX_MARKER) -> None:
+    """Refuse a source-built bundle whose SDK lacks the #5522 fix.
+
+    The pin in pins.env and the lock rewrite in patches/0008 are both easy to
+    get right in the tree and wrong in the artifact: `pnpm install
+    --frozen-lockfile` can keep a cached graph, and the bundler only ships what
+    is imported. So the check is on the built JS, which is what a browser runs.
+    """
+    if not _tree_contains(dist / "assets", marker.encode()):
+        raise BuildError(
+            f"matrix-js-sdk fix #5522 is not in the bundle: '{marker}' is absent from "
+            f"{dist / 'assets'}. The build ran with a js-sdk that predates "
+            "https://github.com/matrix-org/matrix-js-sdk/pull/5522 (see JS_SDK_COMMIT "
+            "in pins.env and patches/0008-plotina-js-sdk-5522.patch)."
+        )
+
+
 def build_from_source(work: Path, conf: dict, pins: dict, release: str,
                       environ: dict, here: Path, say=print) -> Path:
     if not shutil.which("node"):
@@ -328,6 +353,9 @@ def build_from_source(work: Path, conf: dict, pins: dict, release: str,
     # has the bridge that calls window.__plotinaAttach.
     if not _tree_contains(src_dist / "assets", b"__plotinaAttach"):
         raise BuildError("the Plotina track-processor bridge is not in the bundle")
+    # The lock under our feet: pnpm resolves, the bundler decides what ships,
+    # and only the second one is what a browser runs. See assert_js_sdk_fix.
+    assert_js_sdk_fix(src_dist)
     shutil.move(str(src_dist), str(work / "dist"))
     return work / "dist"
 
@@ -609,7 +637,7 @@ def main(argv: list[str] | None = None, environ: dict | None = None) -> int:
         mode = opts["mode"] or "release"
         validate_mode(mode)
         if mode == "source":
-            require_pins(pins, ["EC_REPO", "NODE_VERSION", "PNPM_VERSION"])
+            require_pins(pins, ["EC_REPO", "NODE_VERSION", "PNPM_VERSION", "JS_SDK_COMMIT"])
         conf = apply_defaults(opts, pins, here=here, repo=repo)
         release = release_name(conf["tag"], environ)
 
