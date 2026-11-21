@@ -1,0 +1,110 @@
+# Plotina-Patch: matrix-js-sdk carries upstream fix #5522.
+# Plotina-Marker: no delayed leave event is scheduled
+# Plotina-Note: the pin lives in two files, package.json and pnpm-lock.yaml, and the marker
+#   cannot live in either of them: a lockfile string is not runtime code. So this patch also
+#   writes the marker into public/plotina-patches/0008-js-sdk-5522.txt, which the bundle carries
+#   verbatim, and build.py separately asserts the same string is inside assets/index-*.js --
+#   it is the warning #5522 adds to MembershipManager.updateExpiryOnJoinedEvent, so seeing it in
+#   the bundle's own JS is seeing the fix, not a receipt.
+#
+# Upstream: matrix-org/matrix-js-sdk #5522, "MatrixRTC: restart the delayed leave event before
+#   extending a membership's expiry", merged 2026-09-22, commit
+#   6bc94c04aaf6424345dcd5e613cc7e6805cd9c72 (released as v42.3.0). 44 commits after the
+#   24929be0 (v42.2.0) our v0.26.1 tag pinned.
+# Generated with pnpm 11.21.0 (`pnpm install --lockfile-only`) against upstream element-call
+#   v0.26.1, so the lock's integrity hashes are the ones pnpm itself records.
+#
+# What the fix does, in one line: before extending a membership's `expires`, restart its delayed
+#   leave event, and treat a 404 as "the server already sent the leave" (rejoin from scratch)
+#   instead of re-sending the membership alone -- that re-send is the ghost with no delayed leave
+#   behind it that nothing could then delete.
+
+diff --git a/package.json b/package.json
+index eed70792..86266aad 100644
+--- a/package.json
++++ b/package.json
+@@ -103,7 +103,7 @@
+     "livekit-client": "^2.18.1",
+     "lodash-es": "^4.17.21",
+     "loglevel": "^1.9.1",
+-    "matrix-js-sdk": "github:matrix-org/matrix-js-sdk#develop",
++    "matrix-js-sdk": "github:matrix-org/matrix-js-sdk#6bc94c04aaf6424345dcd5e613cc7e6805cd9c72",
+     "matrix-widget-api": "^1.18.0",
+     "node-stdlib-browser": "^1.3.1",
+     "normalize.css": "^8.0.1",
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 5e98099a..bf8923d9 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -191,8 +191,8 @@ importers:
+         specifier: ^1.9.1
+         version: 1.9.2
+       matrix-js-sdk:
+-        specifier: github:matrix-org/matrix-js-sdk#develop
+-        version: https://codeload.github.com/matrix-org/matrix-js-sdk/tar.gz/24929be0e741be6a5d0a7226f1c682e245263b8a
++        specifier: github:matrix-org/matrix-js-sdk#6bc94c04aaf6424345dcd5e613cc7e6805cd9c72
++        version: https://codeload.github.com/matrix-org/matrix-js-sdk/tar.gz/6bc94c04aaf6424345dcd5e613cc7e6805cd9c72
+       matrix-widget-api:
+         specifier: ^1.18.0
+         version: 1.19.0
+@@ -1197,8 +1197,8 @@ packages:
+       '@types/dom-mediacapture-transform': ^0.1.9
+       livekit-client: ^1.12.0 || ^2.1.0
+ 
+-  '@matrix-org/matrix-sdk-crypto-wasm@18.5.0':
+-    resolution: {integrity: sha512-E826Hy1rG26LanPjtSsOiVRcVoHfSgPgj2r2Xsb5RPScpaKi9XJADQ0u3dNjRCitZPX4oyLNl1FDd5AfDlmIwQ==}
++  '@matrix-org/matrix-sdk-crypto-wasm@18.9.2':
++    resolution: {integrity: sha512-GHeuSeb5Fj6Wg2+NE/WoLJJs9U3nOzttO+2sj7lOaS5gNBpGIksc48N/Q/kK/Z+Lxh7YMhopB7M8b6HyASXnGQ==}
+     engines: {node: '>= 18'}
+ 
+   '@mdx-js/react@3.1.1':
+@@ -4683,9 +4683,9 @@ packages:
+   matrix-events-sdk@0.0.1:
+     resolution: {integrity: sha512-1QEOsXO+bhyCroIe2/A5OwaxHvBm7EsSQ46DEDn8RBIfQwN5HWBpFvyWWR4QY0KHPPnnJdI99wgRiAl7Ad5qaA==}
+ 
+-  matrix-js-sdk@https://codeload.github.com/matrix-org/matrix-js-sdk/tar.gz/24929be0e741be6a5d0a7226f1c682e245263b8a:
+-    resolution: {gitHosted: true, integrity: sha512-0EGwbXzvG88sBOxq4ZlCRwT4VpQj2xkizfyy0A3bTSK0ysb6/gXJ/o1WPFoqCjRGMDgPq4gAsk92xGtHA7EhPg==, tarball: https://codeload.github.com/matrix-org/matrix-js-sdk/tar.gz/24929be0e741be6a5d0a7226f1c682e245263b8a}
+-    version: 42.2.0
++  matrix-js-sdk@https://codeload.github.com/matrix-org/matrix-js-sdk/tar.gz/6bc94c04aaf6424345dcd5e613cc7e6805cd9c72:
++    resolution: {gitHosted: true, integrity: sha512-01Cp8CMYNXWHuFeedfFG4srtcM5s6GnOa1doJtGKZS+jMT/MI4ZcKSZixP5ZJeddtoFvr2gXOZG+XUZOcB/FpA==, tarball: https://codeload.github.com/matrix-org/matrix-js-sdk/tar.gz/6bc94c04aaf6424345dcd5e613cc7e6805cd9c72}
++    version: 42.3.0
+     engines: {node: '>=22.0.0'}
+ 
+   matrix-widget-api@1.19.0:
+@@ -7111,7 +7111,7 @@ snapshots:
+       '@types/dom-mediacapture-transform': 0.1.11
+       livekit-client: 2.22.3(@types/dom-mediacapture-record@1.0.22)
+ 
+-  '@matrix-org/matrix-sdk-crypto-wasm@18.5.0': {}
++  '@matrix-org/matrix-sdk-crypto-wasm@18.9.2': {}
+ 
+   '@mdx-js/react@3.1.1(@types/react@19.2.18)(react@19.2.8)':
+     dependencies:
+@@ -10259,10 +10259,10 @@ snapshots:
+ 
+   matrix-events-sdk@0.0.1: {}
+ 
+-  matrix-js-sdk@https://codeload.github.com/matrix-org/matrix-js-sdk/tar.gz/24929be0e741be6a5d0a7226f1c682e245263b8a:
++  matrix-js-sdk@https://codeload.github.com/matrix-org/matrix-js-sdk/tar.gz/6bc94c04aaf6424345dcd5e613cc7e6805cd9c72:
+     dependencies:
+       '@babel/runtime': 8.0.0
+-      '@matrix-org/matrix-sdk-crypto-wasm': 18.5.0
++      '@matrix-org/matrix-sdk-crypto-wasm': 18.9.2
+       another-json: 0.2.0
+       bs58: 6.0.0
+       content-type: 3.0.0
+diff --git a/public/plotina-patches/0008-js-sdk-5522.txt b/public/plotina-patches/0008-js-sdk-5522.txt
+new file mode 100644
+index 00000000..f06e5386
+--- /dev/null
++++ b/public/plotina-patches/0008-js-sdk-5522.txt
+@@ -0,0 +1,9 @@
++# Plotina patch 0008: matrix-js-sdk carries upstream fix #5522.
++#
++# The receipt the artifact gate reads. The runtime proof is build.py -- it asserts
++# the string below is inside the built assets/index-*.js, i.e. inside the SDK code
++# itself, not merely in this file.
++#
++# js-sdk commit 6bc94c04aaf6424345dcd5e613cc7e6805cd9c72 (v42.3.0, 2026-09-22)
++# https://github.com/matrix-org/matrix-js-sdk/pull/5522
++no delayed leave event is scheduled

@@ -159,6 +159,8 @@ class PinsTests(unittest.TestCase):
             self.assertIn(key, pins)
         self.assertEqual(pins["EC_TAG"], "v0.26.1")
         self.assertEqual(len(pins["EC_TARBALL_SHA256"]), 64)
+        for key in ("JS_SDK_COMMIT", "JS_SDK_VERSION", "JS_SDK_PR_URL"):
+            self.assertIn(key, pins)
 
     def test_required_pins(self):
         pins = {"EC_TAG": "v1"}
