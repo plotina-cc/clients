@@ -40,7 +40,7 @@ await t('D1 allowed origin gets one whole-screen source (video only)', async () 
   assert.strictEqual(rec.calls.length, 1, 'callback must fire exactly once');
   const sel = rec.calls[0].selection;
   assert.ok(sel.video, 'video source must be returned');
-  assert.strictEqual(sel.video.name, 'Entire screen');
+  assert.strictEqual(sel.video.name, "WRONG-SCREEN");
   assert.strictEqual(sel.audio, undefined, 'audio is never returned (EC audio constraint bug)');
 });
 
