@@ -390,6 +390,37 @@ case_gate_utf16_non_ascii() {
   pass "$name"
 }
 
+case_standard_gate_accepts_the_document() {
+  new_case
+  # The repository's own standard document is a gate target like any other: if a section or a budget
+  # is deleted, the suites that run on every build have to say so. Contrast with the fixture-based
+  # cases — this one reads the real CONTRIBUTING.md, because that is the artefact under test.
+  local gate="$scripts_dir/tests/standard-gate.sh"
+  local name="standard: the gate accepts the repository's own CONTRIBUTING.md"
+  if [ ! -x "$gate" ]; then fail "$name (gate is not executable at $gate)"; return; fi
+  "$gate" > "$CASE_DIR/out" 2>&1
+  local rc=$?
+  [ "$rc" -eq 0 ] || { fail "$name (exit $rc: $(head -3 "$CASE_DIR/out"))"; return; }
+  grep -qF 'PASS' "$CASE_DIR/out" || { fail "$name (no PASS line: $(head -3 "$CASE_DIR/out"))"; return; }
+  pass "$name"
+}
+
+case_standard_gate_rejects_mutations() {
+  new_case
+  # The gate's own negative control, run as part of the suite: if a mutation of the standard document
+  # stops being rejected, the assertion protecting it is decoration and this case says so.
+  local nc="$scripts_dir/tests/standard-negative-control.sh"
+  local name="standard: every mutation of the document is rejected (negative control)"
+  if [ ! -x "$nc" ]; then fail "$name (control is not executable at $nc)"; return; fi
+  "$nc" > "$CASE_DIR/out" 2>&1
+  local rc=$?
+  [ "$rc" -eq 0 ] || { fail "$name (exit $rc: $(grep -m2 -E 'NOT REJECTED|FALSE ALARM' "$CASE_DIR/out"))"; return; }
+  pass "$name"
+}
+
+case_standard_gate_accepts_the_document
+case_standard_gate_rejects_mutations
+
 case_apply_two_patches
 case_apply_c_locale_order
 case_apply_broken_patch
