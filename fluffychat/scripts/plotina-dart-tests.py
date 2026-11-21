@@ -40,6 +40,7 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from typing import NoReturn
 
 # Where our repository copies are planted inside the upstream tree. A separate
 # directory on purpose: nothing upstream lives here, so `git status` in the tree
@@ -52,8 +53,17 @@ PATCH_TEST_HEADER = re.compile(r"^\+\+\+ b/(test/.+\.dart)\s*$", re.MULTILINE)
 # One `flutter test` progress line: `00:12 +59 ~2 -1: path: case name`.
 COUNTER = re.compile(r"\+(\d+)(?: ~(\d+))?(?: -(\d+))?:")
 
+# The summary the non-TTY (GitHub Actions) reporter prints instead:
+# `🎉 140 tests passed, 2 skipped.` / `... 1 failed.`; the failed form drops
+# the skips, so all three groups are optional.
+SUMMARY = re.compile(
+    r"(\d+) tests? passed"
+    r"(?:, (\d+) skipped)?"
+    r"(?:, (\d+) failed)?"
+)
 
-def fail(message: str) -> None:
+
+def fail(message: str) -> NoReturn:
     print(f"::error::{message}" if _in_actions() else message, file=sys.stderr)
     raise SystemExit(1)
 
@@ -179,16 +189,31 @@ def cmd_gate(args: argparse.Namespace) -> int:
         fail(f"{log} does not exist; flutter test produced no log to read")
 
     text = log.read_text(encoding="utf-8", errors="replace")
+
+    # Two summary shapes have to be read, because the compact counters only
+    # appear on a terminal-ish reporter:
+    #   local / posix terminal:  `00:02 +140 ~2: All tests passed!`
+    #   GitHub Actions (a non-TTY, so flutter switches reporter):
+    #                            `🎉 140 tests passed, 2 skipped.`
+    # The first CI run of this step was red on the second shape alone, after
+    # printing `🎉 140 tests passed` two lines above — a gate that only reads one
+    # format fails a green suite.
+    #
+    # The `🎉` summary wins when both are present: it is the run's own verdict,
+    # while a `+0:` line for the first test would otherwise be read as the total.
+    summary = SUMMARY.findall(text)
     counters = COUNTER.findall(text)
-    if not counters:
+    if summary:
+        passed, skipped, failed = (int(value or 0) for value in summary[-1])
+    elif counters:
+        passed, skipped, failed = (int(value or 0) for value in counters[-1])
+    else:
         fail(
-            f"no test counter in {log}: `flutter test` never got as far as running a test "
+            f"no test result in {log}: `flutter test` never got as far as running a test "
             "(it usually dies in pub get, gen-l10n or the asset bundle). Last lines:\n"
             + "\n".join(text.strip().splitlines()[-5:])
         )
 
-    # Counters only grow, so the last one is the summary of the whole run.
-    passed, skipped, failed = (int(value or 0) for value in counters[-1])
     print(f"flutter test: {passed} passed, {skipped} skipped, {failed} failed")
 
     if failed:

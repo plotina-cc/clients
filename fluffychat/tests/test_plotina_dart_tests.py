@@ -270,6 +270,29 @@ class GateTest(unittest.TestCase):
         self.assertIn("58", result.stdout)
         self.assertIn("2", result.stdout)
 
+    def test_reads_the_github_actions_reporter_summary(self):
+        # A non-TTY makes flutter switch reporters, and the compact counters never
+        # appear — the CI log says `🎉 140 tests passed, 2 skipped.` and nothing
+        # else. A gate that only understood the counters failed the first real CI
+        # run of this step while the suite was completely green.
+        result = self.gate(
+            "00:00 +0: loading /x/test/a_test.dart\n"
+            "🎉 140 tests passed, 2 skipped.\n"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("140", result.stdout)
+        self.assertIn("2", result.stdout)
+
+    def test_reads_the_ci_summary_of_a_failed_run(self):
+        result = self.gate("🎉 139 tests passed, 1 failed.\n")
+        self.assertNotEqual(result.returncode, 0, "a failed CI summary passed the gate")
+        self.assertIn("1", result.stderr)
+
+    def test_fails_on_a_ci_summary_below_the_floor(self):
+        result = self.gate("🎉 59 tests passed, 0 skipped.\n")
+        self.assertNotEqual(result.returncode, 0, "a CI summary below the floor passed")
+        self.assertIn("59", result.stderr)
+
     def test_fails_below_the_floor(self):
         result = self.gate("00:11 +59: All tests passed!\n")
         self.assertNotEqual(result.returncode, 0, "a run below the floor passed the gate")
