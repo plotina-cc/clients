@@ -51,13 +51,24 @@ on:
     # run from firing for a change that cannot invalidate a cache.
     branches: [main]
     tags: ["v*-plotina-mobile.*"]
+  # The fast lane: dart tests only, no APK. It is also what the required status
+  # check on main points at (the "dart-tests" job below), so a pull request that
+  # breaks a test cannot be merged — without anyone waiting for a 20-minute build.
+  # GitHub does not evaluate path filters for tags, so a release tag still runs
+  # the full workflow.
+  pull_request:
+    paths:
+      - "fluffychat/**"
+      - ".github/workflows/build-fluffychat.yml"
 
 permissions:
   contents: write
 
 concurrency:
   group: build-fluffychat-${{ github.ref }}
-  cancel-in-progress: true
+  # A new commit has to cancel a stale pull request run; a release run is never
+  # cancelled, because the tag it publishes is the deliverable.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   UPSTREAM_REPO: https://github.com/krille-chan/fluffychat
@@ -130,15 +141,122 @@ jobs:
             echo "::notice::no cache input changed in this push; main does not rebuild the APK"
           fi
 
+  # Our dart tests, as a job of their own running beside `apk` rather than as a
+  # step inside it.
+  #
+  # Why not a step in `apk`: a serial step there is 1.7-2.4 minutes of warm-run
+  # wall-clock on every release, and the tag build is the one thing nobody wants
+  # slower. Here the cost is zero — the two jobs share nothing but the checkout,
+  # and the release still ends when `apk` ends.
+  #
+  # A separate job is also what makes the tests usable as a gate: `pull_request`
+  # above runs exactly this job (the APK job is skipped on a PR), so a broken
+  # test is reported in ~3 minutes instead of at the end of a 20-minute build.
+  #
+  # `flutter test`, never `dart test`: our suites pump widgets and import
+  # package:flutter, which `dart test` rejects with "dart:ui is not available".
+  dart-tests:
+    name: Dart tests
+    runs-on: ubuntu-latest
+    # Generous: a cold Flutter SDK plus pub get is a few minutes, and the step
+    # itself is seconds. A hung run must not hold the run open for an hour.
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin upstream and apply patches
+        # Identical to the apk job's step: the tests have to run against the tree
+        # the APK is built from, so this job applies the same patches to the same
+        # upstream pin. Only the list of test files is derived rather than fixed.
+        working-directory: fluffychat
+        run: |
+          set -euo pipefail
+          TAG="$(cat UPSTREAM_TAG)"
+          echo "upstream: $UPSTREAM_REPO @ $TAG"
+          git clone --depth 1 --branch "$TAG" "$UPSTREAM_REPO" upstream
+          "$GITHUB_WORKSPACE/scripts/apply-patches.sh" "$PWD" "$PWD/upstream" \
+            "$GITHUB_WORKSPACE/dart-tests-markers.txt"
+
+      - name: Read Flutter version
+        id: flutter_version
+        working-directory: fluffychat/upstream
+        run: |
+          set -euo pipefail
+          if [ ! -f .fvmrc ]; then
+            echo "::error::upstream ${{ env.UPSTREAM_REPO }} has no .fvmrc; set the Flutter version by hand"
+            exit 1
+          fi
+          VERSION="$(python3 -c 'import json; print(json.load(open(".fvmrc"))["flutter"])')"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "flutter $VERSION"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ steps.flutter_version.outputs.version }}
+          channel: stable
+          cache: true
+
+      # The denoiser model is 7.6 MiB of binary the repository does not carry, and
+      # pubspec.yaml lists it as a package asset — so flutter builds the asset
+      # bundle before it starts the first test, and the whole run dies with
+      # "No file or variants found for asset" when the file is absent. The apk
+      # job fetches it before "Build native denoiser"; here it is the first thing,
+      # because nothing else in this job needs it. `precheck` below turns a
+      # missing file into one line that names this script instead of leaving a
+      # mystery inside the Dart toolchain.
+      - name: Fetch DeepFilterNet3 model
+        run: fluffychat/scripts/fetch-model.sh
+
+      - name: Stage the Plotina dart tests
+        # Derives the run list instead of hardcoding it: our copies from
+        # fluffychat/tests/*_test.dart plus the files the patches plant under
+        # upstream/test/ (0016, 0020, 0023-0027). A patch that stops planting a
+        # test fails here rather than quietly shrinking the suite.
+        run: |
+          set -euo pipefail
+          python3 fluffychat/scripts/plotina-dart-tests.py precheck \
+            --repo fluffychat --upstream fluffychat/upstream
+          python3 fluffychat/scripts/plotina-dart-tests.py stage \
+            --repo fluffychat --upstream fluffychat/upstream > "$RUNNER_TEMP/dart-tests.txt"
+          cat "$RUNNER_TEMP/dart-tests.txt"
+          echo "DART_TESTS_LIST=$RUNNER_TEMP/dart-tests.txt" >> "$GITHUB_ENV"
+
+      - name: Run the Plotina Dart tests
+        working-directory: fluffychat/upstream
+        run: |
+          set -euo pipefail
+          flutter pub get
+          # Our tests import package:fluffychat, which reaches the generated
+          # localisations; without this they do not compile.
+          flutter gen-l10n
+          # One log, then the gate reads it: a green `flutter test` is not by
+          # itself proof that our tests ran, so the count is checked separately.
+          # mapfile keeps the list as one argument per file — a path with a space
+          # in it would otherwise split, and the glob in the step above is
+          # deliberately left to the script.
+          mapfile -t tests < "$DART_TESTS_LIST"
+          set +e
+          flutter test "${tests[@]}" 2>&1 | tee "$RUNNER_TEMP/flutter-test.log"
+          status=${PIPESTATUS[0]}
+          set -e
+          python3 ../scripts/plotina-dart-tests.py gate \
+            --log "$RUNNER_TEMP/flutter-test.log" --min 60
+          exit "$status"
+
   apk:
     name: Android APK
     # cache-inputs exists only for a push to main, where it decides whether the
     # build can change a cache. A tag (the release path) and a manual dispatch
     # have no such job, and `always()` is what keeps them building — without it
     # a skipped dependency would skip the release build as well.
+    #
+    # A pull request runs `dart-tests` only: the APK is 20 minutes and the PR lane
+    # is meant to answer in one, so nothing here builds an artifact.
     needs: [cache-inputs]
     if: >-
       always()
+      && github.event_name != 'pull_request'
       && (github.event_name != 'push' || github.ref != 'refs/heads/main'
           || needs.cache-inputs.outputs.build == 'true')
     runs-on: ubuntu-latest
