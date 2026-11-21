@@ -30,6 +30,12 @@ ROOT="$(dirname "$HERE")"
 EXPECTED=40
 
 SRC="${1:-${CINNY_SRC:-$ROOT/upstream/cinny}}"
+# Absolute, always: both harnesses symlink "$SRC/node_modules" INTO a temporary
+# export tree (`ln -s "$SRC/node_modules" "$WORK/src/node_modules"`), and a
+# relative target would be resolved from the temp dir -- node then reports
+# "Cannot find module /tmp/.../src/node_modules/matrix-js-sdk" on CI while the
+# same command works when run from the repository root by hand.
+SRC="$(cd "$SRC" && pwd)"
 LOGS="$(mktemp -d "${TMPDIR:-/tmp}/plotina-node-tests.XXXXXX")"
 
 TOTAL=0
