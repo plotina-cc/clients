@@ -26,6 +26,13 @@ on:
     branches: [main]
     tags: ["v*-plotina-lite-desktop.*"]
     paths: ["cinny/**", "noise/**", ".github/workflows/build-cinny-web.yml"]
+  # Pull requests get the node suites only (the `tests` job), never an artifact:
+  # a dist built from an unreviewed branch has no consumer and no deploy target.
+  # The two client directories are the ones whose suites this repository owns;
+  # cinny-electron/** is listed because a shell change and a web change travel
+  # together (the shell compiles this dist).
+  pull_request:
+    paths: ["cinny/**", "cinny-electron/**", ".github/workflows/build-cinny-web.yml"]
 
 permissions:
   contents: read
@@ -45,8 +52,54 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The node suites are a job of their own and run in PARALLEL with the build,
+  # never as a step inside it: a serial "tests then build" would add their whole
+  # runtime to every release run, and the suites own no artifact. Both harnesses
+  # export the pinned tag and apply cinny/patches/ themselves, so nothing here
+  # depends on the build job (or the other way round).
+  tests:
+    name: cinny node tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin upstream
+        working-directory: cinny
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="$(cat UPSTREAM_TAG)"
+          echo "upstream tag: $TAG"
+          git clone --depth 1 --branch "$TAG" --recurse-submodules --shallow-submodules \
+            "$UPSTREAM_REPO" upstream
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            cinny/upstream/package-lock.json
+            cinny/upstream/cinny/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The bundles are built with Cinny's own esbuild and the contact-name
+      # suites load the pinned matrix-js-sdk, so the tree needs its deps.
+      - name: Install Cinny deps
+        working-directory: cinny/upstream/cinny
+        run: npm ci --no-audit --no-fund
+
+      - name: Node suites (test count asserted)
+        run: bash cinny/scripts/test-node.sh cinny/upstream/cinny
+
   build:
     name: web dist
+    # Pull requests get the suites only: a dist built from an unreviewed branch
+    # has no consumer and no deploy target.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

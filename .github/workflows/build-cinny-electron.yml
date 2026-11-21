@@ -47,6 +47,15 @@ on:
       - "noise/**"
       - "cinny-electron/**"
       - ".github/workflows/build-cinny-electron.yml"
+  # Pull requests run the shell's node suites only. No artifact job may start
+  # from a PR: the packagers publish nothing anyway (--publish never), so a PR
+  # build would only burn 7 minutes to produce bytes nobody deploys.
+  pull_request:
+    paths:
+      - "cinny/**"
+      - "noise/**"
+      - "cinny-electron/**"
+      - ".github/workflows/build-cinny-electron.yml"
 
 permissions:
   contents: write
@@ -63,9 +72,42 @@ env:
 
 concurrency:
   group: build-cinny-electron-${{ github.ref }}
-  cancel-in-progress: false
+  # A new commit must cancel a stale pull request run, but never a release:
+  # the tag run is the one whose artifacts get published.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # The shell's node suites: 29 checks over update-channel.js, updater.js and
+  # display-media.js. A job of its own, in PARALLEL with the artifact chain --
+  # a step inside `web` would put its runtime on every release run, and these
+  # suites own no artifact. They need only the shell sources plus its deps (the
+  # suites require src/*.js directly), never the web dist.
+  tests:
+    name: cinny-electron node tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cinny-electron/package-lock.json
+
+      # The suites stub the 'electron' module (tests/helpers/electron-stub.cjs),
+      # so the ~200 MB Electron binary is never downloaded -- but the package has
+      # to be installed, because src/updater.js resolves 'electron' before the
+      # stub replaces it in the module cache.
+      - name: Install shell deps
+        working-directory: cinny-electron
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+        run: npm ci --no-audit --no-fund
+
+      - name: Node suites (check count asserted)
+        run: bash cinny-electron/scripts/test-node.sh
+
   # Early gate, before anything is built: a dev tag may only exist on a base
   # that was really published. The `release` job parses the tag at the very end
   # of the run, so a check there would only speak after web/linux/windows spent
@@ -73,6 +115,9 @@ jobs:
   dev-base-guard:
     name: dev base guard
     runs-on: ubuntu-24.04
+    # A pull request is not a tag: there is no base to guard, and the PR
+    # contour must stay one job.
+    if: github.event_name != 'pull_request'
     # Four API calls; anything slower than this is a hung runner, not a check.
     timeout-minutes: 5
     steps:
@@ -239,6 +284,9 @@ jobs:
     name: web dist
     # Nothing is built until the tag is known to sit on a published base.
     needs: dev-base-guard
+    # Pull requests get the suites only (see `tests`): a dist from an unreviewed
+    # branch has no consumer, and no packager may start from a PR.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
