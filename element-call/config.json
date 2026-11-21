@@ -8,5 +8,8 @@
   "livekit": {
     "livekit_service_url": "https://plotina.cc/livekit/jwt"
   },
-  "matrix_rtc_mode": "compatibility"
+  "matrix_rtc_mode": "compatibility",
+  "matrix_rtc_session": {
+    "membership_event_expiry_ms": 300000
+  }
 }

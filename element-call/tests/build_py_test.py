@@ -216,6 +216,19 @@ class ConfigValidationTests(unittest.TestCase):
         out = ecbuild.install_config_text(text)
         self.assertIn("plotina.cc", out)
 
+    def test_real_repo_config_short_membership_expiry(self):
+        # A caller's membership event lives for matrix-js-sdk's default four hours
+        # unless config.json shortens it, so a crashed device stays visible in the
+        # call long after it is gone. Five minutes is the owner's decision; keep it
+        # here so a rewrite of config.json cannot silently restore four hours.
+        config = json.loads((EC / "config.json").read_text(encoding="utf-8"))
+        expiry = config["matrix_rtc_session"]["membership_event_expiry_ms"]
+        self.assertEqual(expiry, 300_000)
+        # EC resolves this as lodash merge(defaults, userConfig), so the nested
+        # object must carry the key explicitly: a sibling object is merged, not replaced.
+        out = json.loads(ecbuild.install_config_text(json.dumps(config)))
+        self.assertEqual(out["matrix_rtc_session"]["membership_event_expiry_ms"], 300_000)
+
     def test_no_matrix_rtc_mode_is_fine(self):
         ecbuild.install_config_text(json.dumps(
             {"default_server_config": {"m.homeserver": {"base_url": "b", "server_name": "s"}}}))
