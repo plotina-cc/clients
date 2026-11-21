@@ -79,6 +79,7 @@ jobs:
   # machine time, and this is the check that upstream drift breaks.
   patches:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Read pins
@@ -106,6 +107,120 @@ jobs:
           # descriptions live in element-x/patches/README.md and in each patch's header.
           "$GITHUB_WORKSPACE/element-x/scripts/apply-patches.sh" "$RUNNER_TEMP/element-x" \
             "$RUNNER_TEMP/plotina-markers.txt"
+
+      # The unit tests of the two scripts above, plus the fixture/expectations tooling this
+      # workflow's test jobs use. Pure bash and python3: no Android SDK, no network, no Gradle, so
+      # the whole block is seconds. It sits in this job because a broken patch script is exactly
+      # what this job is for - the Kotlin job would only report the symptom.
+      - name: Tests for the patch and marker scripts
+        run: |
+          element-x/scripts/tests/run-tests.sh
+          element-x/scripts/tests/test-classes-from-patches-tests.sh
+          element-x/scripts/tests/check-test-results-tests.sh
+          element-x/scripts/tests/run-unit-tests-tests.sh
+          # And the control on the controls: break the scripts on purpose, be sure the suites go red.
+          element-x/scripts/tests/mutation-control.sh
+
+  # The Plotina Kotlin/Robolectric tests, in the modules our patches touch.
+  #
+  # A job of its own, with no `needs:` on anything and nothing needing it, so it runs in parallel
+  # with `build` and adds nothing to the release run's wall clock. That is a hard requirement: the
+  # tests must not make CI longer. Measured in this card's report: this job's own duration against
+  # `build`'s 12.3 minutes.
+  #
+  # It repeats the clone and the patch application (~3 minutes) rather than taking them from the
+  # `patches` job: runners do not share a filesystem, and passing a patched upstream tree between
+  # jobs would mean an artifact in the hundreds of MB. Duplicating three parallel minutes is the
+  # cheaper way to keep the release path at its old length.
+  kotlin-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read pins
+        env:
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+        run: |
+          grep -Ev '^[[:space:]]*(#|$)' element-x/pins.env >> "$GITHUB_ENV"
+          if [ -n "${UPSTREAM_TAG:-}" ]; then
+            echo "ELEMENT_X_TAG=$UPSTREAM_TAG" >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install the SDK packages the unit tests compile against
+        run: |
+          # A library module's unit tests still run through AGP and still need a compileSdk platform
+          # and build-tools. The image ships both; this only makes sure the version the pinned tag
+          # asks for is present, and never fails just because it already was.
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "SDK: $SDK"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          if [ -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          else
+            SDKMANAGER=$(ls -d "$SDK"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -1)
+          fi
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install "platforms;android-37" "build-tools;37.0.0" \
+            || "$SDKMANAGER" --channel=3 --install "platforms;android-37" "build-tools;37.0.0" \
+            || {
+              echo "::warning::sdkmanager has no 'platforms;android-37'; leaving it to Gradle"
+              "$SDKMANAGER" --list_installed || true
+            }
+
+      # Caches the Gradle distribution and the dependency cache. Without it every run re-downloads
+      # the toolchain; with it the second and later runs are dominated by Kotlin compilation.
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Plotina X, patched
+        run: |
+          GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 --branch "$ELEMENT_X_TAG" \
+            https://github.com/element-hq/element-x-android element-x-upstream
+          element-x/scripts/apply-patches.sh element-x-upstream "$RUNNER_TEMP/plotina-markers.txt"
+
+      - name: Work out which classes our tests are
+        # From the patches, never from a list in this file. The expectations file is also what the
+        # gate below checks the run against, so the two can never disagree.
+        run: |
+          element-x/scripts/test-classes-from-patches.py element-x/patches \
+            --expectations-out "$RUNNER_TEMP/plotina-test-expectations.txt"
+          cat "$RUNNER_TEMP/plotina-test-expectations.txt"
+
+      - name: Run the Plotina Kotlin tests
+        # Only the classes the patch set adds. Not `./gradlew test`: 150+ modules, most with nothing
+        # to do with our patches. Not a whole module either: an upstream class can be red for a
+        # reason that predates us (patch 0006 moves the default account provider to plotina.cc while
+        # upstream's AccountProviderTest still asserts matrix.org), and that would make this gate
+        # red on arrival for something it did not cause.
+        run: |
+          element-x/scripts/run-unit-tests.sh element-x-upstream \
+            "$RUNNER_TEMP/plotina-test-expectations.txt" --stacktrace
+
+      - name: Gate — every Plotina test class really ran
+        # Gradle is green about a test task that collected nothing. This reads the JUnit XML the run
+        # left behind and fails when a class from the patches is missing, ran fewer cases than it
+        # has, or recorded a failure. See element-x/scripts/check-test-results.sh.
+        run: |
+          element-x/scripts/check-test-results.sh element-x-upstream \
+            "$RUNNER_TEMP/plotina-test-expectations.txt"
+
+      - name: Upload the test reports
+        # On failure the HTML report is the only place that says which assertion failed.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: element-x-test-results
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            element-x-upstream/**/build/reports/tests/**
+            element-x-upstream/**/build/test-results/**
 
   build:
     needs: patches

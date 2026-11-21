@@ -44,6 +44,10 @@ by the build scripts and CI workflows here. The delta is kept small on purpose,
 so adopting a new upstream release does not turn into a fork. What we hand out is
 AGPL source: the upstream tag plus this repository.
 
+What counts as proof that a change works — failing test first, round-trip rather
+than fixtures, which of the eight levels of evidence a given change needs, and
+what dev hands to QA — is in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 ## Building
 
 Element Web image:
