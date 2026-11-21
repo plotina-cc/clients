@@ -1,0 +1,257 @@
+name: Lint our patches
+
+# Diff-scoped lint: only the lines our patches add to the upstream pin, never upstream's own code.
+#
+# Four jobs, one per language we write, each a sibling of the build jobs in its client's workflow
+# rather than a step inside them: the lint must not add a second to the release run's wall clock,
+# and none of these has `needs:` on a build or is needed by one. Measured on this machine
+# (2026-11-22, report at /home/hermes/reports/2026-11-22/t_196f2dc8/): the four together are 14 s
+# warm, and the slowest cold path — a fluffychat clone plus pub get plus gen-l10n plus analyse — is
+# under a minute.
+#
+# Triggered by a pull request against anything under a client directory, and by a push to main. Not
+# by a release tag: a tag's patches are the ones main already linted, and a release run that gets
+# longer is exactly what the owner ruled out.
+on:
+  pull_request:
+    paths:
+      - "cinny/**"
+      - "cinny-electron/**"
+      - "element-call/**"
+      - "element-web/**"
+      - "element-x/**"
+      - "fluffychat/**"
+      - "noise/**"
+      - "scripts/**"
+      - ".github/workflows/lint-patches.yml"
+  push:
+    branches: [main]
+    # Release tags as well: these four jobs live in their own workflow, so they run beside the
+    # client's build workflow, not inside it. The release run's wall clock is therefore unchanged
+    # (a tag starts both workflows at once), and a tag still gets the lint verdict — which is the
+    # "release contour" half of the card.
+    tags:
+      - "v*-plotina-mobile.*"
+      - "v*-plotina-x.*"
+      - "v*-plotina-lite-desktop.*"
+      - "v*-plotina-desktop.*"
+      - "v*-plotina-call.*"
+      - "v*-plotina-web.*"
+    paths:
+      - "**/patches/**"
+      - "scripts/lint/**"
+      - "scripts/lint-patches.sh"
+      - "noise/**"
+      - ".github/workflows/lint-patches.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lint-patches-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned tool versions: a lint gate that changes verdict when the runner updates a package is a
+  # gate nobody trusts, and the baseline keys point at exact lines of exact rules.
+  SHELLCHECK_VERSION: v0.10.0
+  DETEKT_VERSION: 1.23.8
+  ESLINT_VERSION: 9.39.5
+  TYPESCRIPT_ESLINT_VERSION: 8.73.0
+
+jobs:
+  # Our shell gates. Seconds: 45 files, no clone, nothing to install beyond the static binary.
+  shell:
+    name: ShellCheck (our scripts)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: |
+          set -euo pipefail
+          url="https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          curl -fsSL -o "$RUNNER_TEMP/shellcheck.tar.xz" "$url"
+          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/shellcheck-${SHELLCHECK_VERSION}/shellcheck" --version
+          echo "LINT_SHELLCHECK=$RUNNER_TEMP/shellcheck-${SHELLCHECK_VERSION}/shellcheck" >> "$GITHUB_ENV"
+
+      # The gate's own tests first: if the attribution logic is broken, the verdict below means
+      # nothing, and these cases are the negative controls (a finding on our line fails, on an
+      # untouched line does not).
+      - name: Test the gate
+        run: |
+          scripts/tests/lint-findings-test.sh
+          scripts/tests/lint-patches-test.sh
+
+      - name: Lint
+        run: scripts/lint-patches.sh --stack shell
+
+  # Our TypeScript: the .ts/.tsx our cinny and element-call patches change, plus the JavaScript
+  # overlays this repository owns outright (noise/, element-web's plotina-*.js, the cinny-electron
+  # shell). The overlays need no clone and no type information, so they are linted on every run;
+  # the two patched trees are cloned sparse — only the files the patches touch — because a full
+  # cinny checkout plus npm ci is a few hundred MB for 35 files of lint input.
+  ts:
+    name: ESLint (cinny, element-call, overlays)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The linter is installed here, not in the patched checkouts: those carry upstream's own
+      # @typescript-eslint v5, which cannot run the type-aware rules this gate is built on.
+      - name: Install ESLint
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/lint-ts"
+          mkdir -p "$dir"
+          cd "$dir"
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund --no-save \
+            "eslint@${ESLINT_VERSION}" typescript "typescript-eslint@${TYPESCRIPT_ESLINT_VERSION}"
+          echo "LINT_ESLINT=$dir/node_modules/.bin/eslint" >> "$GITHUB_ENV"
+          echo "LINT_TS_ESLINT_MODULE=$dir/node_modules/typescript-eslint" >> "$GITHUB_ENV"
+
+      - name: Pin the two patched trees
+        # Sparse clones of just the files our patches touch plus the tsconfig the type-aware rules
+        # need: a full cinny checkout is 11 MB and element-call 47 MB, and building either properly
+        # (npm ci / pnpm install, 600 MB+) is minutes for 56 files of lint input.
+        run: |
+          set -euo pipefail
+          pin_cinny() {
+            local tree="$1"
+            local files
+            files="$(grep -h '^+++ b/' cinny/patches/*.patch | sed 's|^+++ b/||' | sort -u)"
+            git clone --filter=blob:none --no-checkout --depth 1 \
+              --branch "$(tr -d '\r\n' < cinny/UPSTREAM_TAG)" \
+              https://github.com/cinnyapp/cinny.git "$tree"
+            git -C "$tree" sparse-checkout init --no-cone
+            # tsconfig.json and the package manifest are not patch targets but the linter needs
+            # them: without the tsconfig the type-aware rules cannot run at all.
+            # shellcheck disable=SC2086 # word splitting is the point: one path per line
+            git -C "$tree" sparse-checkout set $files tsconfig.json package.json
+            git -C "$tree" checkout
+          }
+          pin_call() {
+            local tree="$1"
+            local files
+            files="$(grep -h '^+++ b/' element-call/patches/*.patch | sed 's|^+++ b/||' | sort -u)"
+            git clone --filter=blob:none --no-checkout --depth 1 \
+              --branch "$(sed -n 's/^EC_TAG=//p' element-call/pins.env)" \
+              https://github.com/element-hq/element-call.git "$tree"
+            git -C "$tree" sparse-checkout init --no-cone
+            # shellcheck disable=SC2086
+            git -C "$tree" sparse-checkout set $files tsconfig.json package.json
+            git -C "$tree" checkout
+          }
+          pin_cinny "$RUNNER_TEMP/cinny"
+          "$GITHUB_WORKSPACE/scripts/apply-patches.sh" cinny "$RUNNER_TEMP/cinny" "$RUNNER_TEMP/cinny-markers.txt"
+          pin_call "$RUNNER_TEMP/element-call"
+          "$GITHUB_WORKSPACE/scripts/apply-patches.sh" element-call "$RUNNER_TEMP/element-call" "$RUNNER_TEMP/ec-markers.txt"
+
+      - name: Lint our overlays and the two patched trees
+        run: |
+          scripts/lint-patches.sh --stack ts \
+            --tree "cinny=$RUNNER_TEMP/cinny" \
+            --tree "element-call=$RUNNER_TEMP/element-call"
+
+  # Our Dart. The one job that needs a clone and a pub get: dart analyze resolves the package graph
+  # before it can say anything, so the throwaway patched tree is the price of the analyser.
+  dart:
+    name: dart analyze (fluffychat patches)
+    runs-on: ubuntu-24.04
+    # Cold path measured at well under a minute; the ceiling is for a hung pub get, not for the lint.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pin upstream and apply patches
+        working-directory: fluffychat
+        run: |
+          set -euo pipefail
+          TAG="$(cat UPSTREAM_TAG)"
+          git clone --depth 1 --branch "$TAG" "https://github.com/krille-chan/fluffychat" upstream
+          # The patched pubspec carries `plotina_dfn: path: ../plotina_dfn` (patch 0001), which
+          # resolves to fluffychat/plotina_dfn — the plugin directory this repository already has.
+          "$GITHUB_WORKSPACE/scripts/apply-patches.sh" "$PWD" "$PWD/upstream" \
+            "$RUNNER_TEMP/dart-lint-markers.txt"
+
+      - name: Read the Flutter version from the pin
+        id: flutter_version
+        working-directory: fluffychat/upstream
+        run: |
+          set -euo pipefail
+          VERSION="$(python3 -c 'import json; print(json.load(open(".fvmrc"))["flutter"])')"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ steps.flutter_version.outputs.version }}
+          channel: stable
+          cache: true
+
+      - name: Resolve dependencies and generate localisations
+        working-directory: fluffychat/upstream
+        # Both are prerequisites of the analyser, not of the lint: our files import package:fluffychat,
+        # which reaches gen-l10n output, and without it every file we touched reports
+        # undefined_getter on top of whatever it really has.
+        run: |
+          flutter pub get
+          flutter gen-l10n
+
+      - name: Lint
+        # `dart` on PATH is the Flutter SDK's, put there by flutter-action; the gate wants the path
+        # explicitly because it may not run under that shell's PATH.
+        run: scripts/lint-patches.sh --stack dart \
+          --tree "fluffychat=$GITHUB_WORKSPACE/fluffychat/upstream"
+
+  # Our Kotlin. detekt is a jar and the patched tree is a sparse clone: no Gradle, no Android SDK.
+  kotlin:
+    name: detekt (element-x patches)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install detekt
+        run: |
+          set -euo pipefail
+          url="https://github.com/detekt/detekt/releases/download/v${DETEKT_VERSION}/detekt-cli-${DETEKT_VERSION}-all.jar"
+          curl -fsSL -o "$RUNNER_TEMP/detekt-cli.jar" "$url"
+          # The coroutines jar is on the classpath because two of the five rules need type
+          # resolution: GlobalCoroutineUsage and SleepInsteadOfDelay are silent without it.
+          curl -fsSL -o "$RUNNER_TEMP/kotlinx-coroutines-core.jar" \
+            "https://repo1.maven.org/maven2/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.9.0/kotlinx-coroutines-core-jvm-1.9.0.jar"
+          echo "LINT_DETEKT=$RUNNER_TEMP/detekt-cli.jar" >> "$GITHUB_ENV"
+          echo "LINT_DETEKT_CLASSPATH=$RUNNER_TEMP/kotlinx-coroutines-core.jar" >> "$GITHUB_ENV"
+
+      - name: Pin upstream and apply patches
+        run: |
+          set -euo pipefail
+          TREE="$RUNNER_TEMP/element-x"
+          # Sparse checkout of the files our patches touch: the full tree is 1.4 GB, and detekt only
+          # reads the .kt files the change set names. --filter=blob:none keeps history out.
+          FILES="$(grep -h '^+++ b/' element-x/patches/*.patch | sed 's|^+++ b/||' | sort -u)"
+          GIT_LFS_SKIP_SMUDGE=1 git clone --filter=blob:none --no-checkout --depth 1 \
+            --branch "$(grep '^ELEMENT_X_TAG=' element-x/pins.env | cut -d= -f2)" \
+            https://github.com/element-hq/element-x-android "$TREE"
+          git -C "$TREE" sparse-checkout init --no-cone
+          # shellcheck disable=SC2086 # word splitting is the point: one path per line into arguments
+          git -C "$TREE" sparse-checkout set $FILES
+          git -C "$TREE" checkout
+          element-x/scripts/apply-patches.sh "$TREE" "$RUNNER_TEMP/kotlin-lint-markers.txt"
+          echo "ELEMENT_X_TREE=$TREE" >> "$GITHUB_ENV"
+      - name: Lint
+        run: scripts/lint-patches.sh --stack kotlin --tree "element-x=$ELEMENT_X_TREE"
