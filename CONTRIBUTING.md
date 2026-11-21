@@ -89,3 +89,25 @@ broken, the card goes straight back to dev.
 
 A verdict names what was observed, on which artifact, and what was not checkable. «Посмотрел, работает» is a
 smoke check, not a verdict.
+
+## 5. Checks do not slow the build
+
+**5.1 Never on the critical path.** Tests and linters are their own job, a sibling of the artifact build, with
+no `needs:` on it and nothing needing them. A serial "test, then build" inside one job lands in the time to a
+verdict by construction, however fast the tests run. Three of ours, not hypothetical: Mobile's dart tests sat
+serially before `Build APK` for 99 s (`Android APK` 25.3 → 15.9 min once they moved to a parallel job); then
+the parallel job was added but the old step was left behind, so the tests ran twice and `Build APK` took 716 s
+instead of 577 s; Element X's `setup-gradle` hashes the **job name** into its cache key, so two jobs made two
+caches and the first run after a clear cost +6 min (`Assemble` 766 → 1133 s).
+
+**5.2 A separate job is not free by itself:** it must **read** the shared cache, not create a key of its own,
+or every prime pays the cold price. The point is to overlap with the build, not to duplicate its setup.
+
+**5.3 Budgets, checked at acceptance.** A PR run answers in **≤ 5 minutes** from push to verdict. A tag run
+takes no longer in wall-clock than the previous commit with the same set of steps; path filters do not apply to
+tags, so the release lane stays complete. Measure the run (`created_at` → `updated_at`), never one step, and
+put before/after in minutes plus both run links in the card.
+
+**5.4 A slow run is a cause to find, not a suite to cut** — usually a cold cache or a whole-app compile, not
+the tests themselves. The gate that enforces all this needs its negative control like any other, §1.2: this
+document has one, `scripts/tests/standard-gate.sh` with `scripts/tests/standard-negative-control.sh` beside it.

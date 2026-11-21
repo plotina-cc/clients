@@ -36,6 +36,15 @@ they are the same contract and are folded in here the next time Element X change
   marker list is empty or the artifact cannot be read, because a gate that checks nothing is not
   green.
 
+## The standard's own gate
+
+`scripts/tests/standard-gate.sh` checks `CONTRIBUTING.md` itself: all five sections present, each rule stated
+by the phrase that carries it, the section-5 budgets in numbers ("≤ 5 minutes", wall-clock measured on the run),
+every script the document names present and executable, no internal path or hostname in this public repository,
+and the three-minute reading budget. `scripts/tests/standard-negative-control.sh` mutates the document one rule
+at a time and requires the gate to reject each mutation; `run-tests.sh` runs both, so the build that already
+runs the suites also refuses a standard with a section quietly deleted.
+
 ## Adding a patch
 
 1. Number it after the last one and generate it against the tree with all lower-numbered patches
