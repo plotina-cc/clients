@@ -40,6 +40,20 @@ dart|lib/utils/platform_infos.dart:113 DISCARDED_FUTURES
 dart|test/utils/updater/updater_fakes.dart:166 UNAWAITED_FUTURES
 dart|test/utils/updater/updater_fakes.dart:176 UNAWAITED_FUTURES
 dart|test/utils/updater/updater_fakes.dart:195 DISCARDED_FUTURES
+# matrix.dart, `_cancelSubs` and `dispose`: both lines call `StreamSubscription.cancel()`, whose
+# `Future<void>` upstream discards on the three lines directly above each of ours —
+# `onNotification[name]?.cancel()` (336/449) and every `for … sub.cancel()` (437-449) are upstream's
+# own and are reported as `upstream` for exactly the same shape. Awaiting only ours would make two
+# adjacent lines disagree in style and would put a teardown behind the network; the subscription is
+# released by cancel() itself, and the future only signals completion. This is our file following
+# the file's existing idiom, not a defect we introduced — measured 2026-11-22, 6 identical upstream
+# lines in the same two functions.
+dart|lib/widgets/matrix.dart:338 DISCARDED_FUTURES
+dart|lib/widgets/matrix.dart:452 DISCARDED_FUTURES
+# Fixed rather than tolerated: test/plotina_push_cancel_test.dart:305 was `client.dispose()` in a
+# sync tearDown, and Client.dispose is `Future<void> async` — a real discarded future, racing the
+# next test's `_prepareClient()` on the shared in-memory database. tearDown is async and awaits it
+# now (0025, patch and repo copy). No entry here, so the gate fails again if the sync shape returns.
 
 # --------------------------------------------------------------------------------------------------
 # ts — our own JavaScript overlays

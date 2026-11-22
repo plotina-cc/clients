@@ -300,9 +300,9 @@ void main() {
     client = await _prepareClient();
   });
 
-  tearDown(() {
+  tearDown(() async {
     debugDefaultTargetPlatformOverride = null;
-    client.dispose();
+    await client.dispose();
   });
 
   /// The subscription `MatrixState` installs on every client: a sync arrived,
