@@ -65,13 +65,48 @@ stub_dart() {
   chmod +x "$CASE/bin/dart"
 }
 
-# run_gate [args...] — PATH holds only the stubs and the basics, so no real linter leaks in, and the
-# LINT_* overrides are cleared: a runner that exports them (our own CI job does, from the install
-# step) would otherwise defeat the "no shellcheck anywhere" case and make the suite pass by accident.
+# sanitized_path — $CASE/bin plus the machine's own tools, minus the linters this gate drives.
+#
+# Why not `PATH="$CASE/bin:/usr/bin:/bin"`: the case below claims "no shellcheck anywhere", and on
+# the GitHub runner image /usr/bin/shellcheck exists. There the gate found a real linter, linted the
+# fixture and exited 0, so the case reported "a missing linter is a pass" — in CI only, because this
+# laptop has no shellcheck in /usr/bin. The suite was green exactly where the bug cannot appear.
+#
+# So the system part of PATH is a symlink farm of every directory the source PATH has, with the
+# linter names dropped. "Not installed" then means not installed on any machine, and a linter added
+# to the gate later is one more entry in the pattern below. SUITE_SOURCE_PATH lets a case choose
+# what "the machine's PATH" is (the regression case below plants a shellcheck in it), and the farm
+# is cached per source list so two cases with different sources cannot share one.
+sanitized_path() {
+  local src="${SUITE_SOURCE_PATH:-$PATH}"
+  local key farm
+  key="$(printf '%s' "$src" | cksum | awk '{print $1}')"
+  farm="$work_root/sysbin-$key"
+  if [ ! -d "$farm" ]; then
+    mkdir -p "$farm"
+    local dir entry base
+    local IFS=:
+    for dir in $src; do
+      [ -d "$dir" ] || continue
+      for entry in "$dir"/*; do
+        base="${entry##*/}"
+        case "$base" in
+          shellcheck*|dart*|flutter*|eslint*|prettier*|ktlint*|detekt*) continue ;;
+        esac
+        [ -e "$farm/$base" ] || ln -s "$entry" "$farm/$base" 2>/dev/null || true
+      done
+    done
+  fi
+  printf '%s:%s' "$CASE/bin" "$farm"
+}
+
+# run_gate [args...] — PATH holds only the stubs and the machine's non-linter tools, and the LINT_*
+# overrides are cleared: a runner that exports them (our own CI job does, from the install step)
+# would otherwise defeat the "no shellcheck anywhere" case and make the suite pass by accident.
 run_gate() {
   out="$(env -u LINT_SHELLCHECK -u LINT_DART -u LINT_ESLINT -u LINT_TS_MODULES \
     -u LINT_TS_ESLINT_MODULE -u LINT_DETEKT -u LINT_DETEKT_CLASSPATH \
-    PATH="$CASE/bin:/usr/bin:/bin" "$gate" --repo "$CASE/repo" "$@" 2>&1)"
+    PATH="$(sanitized_path)" "$gate" --repo "$CASE/repo" "$@" 2>&1)"
   rc=$?
 }
 
@@ -79,7 +114,7 @@ run_gate() {
 
 case_help_lists_the_stacks() {
   new_case
-  out="$(PATH="$CASE/bin:/usr/bin:/bin" "$gate" --help 2>&1)"
+  out="$(PATH="$(sanitized_path)" "$gate" --help 2>&1)"
   rc=$?
   local name="gate: --help exits 0 and names every stack"
   [ "$rc" -eq 0 ] || { fail "$name (exit $rc: $out)"; return; }
@@ -106,6 +141,56 @@ case_missing_tool_is_an_error_not_a_pass() {
   local name="gate: a missing linter exits 2 and names it"
   [ "$rc" -eq 2 ] || { fail "$name (exit $rc: $out)"; return; }
   case "$out" in *shellcheck*) ;; *) fail "$name (tool not named: $out)"; return ;; esac
+  pass "$name"
+}
+
+# Regression for the way the case above lied in CI (run 44946448241): the runner image ships
+# /usr/bin/shellcheck, the case built PATH as "$CASE/bin:/usr/bin:/bin", so the gate found a real
+# linter and exited 0 — "a missing linter is a pass" — while this laptop, with no shellcheck
+# installed, stayed green. A test that can only fail where nobody runs it is not a test.
+#
+# So the CI condition is reproduced here, on whatever machine the suite runs: a directory holding a
+# linter is prepended to the PATH the suite treats as "the machine's", and the same assertion
+# must still hold. If sanitized_path ever stops filtering, this case fails everywhere.
+case_installed_linter_does_not_satisfy_the_missing_tool_case() {
+  new_case
+  local plant="$CASE/system-bin"
+  mkdir -p "$plant"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$plant/shellcheck"
+  chmod +x "$plant/shellcheck"
+  local saved="${SUITE_SOURCE_PATH:-}"
+  SUITE_SOURCE_PATH="$plant:$PATH"
+  run_gate --stack shell
+  SUITE_SOURCE_PATH="$saved"
+  local name="gate: a shellcheck installed on the machine still reads as missing for this case"
+  # The gate must not find the planted linter: exit 2 with the tool named, never 0.
+  [ "$rc" -eq 2 ] || { fail "$name (exit $rc: $out)"; return; }
+  case "$out" in *shellcheck*) ;; *) fail "$name (tool not named: $out)"; return ;; esac
+  pass "$name"
+}
+
+# And the control for the control: with the planted linter handed over explicitly — the way our CI
+# job does it, via LINT_SHELLCHECK — the gate must find it and run. Without this, a sanitized_path
+# that dropped *everything* would make the case above pass for the wrong reason.
+case_linter_handed_over_explicitly_is_used() {
+  new_case
+  local plant="$CASE/system-bin"
+  mkdir -p "$plant"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'printf "%%s\\n" "$@" > "%s/handed-args"\n' "$CASE"
+    printf 'cat <<'"'"'JSON'"'"'\n[]\nJSON\n'
+    printf 'exit 0\n'
+  } > "$plant/shellcheck"
+  chmod +x "$plant/shellcheck"
+  out="$(env -u LINT_DART -u LINT_ESLINT -u LINT_TS_MODULES -u LINT_TS_ESLINT_MODULE \
+    -u LINT_DETEKT -u LINT_DETEKT_CLASSPATH \
+    LINT_SHELLCHECK="$plant/shellcheck" PATH="$(sanitized_path)" \
+    "$gate" --repo "$CASE/repo" --stack shell 2>&1)"
+  rc=$?
+  local name="gate: LINT_SHELLCHECK is honoured (the sanitized PATH is not the only way in)"
+  [ "$rc" -eq 0 ] || { fail "$name (exit $rc: $out)"; return; }
+  [ -f "$CASE/handed-args" ] || { fail "$name (the handed-over linter never ran)"; return; }
   pass "$name"
 }
 
@@ -246,6 +331,8 @@ case_one_bad_stack_fails_the_whole_run() {
 case_help_lists_the_stacks
 case_unknown_stack_is_refused
 case_missing_tool_is_an_error_not_a_pass
+case_installed_linter_does_not_satisfy_the_missing_tool_case
+case_linter_handed_over_explicitly_is_used
 case_clean_shell_passes
 case_shell_finding_fails
 case_shell_lints_only_our_scripts

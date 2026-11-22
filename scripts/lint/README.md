@@ -94,5 +94,5 @@ minus anything named in `scripts/lint/baseline.txt`.
 the reason above it. An entry that stops occurring fails the run, so the list can only shrink; a
 new finding on the same line under the same rule is a different entry and fails.
 
-Current state on main (2026-11-22): shell 2, dart 5, ts 8, kotlin 0 — 15 tolerated findings, all
+Current state on main (2026-11-22): shell 2, dart 7, ts 8, kotlin 0 — 17 tolerated findings, all
 argued in the file. Everything else the gate finds on our lines is zero.
